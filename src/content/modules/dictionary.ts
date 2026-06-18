@@ -119,6 +119,7 @@ async function showPopover(
   hidePopover()
 
   host = document.createElement('div')
+  host.className = 'cxt-dict-host'
   shadow = host.attachShadow({ mode: 'open' })
 
   const style = document.createElement('style')

@@ -4,6 +4,9 @@ import { showWidget, hideWidget, updateWidgetState, showWarning } from './module
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable } from './modules/translation'
 import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor } from '../shared/types'
 import { initDictionary } from './modules/dictionary'
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import { ComicOcrManager } from './components/ComicOcrManager'
 
 injectHighlightStyles()
 
@@ -130,6 +133,7 @@ async function updateTooltipContent(id: string) {
 function ensureTooltip(): HTMLDivElement {
   if (deleteTooltip) return deleteTooltip
   deleteTooltip = document.createElement('div')
+  deleteTooltip.className = 'cxt-delete-tooltip'
   deleteTooltip.style.cssText = [
     'position:fixed',
     'z-index:2147483647',
@@ -267,6 +271,13 @@ async function init() {
   initDictionary()
   await reanchor(window.location.href)
   checkScrollTarget()
+  
+  const ocrContainer = document.createElement('div')
+  ocrContainer.id = 'cxt-comic-ocr-root'
+  document.body.appendChild(ocrContainer)
+  const root = createRoot(ocrContainer)
+  root.render(React.createElement(ComicOcrManager))
+  
   // Translation is NOT auto-started on page load.
   // It starts only when the user presses "Start Reading" with the toggle ON.
 }

@@ -53,6 +53,11 @@ chrome.tabs.onRemoved.addListener(tabId => {
 function setupContextMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
+      id: 'ocr',
+      title: 'Image to text(OCR)',
+      contexts: ['page', 'image', 'selection'],
+    })
+    chrome.contextMenus.create({
       id: 'read-from-here',
       title: 'Read from this sentence',
       contexts: ['selection'],
@@ -100,12 +105,12 @@ async function broadcastReadAloudState(tabId: number, state: ReadAloudState, ind
   await chrome.tabs.sendMessage(tabId, {
     type: 'READ_ALOUD_UPDATE',
     payload: { state, index },
-  }).catch(() => {})
+  }).catch(() => { })
 
   await chrome.runtime.sendMessage({
     type: 'READ_ALOUD_STATE',
     payload: { tabId, state },
-  }).catch(() => {})
+  }).catch(() => { })
 }
 
 async function stopActiveSession() {
@@ -260,11 +265,16 @@ async function controlReadAloud(
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab?.id) return
 
+  if (info.menuItemId === 'read-comic-panel') {
+    chrome.tabs.sendMessage(tab.id, { type: 'START_CROP_MODE' }).catch(() => { })
+    return
+  }
+
   if (info.menuItemId === 'read-from-here') {
     chrome.tabs.sendMessage(tab.id, {
       type: 'START_READ_ALOUD_FROM',
       payload: { selectedText: info.selectionText ?? '' },
-    }).catch(() => {})
+    }).catch(() => { })
     return
   }
 
@@ -281,7 +291,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     chrome.tabs.sendMessage(tab.id, {
       type: 'SHOW_DICTIONARY_POPOVER',
       payload: { selectedText: text, color },
-    }).catch(() => {})
+    }).catch(() => { })
     return
   }
 
@@ -306,7 +316,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
   await saveItem(bookmark)
   await logActivity('save')
-  chrome.tabs.sendMessage(tab.id, { type: 'HIGHLIGHT_BOOKMARK', payload: bookmark }).catch(() => {})
+  chrome.tabs.sendMessage(tab.id, { type: 'HIGHLIGHT_BOOKMARK', payload: bookmark }).catch(() => { })
 })
 
 chrome.webNavigation.onHistoryStateUpdated.addListener(async details => {
@@ -316,7 +326,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(async details => {
   chrome.tabs.sendMessage(details.tabId, {
     type: 'REANCHOR',
     payload: { url: details.url },
-  }).catch(() => {})
+  }).catch(() => { })
 })
 
 chrome.runtime.onMessage.addListener((msg: { type: string; payload?: unknown }, sender, sendResponse) => {
@@ -381,6 +391,22 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       const tabId = (msg.payload as { tabId?: number } | undefined)?.tabId ?? sender.tab?.id
       return { state: tabId ? (readAloudStateByTab.get(tabId) ?? 'idle') : 'idle' as ReadAloudState }
     }
+    case 'CAPTURE_VISIBLE_TAB':
+      return new Promise((resolve) => {
+        const winId = sender.tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
+        chrome.tabs.captureVisibleTab(
+          winId,
+          { format: 'png' },
+          dataUrl => {
+            if (chrome.runtime.lastError) {
+              console.error('captureVisibleTab error:', chrome.runtime.lastError);
+              resolve({ dataUrl: null, error: chrome.runtime.lastError.message });
+            } else {
+              resolve({ dataUrl });
+            }
+          }
+        )
+      })
     default:
       return null
   }
