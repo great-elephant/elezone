@@ -1,36 +1,84 @@
 import { useEffect, useState } from 'react'
 import { Settings } from '../shared/types'
 
+const TEST_TEXT = 'The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.'
+type TtsVoice = chrome.tts.TtsVoice
+
 interface Props {
   settings: Settings
   onChange: (s: Settings) => void
 }
 
 export default function SettingsPanel({ settings, onChange }: Props) {
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
+  const [voices, setVoices] = useState<TtsVoice[]>([])
+  const [testing, setTesting] = useState(false)
 
   useEffect(() => {
     function loadVoices() {
-      const v = speechSynthesis.getVoices()
-      if (v.length) setVoices(v)
+      chrome.tts.getVoices().then(v => {
+        if (v.length) setVoices(v)
+      }).catch(() => {})
     }
     loadVoices()
-    speechSynthesis.addEventListener('voiceschanged', loadVoices)
-    return () => speechSynthesis.removeEventListener('voiceschanged', loadVoices)
+    return undefined
   }, [])
 
-  function set<K extends keyof Settings>(section: K, key: keyof Settings[K], value: unknown) {
+  function set<K extends 'readAloud' | 'translation' | 'srs' | 'sync'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
     onChange({
       ...settings,
       [section]: { ...settings[section], [key]: value },
     })
   }
 
+  function testVoice() {
+    chrome.tts.stop()
+    if (testing) {
+      setTesting(false)
+      return
+    }
+
+    setTesting(true)
+    chrome.tts.speak(TEST_TEXT, {
+      onEvent: event => {
+        if (event.type === 'end' || event.type === 'interrupted' || event.type === 'cancelled' || event.type === 'error') {
+          setTesting(false)
+        }
+      },
+      pitch: settings.readAloud.pitch,
+      rate: settings.readAloud.speed,
+      voiceName: settings.readAloud.voice || undefined,
+      volume: settings.readAloud.volume,
+    }, () => {
+      if (chrome.runtime.lastError) {
+        setTesting(false)
+      }
+    })
+  }
+
   const ra = settings.readAloud
   const tr = settings.translation
+  const srs = settings.srs || { initialInterval: 1, secondInterval: 6, easeMultiplier: 2.5 }
 
   return (
     <div style={styles.root}>
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>Study Session</h2>
+
+        <Field label="Always show hint initially">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input 
+              type="checkbox" 
+              checked={settings.showHintInitially ?? false}
+              onChange={e => onChange({ ...settings, showHintInitially: e.target.checked })}
+              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+            />
+            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
+              Automatically reveal the hint without needing to click "Show Hint"
+            </span>
+          </div>
+        </Field>
+      </section>
+
       <section style={styles.section}>
         <h2 style={styles.sectionTitle}>Read Aloud</h2>
 
@@ -54,10 +102,17 @@ export default function SettingsPanel({ settings, onChange }: Props) {
           >
             <option value="">System default</option>
             {voices.map(v => (
-              <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+              <option key={v.voiceName} value={v.voiceName}>{v.voiceName} ({v.lang})</option>
             ))}
           </select>
         </Field>
+
+        <div style={styles.voiceTest}>
+          <p style={styles.testText}>{TEST_TEXT}</p>
+          <button style={{ ...styles.testBtn, ...(testing ? styles.testBtnActive : {}) }} onClick={testVoice}>
+            {testing ? '⏹ Stop' : '▶ Test voice'}
+          </button>
+        </div>
 
         <Field label={`Pitch: ${ra.pitch.toFixed(1)}`}>
           <input type="range" min={0.5} max={2} step={0.1} value={ra.pitch}
@@ -86,6 +141,68 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             ))}
           </select>
         </Field>
+
+        <Field label="Translation mode">
+          <select
+            style={styles.select}
+            value={tr.mode}
+            onChange={e => set('translation', 'mode', e.target.value as 'paragraph' | 'sentence')}
+          >
+            <option value="paragraph">Whole paragraph</option>
+            <option value="sentence">Sentence by sentence</option>
+          </select>
+        </Field>
+      </section>
+
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>Spaced Repetition System</h2>
+
+        <Field label={`Initial Review Interval: ${srs.initialInterval} day${srs.initialInterval !== 1 ? 's' : ''}`}>
+          <input type="range" min={1} max={7} step={1} value={srs.initialInterval}
+            style={styles.range}
+            onChange={e => set('srs', 'initialInterval', parseInt(e.target.value))} />
+        </Field>
+
+        <Field label={`Second Review Interval: ${srs.secondInterval} day${srs.secondInterval !== 1 ? 's' : ''}`}>
+          <input type="range" min={2} max={14} step={1} value={srs.secondInterval}
+            style={styles.range}
+            onChange={e => set('srs', 'secondInterval', parseInt(e.target.value))} />
+        </Field>
+
+        <Field label={`Ease Multiplier: ${srs.easeMultiplier.toFixed(1)}×`}>
+          <input type="range" min={1.3} max={3.5} step={0.1} value={srs.easeMultiplier}
+            style={styles.range}
+            onChange={e => set('srs', 'easeMultiplier', parseFloat(e.target.value))} />
+        </Field>
+      </section>
+
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>Cloud Sync</h2>
+
+        <Field label="Auto-sync to Google Drive">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input 
+              type="checkbox" 
+              checked={settings.sync?.enabled ?? true}
+              onChange={e => set('sync', 'enabled', e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+            />
+            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
+              Automatically sync flashcards and progress in the background
+            </span>
+          </div>
+        </Field>
+
+        {(settings.sync?.enabled ?? true) && (
+          <Field label={`Sync Debounce Delay: ${settings.sync?.debounceSeconds ?? 5} second${(settings.sync?.debounceSeconds ?? 5) !== 1 ? 's' : ''}`}>
+            <input 
+              type="range" min={1} max={300} step={1} 
+              value={settings.sync?.debounceSeconds ?? 5}
+              style={styles.range}
+              onChange={e => set('sync', 'debounceSeconds', parseInt(e.target.value))} 
+            />
+          </Field>
+        )}
       </section>
     </div>
   )
@@ -131,6 +248,37 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sectionTitle: { fontSize: 15, fontWeight: 600, color: '#c0c0e0', marginBottom: 4 },
   range: { width: '100%', accentColor: '#4f6ef7' },
+  voiceTest: {
+    background: '#0f0f1a',
+    border: '1px solid #2a2a4a',
+    borderRadius: 8,
+    padding: '10px 14px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+  },
+  testText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#6688aa',
+    fontStyle: 'italic',
+    lineHeight: 1.5,
+  },
+  testBtn: {
+    background: 'transparent',
+    border: '1px solid #3a3a6a',
+    color: '#8888cc',
+    borderRadius: 6,
+    padding: '6px 14px',
+    fontSize: 13,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap' as const,
+    flexShrink: 0,
+  },
+  testBtnActive: {
+    border: '1px solid #6a3a3a',
+    color: '#ff8888',
+  },
   select: {
     width: '100%',
     background: '#0f0f1a',

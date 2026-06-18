@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Settings, DEFAULT_SETTINGS } from '../shared/types'
-
-type ReadAloudState = 'idle' | 'playing' | 'paused'
+import { ReadAloudState, Settings, DEFAULT_SETTINGS } from '../shared/types'
 
 export default function Popup() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
@@ -10,12 +8,22 @@ export default function Popup() {
   const [readAloudState, setReadAloudState] = useState<ReadAloudState>('idle')
 
   useEffect(() => {
+    let activeTabId: number | null = null
+
     chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (s: Settings) => {
       if (s) setSettings(s)
     })
 
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
       if (!tab?.id) return
+      activeTabId = tab.id
+      chrome.runtime.sendMessage(
+        { type: 'GET_READ_ALOUD_STATE', payload: { tabId: tab.id } },
+        (res: { state: ReadAloudState } | null) => {
+          void chrome.runtime.lastError
+          setReadAloudState(res?.state ?? 'idle')
+        }
+      )
       chrome.tabs.sendMessage(tab.id, { type: 'CHECK_TRANSLATOR_AVAILABLE' }, (res: boolean | null) => {
         void chrome.runtime.lastError
         setOnDevice(res ?? false)
@@ -26,9 +34,14 @@ export default function Popup() {
       })
     })
 
-    const listener = (msg: { type: string; payload?: unknown }) => {
-      if (msg.type === 'READ_ALOUD_STATE') {
-        setReadAloudState(msg.payload as ReadAloudState)
+    const listener = (
+      msg: { type: string; payload?: unknown },
+      _sender: chrome.runtime.MessageSender,
+    ) => {
+      if (msg.type !== 'READ_ALOUD_STATE') return
+      const payload = msg.payload as { tabId?: number; state?: ReadAloudState } | undefined
+      if (payload?.tabId === activeTabId && payload.state) {
+        setReadAloudState(payload.state)
       }
     }
     chrome.runtime.onMessage.addListener(listener)

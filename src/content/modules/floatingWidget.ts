@@ -133,7 +133,7 @@ function makeDraggable(el: HTMLElement) {
       const dx = e.clientX - startX
       const dy = e.clientY - startY
       origRight = Math.max(0, origRight - dx)
-      origBottom = Math.max(0, origBottom + dy)
+      origBottom = Math.max(0, origBottom - dy)
       el.style.right = `${origRight}px`
       el.style.bottom = `${origBottom}px`
       startX = e.clientX

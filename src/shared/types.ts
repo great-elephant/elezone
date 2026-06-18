@@ -2,16 +2,28 @@ export type BookmarkColor =
   | 'red' | 'yellow' | 'cyan' | 'green' | 'blue'
   | 'orange' | 'purple' | 'pink' | 'teal' | 'gray'
 
-export interface Bookmark {
+export type StudyMode = 'passive' | 'typing' | 'speaking' | 'listening' | 'multiple_choice'
+
+export interface SavedItem {
   id: string
   url: string
-  text: string
-  prefix: string
-  suffix: string
-  occurrenceIndex: number
-  color: BookmarkColor
+  text: string          // The word or paragraph
+  prefix: string        // For anchoring
+  suffix: string        // For anchoring
+  occurrenceIndex: number // For anchoring
+  color: BookmarkColor  // Used for semantics/filtering
   createdAt: number
+  updatedAt?: number
   orphaned: boolean
+  deleted?: boolean
+  
+  // Optional SRS/Dictionary fields
+  phonetics?: string
+  translation?: string
+  nextReview?: number
+  interval?: number
+  ease?: number
+  repetitions?: number
 }
 
 export interface ReadAloudSettings {
@@ -25,14 +37,27 @@ export interface ReadAloudSettings {
 export interface TranslationSettings {
   defaultTargetLanguage: string
   enabled: boolean
+  mode: 'paragraph' | 'sentence'
+}
+
+export type ReadAloudState = 'idle' | 'playing' | 'paused'
+
+export interface SrsSettings {
+  initialInterval: number
+  secondInterval: number
+  easeMultiplier: number
 }
 
 export interface Settings {
+  showHintInitially?: boolean
   readAloud: ReadAloudSettings
   translation: TranslationSettings
+  srs: SrsSettings
+  sync: { enabled: boolean; debounceSeconds: number }
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  showHintInitially: false,
   readAloud: {
     speed: 1,
     repetition: 1,
@@ -41,9 +66,19 @@ export const DEFAULT_SETTINGS: Settings = {
     volume: 1,
   },
   translation: {
-    defaultTargetLanguage: 'en',
+    defaultTargetLanguage: 'vi',
     enabled: false,
+    mode: 'paragraph',
   },
+  srs: {
+    initialInterval: 1,
+    secondInterval: 6,
+    easeMultiplier: 2.5,
+  },
+  sync: {
+    enabled: true,
+    debounceSeconds: 5
+  }
 }
 
 export const BOOKMARK_COLORS: Record<BookmarkColor, string> = {
@@ -60,16 +95,29 @@ export const BOOKMARK_COLORS: Record<BookmarkColor, string> = {
 }
 
 export type MessageType =
-  | 'SAVE_BOOKMARK'
-  | 'GET_BOOKMARKS'
-  | 'DELETE_BOOKMARK'
+  | 'SAVE_ITEM'
+  | 'GET_ITEMS'
+  | 'DELETE_ITEM'
+  | 'UPDATE_ITEM'
+  | 'REVIEW_ITEM'
+  | 'SYNC_ITEMS'
   | 'GET_SETTINGS'
   | 'SAVE_SETTINGS'
   | 'REANCHOR'
+  | 'MARK_ORPHANED'
   | 'START_READ_ALOUD'
   | 'STOP_READ_ALOUD'
+  | 'READ_ALOUD_STATE'
+  | 'GET_READ_ALOUD_STATE'
+  | 'START_READ_ALOUD_SESSION'
+  | 'CONTROL_READ_ALOUD'
+  | 'READ_ALOUD_UPDATE'
   | 'TOGGLE_TRANSLATION'
   | 'GET_TRANSLATION_API_AVAILABLE'
+  | 'SHOW_DICTIONARY_POPOVER'
+  | 'GET_SELECTION_CONTEXT'
+  | 'START_READ_ALOUD_FROM'
+  | 'HIGHLIGHT_BOOKMARK'
 
 export interface Message {
   type: MessageType

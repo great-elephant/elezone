@@ -1,25 +1,43 @@
 import { useEffect, useState } from 'react'
-import { Bookmark, Settings, DEFAULT_SETTINGS, BOOKMARK_COLORS, BookmarkColor } from '../shared/types'
-import BookmarkList from './BookmarkList'
+import { SavedItem, Settings, DEFAULT_SETTINGS, BookmarkColor, BOOKMARK_COLORS } from '../shared/types'
+import Library from './Library'
 import SettingsPanel from './SettingsPanel'
+import StudySession from './StudySession'
 
-type Tab = 'settings' | 'bookmarks'
+type Tab = 'library' | 'study' | 'settings'
 
 export default function Options() {
-  const [tab, setTab] = useState<Tab>('bookmarks')
+  const [tab, setTab] = useState<Tab>('library')
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [items, setItems] = useState<SavedItem[]>([])
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success'>('idle')
 
   useEffect(() => {
     chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (s: Settings) => {
       if (s) setSettings(s)
     })
-    loadBookmarks()
+    loadItems()
+
+    const handleMessage = (msg: any) => {
+      if (msg.type === 'SYNC_STATUS_UPDATE') {
+        if (msg.payload === 'error') {
+          // Keep it brief, just revert to idle
+          setSyncStatus('idle')
+        } else {
+          setSyncStatus(msg.payload)
+          if (msg.payload === 'success') {
+            loadItems()
+          }
+        }
+      }
+    }
+    chrome.runtime.onMessage.addListener(handleMessage)
+    return () => chrome.runtime.onMessage.removeListener(handleMessage)
   }, [])
 
-  function loadBookmarks() {
-    chrome.runtime.sendMessage({ type: 'GET_BOOKMARKS' }, (list: Bookmark[]) => {
-      if (list) setBookmarks(list)
+  function loadItems() {
+    chrome.runtime.sendMessage({ type: 'GET_ITEMS' }, (list: SavedItem[]) => {
+      if (list) setItems(list)
     })
   }
 
@@ -28,21 +46,76 @@ export default function Options() {
     await chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', payload: next })
   }
 
-  async function deleteBookmark(id: string) {
-    await chrome.runtime.sendMessage({ type: 'DELETE_BOOKMARK', payload: id })
-    setBookmarks(prev => prev.filter(b => b.id !== id))
+  function handleSync() {
+    if (syncStatus === 'syncing') return
+    setSyncStatus('syncing')
+    chrome.runtime.sendMessage({ type: 'SYNC_ITEMS', payload: { interactive: true } }, (res) => {
+      if (chrome.runtime.lastError || !res) {
+        setSyncStatus('idle')
+        alert('Failed to connect to background script.')
+        return
+      }
+      if (res.ok) {
+        setSyncStatus('success')
+        loadItems()
+        setTimeout(() => setSyncStatus('idle'), 2500)
+      } else {
+        setSyncStatus('idle')
+        alert('❌ Failed to sync to Google Drive.\nReason: ' + (res.error || 'Unknown error'))
+      }
+    })
+  }
+
+  async function deleteItem(id: string) {
+    await chrome.runtime.sendMessage({ type: 'DELETE_ITEM', payload: id })
+    setItems(prev => prev.filter(i => i.id !== id))
+  }
+
+  async function updateItemColor(id: string, color: BookmarkColor) {
+    const item = items.find(i => i.id === id)
+    if (!item) return
+    const updated = { ...item, color }
+    await chrome.runtime.sendMessage({ type: 'UPDATE_ITEM', payload: updated })
+    setItems(prev => prev.map(i => i.id === id ? updated : i))
   }
 
   return (
     <div style={styles.root}>
       <header style={styles.header}>
-        <span style={styles.logo}>📖 CXT English</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <span style={styles.logo}>📖 CXT English</span>
+          <button 
+            style={{
+              padding: '6px 12px',
+              borderRadius: '6px',
+              border: 'none',
+              background: '#4a5a9a',
+              color: 'white',
+              cursor: syncStatus === 'syncing' ? 'default' : 'pointer',
+              opacity: syncStatus === 'syncing' ? 0.7 : 1,
+              fontWeight: 'bold',
+              fontSize: '13px',
+              transition: 'all 0.2s ease',
+              minWidth: '130px'
+            }}
+            onClick={handleSync}
+            disabled={syncStatus === 'syncing'}
+          >
+            {syncStatus === 'syncing' ? '⏳ Syncing...' : syncStatus === 'success' ? '✅ Synced!' : '☁️ Sync to Drive'}
+          </button>
+        </div>
         <nav style={styles.nav}>
           <button
-            style={{ ...styles.navBtn, ...(tab === 'bookmarks' ? styles.navBtnActive : {}) }}
-            onClick={() => setTab('bookmarks')}
+            style={{ ...styles.navBtn, ...(tab === 'library' ? styles.navBtnActive : {}) }}
+            onClick={() => setTab('library')}
           >
-            My Bookmarks
+            Library
+          </button>
+          <button
+            style={{ ...styles.navBtn, ...(tab === 'study' ? styles.navBtnActive : {}) }}
+            onClick={() => setTab('study')}
+          >
+            Study
           </button>
           <button
             style={{ ...styles.navBtn, ...(tab === 'settings' ? styles.navBtnActive : {}) }}
@@ -54,14 +127,16 @@ export default function Options() {
       </header>
 
       <main style={styles.main}>
-        {tab === 'bookmarks' ? (
-          <BookmarkList
-            bookmarks={bookmarks}
-            onDelete={deleteBookmark}
+        {tab === 'library' && (
+          <Library
+            items={items}
+            settings={settings}
+            onDelete={deleteItem}
+            onUpdateColor={updateItemColor}
           />
-        ) : (
-          <SettingsPanel settings={settings} onChange={saveSettings} />
         )}
+        {tab === 'study' && <StudySession />}
+        {tab === 'settings' && <SettingsPanel settings={settings} onChange={saveSettings} />}
       </main>
     </div>
   )
