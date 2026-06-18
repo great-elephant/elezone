@@ -17,17 +17,23 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     function loadVoices() {
       chrome.tts.getVoices().then(v => {
         if (v.length) setVoices(v)
-      }).catch(() => {})
+      }).catch(() => { })
     }
     loadVoices()
     return undefined
   }, [])
 
   function set<K extends 'readAloud' | 'translation' | 'srs' | 'sync'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
-    onChange({
-      ...settings,
-      [section]: { ...settings[section], [key]: value },
-    })
+    const next = { ...settings, [section]: { ...settings[section], [key]: value } } as Settings
+    if (section !== 'sync') {
+      next.updatedAt = Date.now()
+    }
+    onChange(next)
+
+    // Immediately trigger an interactive sync if they just turned on Cloud Sync
+    if (section === 'sync' && key === 'enabled' && value === true) {
+      chrome.runtime.sendMessage({ type: 'SYNC_ITEMS', payload: { interactive: true } })
+    }
   }
 
   function testVoice() {
@@ -61,13 +67,43 @@ export default function SettingsPanel({ settings, onChange }: Props) {
 
   return (
     <div style={styles.root}>
+
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>Cloud Sync</h2>
+
+        <Field label="Auto-sync to Google Drive">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input
+              type="checkbox"
+              checked={settings.sync?.enabled ?? true}
+              onChange={e => set('sync', 'enabled', e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+            />
+            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
+              Automatically sync flashcards and progress in the background
+            </span>
+          </div>
+        </Field>
+
+        {(settings.sync?.enabled ?? true) && (
+          <Field label={`Sync Debounce Delay: ${settings.sync?.debounceSeconds ?? 5} second${(settings.sync?.debounceSeconds ?? 5) !== 1 ? 's' : ''}`}>
+            <input
+              type="range" min={1} max={300} step={1}
+              value={settings.sync?.debounceSeconds ?? 5}
+              style={styles.range}
+              onChange={e => set('sync', 'debounceSeconds', parseInt(e.target.value))}
+            />
+          </Field>
+        )}
+      </section>
+
       <section style={styles.section}>
         <h2 style={styles.sectionTitle}>Study Session</h2>
 
         <Field label="Always show hint initially">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <input 
-              type="checkbox" 
+            <input
+              type="checkbox"
               checked={settings.showHintInitially ?? false}
               onChange={e => onChange({ ...settings, showHintInitially: e.target.checked })}
               style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
@@ -175,35 +211,6 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             onChange={e => set('srs', 'easeMultiplier', parseFloat(e.target.value))} />
         </Field>
       </section>
-
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Cloud Sync</h2>
-
-        <Field label="Auto-sync to Google Drive">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <input 
-              type="checkbox" 
-              checked={settings.sync?.enabled ?? true}
-              onChange={e => set('sync', 'enabled', e.target.checked)}
-              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
-            />
-            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
-              Automatically sync flashcards and progress in the background
-            </span>
-          </div>
-        </Field>
-
-        {(settings.sync?.enabled ?? true) && (
-          <Field label={`Sync Debounce Delay: ${settings.sync?.debounceSeconds ?? 5} second${(settings.sync?.debounceSeconds ?? 5) !== 1 ? 's' : ''}`}>
-            <input 
-              type="range" min={1} max={300} step={1} 
-              value={settings.sync?.debounceSeconds ?? 5}
-              style={styles.range}
-              onChange={e => set('sync', 'debounceSeconds', parseInt(e.target.value))} 
-            />
-          </Field>
-        )}
-      </section>
     </div>
   )
 }
@@ -239,12 +246,14 @@ const LANGUAGES: [string, string][] = [
 const styles: Record<string, React.CSSProperties> = {
   root: { display: 'flex', flexDirection: 'column', gap: 32, maxWidth: 540 },
   section: {
-    background: '#1a1a2e',
-    borderRadius: 10,
+    background: '#111122',
+    borderRadius: 16,
     padding: '20px 24px',
     display: 'flex',
     flexDirection: 'column',
     gap: 16,
+    border: '1px solid #3a3a6a',
+    boxShadow: '0 10px 30px rgba(0,0,0,0.15)',
   },
   sectionTitle: { fontSize: 15, fontWeight: 600, color: '#c0c0e0', marginBottom: 4 },
   range: { width: '100%', accentColor: '#4f6ef7' },

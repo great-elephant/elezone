@@ -63,6 +63,7 @@ export interface GamificationSettings {
 }
 
 export interface Settings {
+  updatedAt?: number
   showHintInitially?: boolean
   readAloud: ReadAloudSettings
   translation: TranslationSettings
@@ -91,11 +92,11 @@ export const DEFAULT_SETTINGS: Settings = {
     easeMultiplier: 2.5,
   },
   sync: {
-    enabled: true,
+    enabled: false,
     debounceSeconds: 30
   },
   gamification: {
-    dailyGoalPoints: 20,
+    dailyGoalPoints: 100,
     pointsPerSave: 1,
     pointsPerReview: 2
   }

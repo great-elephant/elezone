@@ -265,7 +265,7 @@ async function controlReadAloud(
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab?.id) return
 
-  if (info.menuItemId === 'read-comic-panel') {
+  if (info.menuItemId === 'ocr') {
     chrome.tabs.sendMessage(tab.id, { type: 'START_CROP_MODE' }).catch(() => { })
     return
   }

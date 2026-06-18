@@ -33,7 +33,20 @@ export default function Options() {
       }
     }
     chrome.runtime.onMessage.addListener(handleMessage)
-    return () => chrome.runtime.onMessage.removeListener(handleMessage)
+
+    const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
+      if (areaName === 'local') {
+        if (changes['settings']) {
+          setSettings(changes['settings'].newValue || DEFAULT_SETTINGS)
+        }
+      }
+    }
+    chrome.storage.onChanged.addListener(handleStorageChange)
+
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage)
+      chrome.storage.onChanged.removeListener(handleStorageChange)
+    }
   }, [])
 
   function loadItems() {
@@ -82,27 +95,42 @@ export default function Options() {
 
   return (
     <div style={styles.root}>
+      <style>{`
+        body {
+          background-color: #0d0d1a !important;
+          background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1.5px, transparent 1.5px) !important;
+          background-size: 24px 24px !important;
+        }
+      `}</style>
       <header style={styles.header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
           <span style={styles.logo}>📖 CXT English</span>
           <button 
+            title={!(settings?.sync?.enabled ?? false) ? "Go to Settings to enable Cloud Sync" : ""}
             style={{
               padding: '6px 12px',
               borderRadius: '6px',
               border: 'none',
-              background: '#4a5a9a',
-              color: 'white',
-              cursor: syncStatus === 'syncing' ? 'default' : 'pointer',
+              background: !(settings?.sync?.enabled ?? false) ? '#2a2a3a' : '#4a5a9a',
+              color: !(settings?.sync?.enabled ?? false) ? '#666' : 'white',
+              cursor: (!(settings?.sync?.enabled ?? false) || syncStatus === 'syncing') ? 'not-allowed' : 'pointer',
               opacity: syncStatus === 'syncing' ? 0.7 : 1,
               fontWeight: 'bold',
               fontSize: '13px',
               transition: 'all 0.2s ease',
               minWidth: '130px'
             }}
-            onClick={handleSync}
+            onClick={(e) => {
+              if (!(settings?.sync?.enabled ?? false)) {
+                e.preventDefault();
+                alert('Cloud sync is disabled. Please go to Settings to enable it.');
+                return;
+              }
+              handleSync();
+            }}
             disabled={syncStatus === 'syncing'}
           >
-            {syncStatus === 'syncing' ? '⏳ Syncing...' : syncStatus === 'success' ? '✅ Synced!' : '☁️ Sync to Drive'}
+            {!(settings?.sync?.enabled ?? false) ? '☁️ Sync Disabled' : syncStatus === 'syncing' ? '⏳ Syncing...' : syncStatus === 'success' ? '✅ Synced!' : '☁️ Sync to Drive'}
           </button>
         </div>
         <nav style={styles.nav}>

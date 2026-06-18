@@ -139,7 +139,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
         </div>
       </div>
 
-      <div style={{ padding: 16, fontSize: 16, lineHeight: 1.5, minHeight: 60, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+      <div style={{ padding: 16, fontSize: 16, lineHeight: 1.5, minHeight: 60, maxHeight: '60vh', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
         {isLoading ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, color: '#88a' }}>
             <div style={{ fontSize: 13 }}>{status || 'Recognizing text...'}</div>
