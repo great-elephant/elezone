@@ -58,6 +58,74 @@ setOnStateChange(newState => {
 let deleteTooltip: HTMLDivElement | null = null
 let tooltipBookmarkId: string | null = null
 let hideTimer: ReturnType<typeof setTimeout> | null = null
+let tooltipContentContainer: HTMLDivElement | null = null
+
+async function updateTooltipContent(id: string) {
+  if (!tooltipContentContainer) return
+  tooltipContentContainer.innerHTML = ''
+  tooltipContentContainer.style.display = 'none'
+  const items: SavedItem[] = await chrome.runtime.sendMessage({ type: 'GET_ITEMS' })
+  const item = items.find(i => i.id === id)
+  if (!item || tooltipBookmarkId !== id) return
+  
+  if (item.text || item.translation || item.phonetics) {
+    tooltipContentContainer.style.display = 'flex'
+    if (item.text) {
+      const origContainer = document.createElement('div')
+      origContainer.style.display = 'flex'
+      origContainer.style.flexDirection = 'column'
+      origContainer.style.gap = '2px'
+      origContainer.style.borderBottom = item.translation ? '1px solid #3a3a6a' : 'none'
+      origContainer.style.paddingBottom = item.translation ? '4px' : '0'
+      origContainer.style.marginBottom = item.translation ? '4px' : '0'
+
+      const topRow = document.createElement('div')
+      topRow.style.display = 'flex'
+      topRow.style.alignItems = 'flex-start'
+      topRow.style.gap = '8px'
+      topRow.style.maxWidth = '300px'
+      
+      const textSpan = document.createElement('span')
+      textSpan.textContent = item.text
+      textSpan.style.color = '#ffffff'
+      textSpan.style.fontWeight = 'bold'
+      textSpan.style.fontSize = '15px'
+      textSpan.style.wordBreak = 'break-word'
+      topRow.appendChild(textSpan)
+
+      const speakerBtn = document.createElement('button')
+      speakerBtn.textContent = '🔊'
+      speakerBtn.title = 'Read aloud'
+      speakerBtn.style.cssText = 'background:none; border:none; cursor:pointer; font-size:14px; padding:0; margin-top:2px; opacity:0.7; flex-shrink:0;'
+      speakerBtn.onmouseover = () => { speakerBtn.style.opacity = '1' }
+      speakerBtn.onmouseout = () => { speakerBtn.style.opacity = '0.7' }
+      speakerBtn.onmousedown = (e) => {
+         e.preventDefault()
+         e.stopPropagation()
+         chrome.runtime.sendMessage({ type: 'SPEAK_TEXT', payload: item.text }).catch(() => {})
+      }
+      topRow.appendChild(speakerBtn)
+      
+      origContainer.appendChild(topRow)
+
+      if (item.phonetics) {
+        const pSpan = document.createElement('div')
+        pSpan.textContent = item.phonetics
+        pSpan.style.color = '#8888aa'
+        pSpan.style.fontSize = '13px'
+        origContainer.appendChild(pSpan)
+      }
+      
+      tooltipContentContainer.appendChild(origContainer)
+    }
+    if (item.translation) {
+      const t = document.createElement('div')
+      t.textContent = item.translation
+      t.style.color = '#6bcfff'
+      tooltipContentContainer.appendChild(t)
+    }
+  }
+}
 
 function ensureTooltip(): HTMLDivElement {
   if (deleteTooltip) return deleteTooltip
@@ -131,7 +199,11 @@ function ensureTooltip(): HTMLDivElement {
     hideNow()
   }
 
+  tooltipContentContainer = document.createElement('div')
+  tooltipContentContainer.style.cssText = 'display:none;flex-direction:column;gap:4px;font-size:14px;padding:4px 0;'
+
   deleteTooltip.appendChild(colorsRow)
+  deleteTooltip.appendChild(tooltipContentContainer)
   deleteTooltip.appendChild(deleteBtn)
 
   deleteTooltip.addEventListener('mouseenter', () => {
@@ -145,13 +217,20 @@ function ensureTooltip(): HTMLDivElement {
 
 function showDeleteTooltip(id: string, range: Range) {
   const t = ensureTooltip()
-  tooltipBookmarkId = id
+  if (tooltipBookmarkId !== id) {
+    tooltipBookmarkId = id
+    updateTooltipContent(id).catch(() => {})
+  }
   const r = range.getBoundingClientRect()
   t.style.display = 'flex'
-  const tooltipHeight = t.offsetHeight || 60
-  const top = r.top < tooltipHeight + 8 ? r.bottom + 6 : r.top - tooltipHeight - 6
-  const left = Math.max(0, Math.min(r.left, window.innerWidth - t.offsetWidth))
-  t.style.top = `${top}px`
+  if (r.top > 150) {
+    t.style.bottom = `${window.innerHeight - r.top + 8}px`
+    t.style.top = 'auto'
+  } else {
+    t.style.top = `${r.bottom + 8}px`
+    t.style.bottom = 'auto'
+  }
+  const left = Math.max(0, Math.min(r.left, window.innerWidth - (t.offsetWidth || 150)))
   t.style.left = `${left}px`
 }
 

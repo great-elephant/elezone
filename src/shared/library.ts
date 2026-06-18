@@ -1,4 +1,4 @@
-import { Settings, DEFAULT_SETTINGS, SavedItem } from './types'
+import { Settings, DEFAULT_SETTINGS, SavedItem, ActivityLog } from './types'
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
@@ -28,6 +28,44 @@ export async function saveSettings(settings: Settings): Promise<void> {
   await chrome.storage.local.set({ settings })
 }
 
+// ── Activity Log ─────────────────────────────────────────────────────────────
+
+const ACTIVITY_KEY = 'cxt_activity_log'
+
+export async function getActivityLog(): Promise<ActivityLog> {
+  const result = await chrome.storage.local.get(ACTIVITY_KEY)
+  return (result[ACTIVITY_KEY] as ActivityLog) || {}
+}
+
+export function getLocalYMD(): string {
+  const date = new Date()
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+export async function logActivity(type: 'save' | 'review'): Promise<void> {
+  const settings = await getSettings()
+  const config = settings.gamification || DEFAULT_SETTINGS.gamification
+  const log = await getActivityLog()
+  const today = getLocalYMD()
+
+  if (!log[today]) {
+    log[today] = { saved: 0, reviewed: 0, points: 0 }
+  }
+
+  if (type === 'save') {
+    log[today].saved += 1
+    log[today].points += config.pointsPerSave
+  } else if (type === 'review') {
+    log[today].reviewed += 1
+    log[today].points += config.pointsPerReview
+  }
+
+  await chrome.storage.local.set({ [ACTIVITY_KEY]: log })
+}
+
 // ── Unified Library (SavedItems) ──────────────────────────────────────────────
 
 const LIBRARY_KEY = 'cxt_library'
@@ -37,12 +75,12 @@ let cachedLibrary: SavedItem[] | null = null
 
 export async function migrateLegacyDataIfNeeded(): Promise<void> {
   const all = await chrome.storage.local.get(null)
-  
+
   // Check if we already migrated
   if (all['cxt_legacy_migrated']) return
 
   const migratedItems: SavedItem[] = []
-  
+
   // 1. Migrate Bookmarks (keys starting with 'bookmark:')
   for (const [key, val] of Object.entries(all)) {
     if (key.startsWith('bookmark:')) {
@@ -92,7 +130,7 @@ export async function migrateLegacyDataIfNeeded(): Promise<void> {
     const existing = all[LIBRARY_KEY] as SavedItem[] | undefined || []
     await chrome.storage.local.set({ [LIBRARY_KEY]: [...existing, ...migratedItems] })
   }
-  
+
   await chrome.storage.local.set({ 'cxt_legacy_migrated': true })
 }
 
@@ -106,7 +144,10 @@ export async function getRawItems(): Promise<SavedItem[]> {
 
 export async function getAllItems(): Promise<SavedItem[]> {
   const raw = await getRawItems()
-  return raw.filter(i => !i.deleted)
+  return raw.filter(i => !i.deleted).map(i => ({
+    ...i,
+    color: i.color || 'red'
+  }))
 }
 
 export async function saveItem(item: SavedItem): Promise<void> {
@@ -157,12 +198,12 @@ export async function reviewItem(id: string, rating: 1 | 2 | 3 | 4): Promise<voi
   const library = await getRawItems()
   const item = library.find(i => i.id === id)
   if (!item || item.nextReview === undefined) return
-  
+
   const settings = await getSettings()
   const srsConfig = settings.srs || DEFAULT_SETTINGS.srs
-  
+
   let { interval = 0, repetitions = 0, ease = srsConfig.easeMultiplier } = item
-  
+
   if (rating >= 3) {
     if (repetitions === 0) {
       interval = srsConfig.initialInterval
@@ -176,17 +217,17 @@ export async function reviewItem(id: string, rating: 1 | 2 | 3 | 4): Promise<voi
     repetitions = 0
     interval = srsConfig.initialInterval
   }
-  
+
   ease = ease + (0.1 - (5 - rating) * (0.08 + (5 - rating) * 0.02))
   if (ease < 1.3) ease = 1.3
-  
+
   const DAY_IN_MS = 24 * 60 * 60 * 1000
   item.interval = interval
   item.repetitions = repetitions
   item.ease = ease
   item.nextReview = Date.now() + (interval * DAY_IN_MS)
   item.updatedAt = Date.now()
-  
+
   await chrome.storage.local.set({ [LIBRARY_KEY]: library })
   cachedLibrary = library
   scheduleAutoSync()
@@ -200,7 +241,7 @@ let autoSyncTimeout: ReturnType<typeof setTimeout> | null = null
 export async function scheduleAutoSync() {
   const settings = await getSettings()
   if (!settings.sync?.enabled) return
-  
+
   const delayMs = (settings.sync.debounceSeconds ?? 5) * 1000
 
   if (autoSyncTimeout) clearTimeout(autoSyncTimeout)
@@ -210,27 +251,27 @@ export async function scheduleAutoSync() {
 }
 
 function broadcastSyncStatus(status: 'idle' | 'syncing' | 'success' | 'error') {
-  chrome.runtime.sendMessage({ type: 'SYNC_STATUS_UPDATE', payload: status }).catch(() => {})
+  chrome.runtime.sendMessage({ type: 'SYNC_STATUS_UPDATE', payload: status }).catch(() => { })
 }
 
 export async function syncToDrive(interactive = false): Promise<{ ok: boolean; error?: string }> {
   const settings = await getSettings()
   if (!interactive && !settings.sync?.enabled) return { ok: true }
-  
+
   if (isSyncing) return { ok: false, error: 'Already syncing' }
   isSyncing = true
   broadcastSyncStatus('syncing')
-  
+
   try {
     const token = await getAuthToken(interactive)
     if (!token) {
       broadcastSyncStatus('idle')
       return { ok: false, error: 'Not authenticated. Please grant permission.' }
     }
-    
+
     let library = await getRawItems()
     const fileId = await getDriveFileId(token)
-    
+
     if (fileId) {
       const driveLibrary = await downloadDriveFile(token, fileId)
       if (driveLibrary) {
@@ -291,7 +332,7 @@ async function getAuthToken(interactive = false): Promise<string> {
 async function getDriveFileId(token: string): Promise<string | null> {
   const q = encodeURIComponent(`name='${DRIVE_FILE_NAME}' and trashed=false`)
   const url = `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive`
-  
+
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
   if (!res.ok) return null
   const data = await res.json()
@@ -303,7 +344,7 @@ async function createDriveFile(token: string, library: SavedItem[]): Promise<voi
   const form = new FormData()
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }))
   form.append('file', new Blob([JSON.stringify(library)], { type: 'application/json' }))
-  
+
   const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },

@@ -7,7 +7,9 @@ import {
   saveSettings,
   markOrphaned,
   syncToDrive,
-  reviewItem
+  reviewItem,
+  logActivity,
+  getActivityLog
 } from '../shared/library'
 import {
   SavedItem,
@@ -303,6 +305,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   await saveItem(bookmark)
+  await logActivity('save')
   chrome.tabs.sendMessage(tab.id, { type: 'HIGHLIGHT_BOOKMARK', payload: bookmark }).catch(() => {})
 })
 
@@ -341,6 +344,11 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return { ok: true }
     case 'SYNC_ITEMS':
       return await syncToDrive((msg.payload as any)?.interactive)
+    case 'LOG_ACTIVITY':
+      await logActivity(msg.payload as 'save' | 'review')
+      return { ok: true }
+    case 'GET_ACTIVITY_LOG':
+      return getActivityLog()
     case 'GET_SETTINGS':
       return getSettings()
     case 'SAVE_SETTINGS':
@@ -353,6 +361,22 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return startReadAloudSession(sender, msg.payload)
     case 'CONTROL_READ_ALOUD':
       return controlReadAloud(sender, msg.payload)
+    case 'SPEAK_TEXT':
+      const settings = await getSettings()
+      if (settings?.readAloud) {
+        chrome.tts.stop()
+        if (settings.readAloud.voice) {
+          chrome.tts.speak(msg.payload as string, {
+            pitch: settings.readAloud.pitch,
+            rate: settings.readAloud.speed,
+            voiceName: settings.readAloud.voice,
+            volume: settings.readAloud.volume
+          })
+        } else {
+          chrome.tts.speak(msg.payload as string)
+        }
+      }
+      return { ok: true }
     case 'GET_READ_ALOUD_STATE': {
       const tabId = (msg.payload as { tabId?: number } | undefined)?.tabId ?? sender.tab?.id
       return { state: tabId ? (readAloudStateByTab.get(tabId) ?? 'idle') : 'idle' as ReadAloudState }

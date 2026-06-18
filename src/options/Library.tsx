@@ -64,6 +64,12 @@ export default function Library({
 
   return (
     <div style={styles.container}>
+      {openColorPaletteId && (
+        <div 
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9 }}
+          onClick={(e) => { e.stopPropagation(); setOpenColorPaletteId(null) }}
+        />
+      )}
       <h2>My Library</h2>
       <div style={styles.list}>
         {sortedUrls.map(url => {
@@ -94,15 +100,23 @@ export default function Library({
                     <div key={item.id} style={styles.itemCard}>
                       <div style={styles.itemHeader}>
                         <div style={{ position: 'relative' }}>
-                          <div 
+                          <button 
                             style={{
-                              ...styles.colorDot, 
-                              backgroundColor: BOOKMARK_COLORS[item.color],
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              background: '#1a1a2e',
+                              border: '1px solid #3a3a5a',
+                              borderRadius: '12px',
+                              padding: '4px 8px',
                               cursor: 'pointer'
                             }} 
                             onClick={() => setOpenColorPaletteId(openColorPaletteId === item.id ? null : item.id)}
                             title="Change color"
-                          />
+                          >
+                            <div style={{ width: 12, height: 12, borderRadius: '50%', backgroundColor: BOOKMARK_COLORS[item.color] }} />
+                            <span style={{ fontSize: '10px', color: '#8888aa', lineHeight: 1 }}>▼</span>
+                          </button>
                           {openColorPaletteId === item.id && (
                             <div style={styles.colorPalette}>
                               {Object.entries(BOOKMARK_COLORS).map(([c, hex]) => (

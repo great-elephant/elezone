@@ -8,7 +8,7 @@ let shadow: ShadowRoot | null = null
 const DICTIONARY_CSS = `
   :host { all: initial; }
   .dict-popover {
-    position: absolute;
+    position: fixed;
     z-index: 2147483647;
     background: #1a1a2e;
     border: 1px solid #3a3a6a;
@@ -107,14 +107,12 @@ export async function showPopoverFromSelection(selectedText?: string, color: Boo
 
   // Capture context BEFORE selection is lost
   const context = getSelectionContext(word)
-
-  showPopover(word, rect.left + window.scrollX, rect.bottom + window.scrollY, color, context)
+  showPopover(word, rect, color, context)
 }
 
 async function showPopover(
-  word: string, 
-  x: number, 
-  y: number, 
+  word: string,
+  rect: DOMRect,
   color: BookmarkColor,
   context: { prefix: string; suffix: string; occurrenceIndex: number } | null
 ) {
@@ -128,8 +126,14 @@ async function showPopover(
 
   const popover = document.createElement('div')
   popover.className = 'dict-popover'
-  popover.style.left = `${x}px`
-  popover.style.top = `${y + 5}px`
+  popover.style.left = `${rect.left}px`
+  if (rect.top > 250) {
+    popover.style.bottom = `${window.innerHeight - rect.top + 5}px`
+    popover.style.top = 'auto'
+  } else {
+    popover.style.top = `${rect.bottom + 5}px`
+    popover.style.bottom = 'auto'
+  }
 
   // Fetch phonetics from Dictionary API
   let phonetics = ''
@@ -150,7 +154,7 @@ async function showPopover(
       }
       return ''
     })
-    
+
     const results = await Promise.all(phoneticsPromises)
     phonetics = results.filter(Boolean).join(' ')
   } catch {
@@ -200,11 +204,11 @@ async function showPopover(
   const saveBtn = document.createElement('button')
   saveBtn.className = 'primary'
   saveBtn.textContent = 'Save'
-  
+
   saveBtn.onclick = async () => {
     saveBtn.textContent = 'Saving...'
     saveBtn.disabled = true
-    
+
     const item = {
       id: crypto.randomUUID(),
       url: window.location.href,
@@ -227,18 +231,20 @@ async function showPopover(
     await chrome.runtime.sendMessage({
       type: 'SAVE_ITEM',
       payload: item
-    }).catch(() => {})
-    
+    }).catch(() => { })
+
+    await chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'save' }).catch(() => { })
+
     // Highlight the newly saved item
     applyHighlight(item)
-    
+
     saveBtn.textContent = 'Saved!'
     setTimeout(hidePopover, 1000)
   }
 
   actions.append(cancelBtn, saveBtn)
   popover.append(input, actions)
-  
+
   // Focus the input but don't select all text unless the user wants to
   input.focus()
 }

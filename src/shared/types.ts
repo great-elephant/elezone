@@ -4,6 +4,14 @@ export type BookmarkColor =
 
 export type StudyMode = 'passive' | 'typing' | 'speaking' | 'listening' | 'multiple_choice'
 
+export interface DailyActivity {
+  saved: number
+  reviewed: number
+  points: number
+}
+
+export type ActivityLog = Record<string, DailyActivity>
+
 export interface SavedItem {
   id: string
   url: string
@@ -16,7 +24,7 @@ export interface SavedItem {
   updatedAt?: number
   orphaned: boolean
   deleted?: boolean
-  
+
   // Optional SRS/Dictionary fields
   phonetics?: string
   translation?: string
@@ -48,12 +56,19 @@ export interface SrsSettings {
   easeMultiplier: number
 }
 
+export interface GamificationSettings {
+  dailyGoalPoints: number
+  pointsPerSave: number
+  pointsPerReview: number
+}
+
 export interface Settings {
   showHintInitially?: boolean
   readAloud: ReadAloudSettings
   translation: TranslationSettings
   srs: SrsSettings
   sync: { enabled: boolean; debounceSeconds: number }
+  gamification: GamificationSettings
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -77,7 +92,12 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   sync: {
     enabled: true,
-    debounceSeconds: 5
+    debounceSeconds: 30
+  },
+  gamification: {
+    dailyGoalPoints: 20,
+    pointsPerSave: 1,
+    pointsPerReview: 2
   }
 }
 

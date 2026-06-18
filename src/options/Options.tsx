@@ -3,11 +3,12 @@ import { SavedItem, Settings, DEFAULT_SETTINGS, BookmarkColor, BOOKMARK_COLORS }
 import Library from './Library'
 import SettingsPanel from './SettingsPanel'
 import StudySession from './StudySession'
+import Dashboard from './Dashboard'
 
-type Tab = 'library' | 'study' | 'settings'
+type Tab = 'dashboard' | 'library' | 'study' | 'settings'
 
 export default function Options() {
-  const [tab, setTab] = useState<Tab>('library')
+  const [tab, setTab] = useState<Tab>('dashboard')
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [items, setItems] = useState<SavedItem[]>([])
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success'>('idle')
@@ -106,6 +107,12 @@ export default function Options() {
         </div>
         <nav style={styles.nav}>
           <button
+            style={{ ...styles.navBtn, ...(tab === 'dashboard' ? styles.navBtnActive : {}) }}
+            onClick={() => setTab('dashboard')}
+          >
+            Dashboard
+          </button>
+          <button
             style={{ ...styles.navBtn, ...(tab === 'library' ? styles.navBtnActive : {}) }}
             onClick={() => setTab('library')}
           >
@@ -127,6 +134,7 @@ export default function Options() {
       </header>
 
       <main style={styles.main}>
+        {tab === 'dashboard' && <Dashboard />}
         {tab === 'library' && (
           <Library
             items={items}

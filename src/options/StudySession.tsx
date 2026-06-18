@@ -119,6 +119,7 @@ export default function StudySession() {
     chrome.runtime.sendMessage(
       { type: 'REVIEW_ITEM', payload: { id: activeItem.id, rating } },
       () => {
+        chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'review' }).catch(() => {})
         loadItems()
         setTimeout(() => {
           setSessionQueue(prev => {
