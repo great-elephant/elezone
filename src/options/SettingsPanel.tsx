@@ -1,5 +1,27 @@
 import { useEffect, useState } from 'react'
-import { Settings } from '../shared/types'
+import { Settings, BookmarkColor, BOOKMARK_COLORS } from '../shared/types'
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+
+const ALL_COLORS: BookmarkColor[] = [
+  'red', 'yellow', 'cyan', 'green', 'blue',
+  'orange', 'purple', 'pink', 'teal', 'gray'
+]
 
 const TEST_TEXT = 'The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.'
 type TtsVoice = chrome.tts.TtsVoice
@@ -13,6 +35,15 @@ export default function SettingsPanel({ settings, onChange }: Props) {
   const [voices, setVoices] = useState<TtsVoice[]>([])
   const [testing, setTesting] = useState(false)
 
+  const deckOrder: BookmarkColor[] = settings.deckOrder?.length === ALL_COLORS.length
+    ? settings.deckOrder
+    : ALL_COLORS
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  )
+
   useEffect(() => {
     function loadVoices() {
       chrome.tts.getVoices().then(v => {
@@ -23,14 +54,13 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     return undefined
   }, [])
 
-  function set<K extends 'readAloud' | 'translation' | 'srs' | 'sync'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
+  function set<K extends 'readAloud' | 'translation' | 'sync'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
     const next = { ...settings, [section]: { ...settings[section], [key]: value } } as Settings
     if (section !== 'sync') {
       next.updatedAt = Date.now()
     }
     onChange(next)
 
-    // Immediately trigger an interactive sync if they just turned on Cloud Sync
     if (section === 'sync' && key === 'enabled' && value === true) {
       chrome.runtime.sendMessage({ type: 'SYNC_ITEMS', payload: { interactive: true } })
     }
@@ -61,9 +91,24 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     })
   }
 
+  function setDeckLabel(color: BookmarkColor, name: string) {
+    const labels = { ...(settings.deckLabels || {}) }
+    if (name.trim()) labels[color] = name
+    else delete labels[color]
+    onChange({ ...settings, deckLabels: labels, updatedAt: Date.now() })
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const from = deckOrder.indexOf(active.id as BookmarkColor)
+    const to = deckOrder.indexOf(over.id as BookmarkColor)
+    const next = arrayMove(deckOrder, from, to)
+    onChange({ ...settings, deckOrder: next, updatedAt: Date.now() })
+  }
+
   const ra = settings.readAloud
   const tr = settings.translation
-  const srs = settings.srs || { initialInterval: 1, secondInterval: 6, easeMultiplier: 2.5 }
 
   return (
     <div style={styles.root}>
@@ -113,6 +158,28 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             </span>
           </div>
         </Field>
+      </section>
+
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>Decks</h2>
+        <p style={{ fontSize: 13, color: '#8888aa', margin: '0 0 4px' }}>
+          Give each color a name to turn it into a deck. Drag to reorder — the order applies
+          to the Library filter chips and the right-click save menu.
+        </p>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={deckOrder} strategy={verticalListSortingStrategy}>
+            <div style={styles.deckList}>
+              {deckOrder.map(color => (
+                <SortableDeckItem
+                  key={color}
+                  color={color}
+                  label={settings.deckLabels?.[color] ?? ''}
+                  onLabelChange={name => setDeckLabel(color, name)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       </section>
 
       <section style={styles.section}>
@@ -190,29 +257,91 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         </Field>
       </section>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Spaced Repetition System</h2>
-
-        <Field label={`Initial Review Interval: ${srs.initialInterval} day${srs.initialInterval !== 1 ? 's' : ''}`}>
-          <input type="range" min={1} max={7} step={1} value={srs.initialInterval}
-            style={styles.range}
-            onChange={e => set('srs', 'initialInterval', parseInt(e.target.value))} />
-        </Field>
-
-        <Field label={`Second Review Interval: ${srs.secondInterval} day${srs.secondInterval !== 1 ? 's' : ''}`}>
-          <input type="range" min={2} max={14} step={1} value={srs.secondInterval}
-            style={styles.range}
-            onChange={e => set('srs', 'secondInterval', parseInt(e.target.value))} />
-        </Field>
-
-        <Field label={`Ease Multiplier: ${srs.easeMultiplier.toFixed(1)}×`}>
-          <input type="range" min={1.3} max={3.5} step={0.1} value={srs.easeMultiplier}
-            style={styles.range}
-            onChange={e => set('srs', 'easeMultiplier', parseFloat(e.target.value))} />
-        </Field>
-      </section>
     </div>
   )
+}
+
+function SortableDeckItem({
+  color,
+  label,
+  onLabelChange,
+}: {
+  color: BookmarkColor
+  label: string
+  onLabelChange: (name: string) => void
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: color })
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '8px 10px',
+    borderRadius: 8,
+    background: isDragging ? '#2a2a4a' : '#0f0f1a',
+    border: isDragging ? '1px solid #6b8aff' : '1px solid #2a2a4a',
+    boxShadow: isDragging ? '0 8px 20px rgba(0,0,0,0.5)' : 'none',
+    zIndex: isDragging ? 10 : undefined,
+    position: 'relative',
+  }
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <span
+        {...attributes}
+        {...listeners}
+        style={itemStyles.handle}
+        title="Drag to reorder"
+      >
+        ⠿
+      </span>
+      <span style={{ ...itemStyles.swatch, background: BOOKMARK_COLORS[color] }} />
+      <input
+        type="text"
+        value={label}
+        placeholder={color}
+        onChange={e => onLabelChange(e.target.value)}
+        style={itemStyles.input}
+      />
+    </div>
+  )
+}
+
+const itemStyles: Record<string, React.CSSProperties> = {
+  handle: {
+    color: '#5a5a8a',
+    fontSize: 18,
+    cursor: 'grab',
+    userSelect: 'none',
+    flexShrink: 0,
+    lineHeight: 1,
+    touchAction: 'none',
+  },
+  swatch: {
+    width: 14,
+    height: 14,
+    borderRadius: '50%',
+    flexShrink: 0,
+  },
+  input: {
+    flex: 1,
+    minWidth: 0,
+    background: 'transparent',
+    border: 'none',
+    color: '#e0e0e0',
+    padding: '2px 0',
+    fontSize: 13,
+    outline: 'none',
+  },
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -296,6 +425,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#e0e0e0',
     padding: '7px 10px',
     fontSize: 13,
+  },
+  deckList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
   },
 }
 

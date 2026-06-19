@@ -2,10 +2,9 @@ import { useEffect, useState } from 'react'
 import { SavedItem, Settings, DEFAULT_SETTINGS, BookmarkColor, BOOKMARK_COLORS } from '../shared/types'
 import Library from './Library'
 import SettingsPanel from './SettingsPanel'
-import StudySession from './StudySession'
 import Dashboard from './Dashboard'
 
-type Tab = 'dashboard' | 'library' | 'study' | 'settings'
+type Tab = 'dashboard' | 'library' | 'settings'
 
 export default function Options() {
   const [tab, setTab] = useState<Tab>('dashboard')
@@ -146,12 +145,7 @@ export default function Options() {
           >
             Library
           </button>
-          <button
-            style={{ ...styles.navBtn, ...(tab === 'study' ? styles.navBtnActive : {}) }}
-            onClick={() => setTab('study')}
-          >
-            Study
-          </button>
+
           <button
             style={{ ...styles.navBtn, ...(tab === 'settings' ? styles.navBtnActive : {}) }}
             onClick={() => setTab('settings')}
@@ -171,7 +165,7 @@ export default function Options() {
             onUpdateColor={updateItemColor}
           />
         )}
-        {tab === 'study' && <StudySession />}
+
         {tab === 'settings' && <SettingsPanel settings={settings} onChange={saveSettings} />}
       </main>
     </div>

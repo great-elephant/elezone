@@ -17,10 +17,7 @@ export async function getSettings(): Promise<Settings> {
       ...DEFAULT_SETTINGS.translation,
       ...saved.translation,
     },
-    srs: {
-      ...DEFAULT_SETTINGS.srs,
-      ...saved.srs,
-    },
+
     gamification: {
       ...DEFAULT_SETTINGS.gamification,
       ...saved.gamification,
@@ -122,11 +119,7 @@ export async function migrateLegacyDataIfNeeded(): Promise<void> {
         color: 'red', // Default color for old flashcards
         createdAt: f.createdAt,
         orphaned: false,
-        translation: f.translation,
-        nextReview: f.nextReview,
-        interval: f.interval,
-        ease: f.ease,
-        repetitions: f.repetitions
+        translation: f.translation
       })
     }
     await chrome.storage.local.remove('cxt_flashcards')
@@ -201,44 +194,6 @@ export async function markOrphaned(id: string): Promise<void> {
   }
 }
 
-export async function reviewItem(id: string, rating: 1 | 2 | 3 | 4): Promise<void> {
-  const library = await getRawItems()
-  const item = library.find(i => i.id === id)
-  if (!item || item.nextReview === undefined) return
-
-  const settings = await getSettings()
-  const srsConfig = settings.srs || DEFAULT_SETTINGS.srs
-
-  let { interval = 0, repetitions = 0, ease = srsConfig.easeMultiplier } = item
-
-  if (rating >= 3) {
-    if (repetitions === 0) {
-      interval = srsConfig.initialInterval
-    } else if (repetitions === 1) {
-      interval = srsConfig.secondInterval
-    } else {
-      interval = Math.round(interval * ease)
-    }
-    repetitions++
-  } else {
-    repetitions = 0
-    interval = srsConfig.initialInterval
-  }
-
-  ease = ease + (0.1 - (5 - rating) * (0.08 + (5 - rating) * 0.02))
-  if (ease < 1.3) ease = 1.3
-
-  const DAY_IN_MS = 24 * 60 * 60 * 1000
-  item.interval = interval
-  item.repetitions = repetitions
-  item.ease = ease
-  item.nextReview = Date.now() + (interval * DAY_IN_MS)
-  item.updatedAt = Date.now()
-
-  await chrome.storage.local.set({ [LIBRARY_KEY]: library })
-  cachedLibrary = library
-  scheduleAutoSync()
-}
 
 // ── Google Drive Sync ────────────────────────────────────────────────────────
 

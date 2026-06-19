@@ -62,6 +62,19 @@ let deleteTooltip: HTMLDivElement | null = null
 let tooltipBookmarkId: string | null = null
 let hideTimer: ReturnType<typeof setTimeout> | null = null
 let tooltipContentContainer: HTMLDivElement | null = null
+let cachedDeckLabels: Partial<Record<BookmarkColor, string>> = {}
+const tooltipDots: Partial<Record<BookmarkColor, HTMLDivElement>> = {}
+
+// Keep deck labels in sync so tooltip titles stay current.
+chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).then((s: Settings) => {
+  cachedDeckLabels = s?.deckLabels || {}
+}).catch(() => {})
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes['settings']) {
+    cachedDeckLabels = (changes['settings'].newValue as Settings)?.deckLabels || {}
+  }
+})
 
 async function updateTooltipContent(id: string) {
   if (!tooltipContentContainer) return
@@ -161,6 +174,7 @@ function ensureTooltip(): HTMLDivElement {
       border: 1px solid transparent; transition: transform 0.1s;
     `
     dot.title = color
+    tooltipDots[color as BookmarkColor] = dot
     dot.onmouseenter = () => { dot.style.transform = 'scale(1.2)' }
     dot.onmouseleave = () => { dot.style.transform = 'scale(1)' }
     dot.onmousedown = async (e) => {
@@ -219,8 +233,16 @@ function ensureTooltip(): HTMLDivElement {
   return deleteTooltip
 }
 
+function refreshTooltipDotTitles() {
+  for (const [color, dot] of Object.entries(tooltipDots)) {
+    const label = cachedDeckLabels[color as BookmarkColor]
+    dot.title = label || color
+  }
+}
+
 function showDeleteTooltip(id: string, range: Range) {
   const t = ensureTooltip()
+  refreshTooltipDotTitles()
   if (tooltipBookmarkId !== id) {
     tooltipBookmarkId = id
     updateTooltipContent(id).catch(() => {})

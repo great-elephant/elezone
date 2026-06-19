@@ -7,7 +7,6 @@ import {
   saveSettings,
   markOrphaned,
   syncToDrive,
-  reviewItem,
   logActivity,
   getActivityLog
 } from '../shared/library'
@@ -43,6 +42,14 @@ const COLOR_EMOJI: Record<BookmarkColor, string> = {
 
 chrome.runtime.onInstalled.addListener(setupContextMenus)
 chrome.runtime.onStartup.addListener(setupContextMenus)
+
+// Rebuild menus whenever settings change (handles label and order changes).
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes['settings']) {
+    void setupContextMenus()
+  }
+})
+
 chrome.tabs.onRemoved.addListener(tabId => {
   readAloudStateByTab.delete(tabId)
   if (activeSession?.tabId === tabId) {
@@ -50,22 +57,27 @@ chrome.tabs.onRemoved.addListener(tabId => {
   }
 })
 
-function setupContextMenus() {
+function colorMenuTitle(color: BookmarkColor, deckLabels: Partial<Record<BookmarkColor, string>>) {
+  const label = deckLabels[color]
+  return label
+    ? `${COLOR_EMOJI[color]} ${label}`
+    : `${COLOR_EMOJI[color]} ${color.charAt(0).toUpperCase() + color.slice(1)}`
+}
+
+async function setupContextMenus() {
+  const settings = await getSettings()
+  const deckLabels = settings?.deckLabels || {}
+  const order: BookmarkColor[] = settings?.deckOrder?.length === COLORS.length
+    ? settings.deckOrder
+    : COLORS
+
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: 'ocr',
-      title: 'Image to text(OCR)',
-      contexts: ['page', 'image', 'selection'],
-    })
-    chrome.contextMenus.create({
-      id: 'read-from-here',
-      title: 'Read from this sentence',
-      contexts: ['selection'],
-    })
-    for (const color of COLORS) {
+    chrome.contextMenus.create({ id: 'ocr', title: 'Image to text(OCR)', contexts: ['page', 'image', 'selection'] })
+    chrome.contextMenus.create({ id: 'read-from-here', title: 'Read from this sentence', contexts: ['selection'] })
+    for (const color of order) {
       chrome.contextMenus.create({
         id: `bookmark-${color}`,
-        title: `${COLOR_EMOJI[color]} ${color.charAt(0).toUpperCase() + color.slice(1)}`,
+        title: colorMenuTitle(color, deckLabels),
         contexts: ['selection'],
       })
     }
@@ -349,9 +361,7 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
     case 'UPDATE_ITEM':
       await saveItem(msg.payload as any)
       return { ok: true }
-    case 'REVIEW_ITEM':
-      await reviewItem((msg.payload as any).id, (msg.payload as any).rating)
-      return { ok: true }
+
     case 'SYNC_ITEMS':
       return await syncToDrive((msg.payload as any)?.interactive)
     case 'LOG_ACTIVITY':

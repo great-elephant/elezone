@@ -27,6 +27,12 @@ const DICTIONARY_CSS = `
     font-size: 1.1em;
     color: #ffffff;
   }
+  .context-hint {
+    font-size: 0.82em;
+    color: #6688aa;
+    font-style: italic;
+    line-height: 1.4;
+  }
   .translation-input {
     background: #111122;
     border: 1px solid #3a3a6a;
@@ -100,12 +106,11 @@ export async function showPopoverFromSelection(selectedText?: string, color: Boo
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
 
   const word = selectedText ? selectedText.trim() : sel.toString().trim()
-  if (!word || word.split(/\s+/).length > 10) return // Allow up to 10 words for dictionary phrases
+  if (!word || word.split(/\s+/).length > 10) return
 
   const range = sel.getRangeAt(0)
   const rect = range.getBoundingClientRect()
 
-  // Capture context BEFORE selection is lost
   const context = getSelectionContext(word)
   showPopover(word, rect, color, context)
 }
@@ -141,8 +146,8 @@ async function showPopover(
   try {
     const words = word.split(/\s+/)
     const phoneticsPromises = words.map(async (w) => {
-      let cleanWord = w.replace(/^[^\w]+|[^\w]+$/g, '') // Remove leading/trailing punctuation
-      cleanWord = cleanWord.replace(/['’]s$/i, '') // Remove trailing 's to help API find the base word
+      let cleanWord = w.replace(/^[^\w]+|[^\w]+$/g, '')
+      cleanWord = cleanWord.replace(/['']s$/i, '')
       if (!cleanWord) return ''
       try {
         const pRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord)}`)
@@ -150,17 +155,12 @@ async function showPopover(
           const pData = await pRes.json()
           return pData[0]?.phonetics?.find((p: any) => p.text)?.text || pData[0]?.phonetic || ''
         }
-      } catch {
-        // ignore
-      }
+      } catch { /* ignore */ }
       return ''
     })
-
     const results = await Promise.all(phoneticsPromises)
     phonetics = results.filter(Boolean).join(' ')
-  } catch {
-    // Ignore phonetics failure
-  }
+  } catch { /* ignore */ }
 
   const header = document.createElement('div')
   header.className = 'word-header'
@@ -174,24 +174,35 @@ async function showPopover(
   shadow.append(style, popover)
   document.body.appendChild(host)
 
-  // Fetch settings to get target language
   const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
   const targetLang = settings?.translation?.defaultTargetLanguage || 'en'
 
-  let translatedText = ''
-  try {
-    const res = await translate(word, targetLang)
-    translatedText = res.text
-  } catch {
-    translatedText = 'Failed to translate'
-  }
+  const hasContext = !!(context?.prefix || context?.suffix)
+  const sentence = hasContext
+    ? ((context?.prefix || '') + word + (context?.suffix || '')).trim()
+    : null
+
+  // Fire both calls in parallel: word translation (→ editable field) +
+  // sentence translation (→ context hint, only when surrounding text exists).
+  const [wordResult, sentenceResult] = await Promise.all([
+    translate(word, targetLang).catch(() => ({ text: 'Failed to translate' })),
+    sentence ? translate(sentence, targetLang).catch(() => null) : Promise.resolve(null),
+  ])
 
   loading.remove()
+
+  // Context hint — shown above the input when a sentence translation is available
+  if (sentenceResult?.text) {
+    const hint = document.createElement('div')
+    hint.className = 'context-hint'
+    hint.textContent = `💬 ${sentenceResult.text}`
+    popover.append(hint)
+  }
 
   const input = document.createElement('input')
   input.type = 'text'
   input.className = 'translation-input'
-  input.value = translatedText
+  input.value = wordResult.text
 
   const actions = document.createElement('div')
   actions.className = 'actions'
@@ -218,7 +229,7 @@ async function showPopover(
       prefix: context?.prefix || '',
       suffix: context?.suffix || '',
       occurrenceIndex: context?.occurrenceIndex || 0,
-      color, // Passed in from the context menu (or defaults to red)
+      color,
       createdAt: Date.now(),
       orphaned: false,
       translation: input.value.trim(),
@@ -228,15 +239,8 @@ async function showPopover(
       repetitions: 0
     }
 
-    // Send to background to save
-    await chrome.runtime.sendMessage({
-      type: 'SAVE_ITEM',
-      payload: item
-    }).catch(() => { })
-
+    await chrome.runtime.sendMessage({ type: 'SAVE_ITEM', payload: item }).catch(() => { })
     await chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'save' }).catch(() => { })
-
-    // Highlight the newly saved item
     applyHighlight(item)
 
     saveBtn.textContent = 'Saved!'
@@ -245,7 +249,5 @@ async function showPopover(
 
   actions.append(cancelBtn, saveBtn)
   popover.append(input, actions)
-
-  // Focus the input but don't select all text unless the user wants to
   input.focus()
 }

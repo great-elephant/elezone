@@ -25,13 +25,9 @@ export interface SavedItem {
   orphaned: boolean
   deleted?: boolean
 
-  // Optional SRS/Dictionary fields
+  // Optional Dictionary fields
   phonetics?: string
   translation?: string
-  nextReview?: number
-  interval?: number
-  ease?: number
-  repetitions?: number
 }
 
 export interface ReadAloudSettings {
@@ -50,12 +46,6 @@ export interface TranslationSettings {
 
 export type ReadAloudState = 'idle' | 'playing' | 'paused'
 
-export interface SrsSettings {
-  initialInterval: number
-  secondInterval: number
-  easeMultiplier: number
-}
-
 export interface GamificationSettings {
   dailyGoalPoints: number
   pointsPerSave: number
@@ -67,9 +57,12 @@ export interface Settings {
   showHintInitially?: boolean
   readAloud: ReadAloudSettings
   translation: TranslationSettings
-  srs: SrsSettings
   sync: { enabled: boolean; debounceSeconds: number }
   gamification: GamificationSettings
+  // User-given names for each bookmark color, turning colors into named decks.
+  deckLabels?: Partial<Record<BookmarkColor, string>>
+  // User-defined display order for deck colors (persisted as an array of BookmarkColor).
+  deckOrder?: BookmarkColor[]
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -86,11 +79,6 @@ export const DEFAULT_SETTINGS: Settings = {
     enabled: false,
     mode: 'paragraph',
   },
-  srs: {
-    initialInterval: 1,
-    secondInterval: 6,
-    easeMultiplier: 2.5,
-  },
   sync: {
     enabled: false,
     debounceSeconds: 30
@@ -99,7 +87,8 @@ export const DEFAULT_SETTINGS: Settings = {
     dailyGoalPoints: 100,
     pointsPerSave: 1,
     pointsPerReview: 2
-  }
+  },
+  deckLabels: {}
 }
 
 export const BOOKMARK_COLORS: Record<BookmarkColor, string> = {
@@ -120,7 +109,6 @@ export type MessageType =
   | 'GET_ITEMS'
   | 'DELETE_ITEM'
   | 'UPDATE_ITEM'
-  | 'REVIEW_ITEM'
   | 'SYNC_ITEMS'
   | 'GET_SETTINGS'
   | 'SAVE_SETTINGS'
