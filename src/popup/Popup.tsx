@@ -86,7 +86,7 @@ export default function Popup() {
     <div style={styles.container}>
       <header style={styles.header}>
         <span style={styles.logo}>📖</span>
-        <span style={styles.title}>CXT English</span>
+        <span style={styles.title}>HZone - Learning</span>
       </header>
 
       <div style={styles.body}>

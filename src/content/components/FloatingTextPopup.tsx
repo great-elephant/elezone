@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { translate } from '../modules/translation';
+import { Settings } from '../../shared/types';
 
 type Props = {
   text: string;
@@ -11,6 +13,8 @@ type Props = {
 export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, status, onClose }) => {
   const [position, setPosition] = useState({ x: 20, y: 20 });
   const [isDragging, setIsDragging] = useState(false);
+  const [translatedText, setTranslatedText] = useState('');
+  const [isPlaying, setIsPlaying] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef({ x: 0, y: 0 });
@@ -19,11 +23,53 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     if (textRef.current && !isLoading) {
       if (text) {
         textRef.current.textContent = text;
+        chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+          .then((settings: Settings) => {
+            const tgtLang = settings?.translation?.defaultTargetLanguage || 'en';
+            return translate(text, tgtLang);
+          })
+          .then(res => setTranslatedText(res.text))
+          .catch(err => {
+            console.error('Translation error:', err);
+            setTranslatedText('⚠ Translation failed');
+          });
       } else {
         textRef.current.innerHTML = '<span style="color:#888" contenteditable="false">No text recognized.</span>';
+        setTranslatedText('');
       }
     }
   }, [text, isLoading]);
+
+  const handleReadAloud = async () => {
+    if (isPlaying) {
+      window.speechSynthesis.cancel();
+      setIsPlaying(false);
+      return;
+    }
+    if (!text) return;
+
+    try {
+      const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+      const utterance = new SpeechSynthesisUtterance(text);
+      if (settings?.readAloud) {
+        utterance.rate = settings.readAloud.speed || 1;
+        utterance.pitch = settings.readAloud.pitch || 1;
+        utterance.volume = settings.readAloud.volume || 1;
+        if (settings.readAloud.voice) {
+          const voices = window.speechSynthesis.getVoices();
+          const voice = voices.find(v => v.name === settings.readAloud.voice);
+          if (voice) utterance.voice = voice;
+        }
+      }
+      utterance.onend = () => setIsPlaying(false);
+      utterance.onerror = () => setIsPlaying(false);
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+      setIsPlaying(true);
+    } catch (err) {
+      console.error('Failed to read aloud', err);
+    }
+  };
 
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -123,6 +169,23 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
         <span style={{ fontSize: 13, fontWeight: 'bold', color: '#aab' }}>OCR Result</span>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <button
+            onClick={handleReadAloud}
+            title="Read Aloud"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: isPlaying ? '#6bcfff' : '#aab',
+              cursor: 'pointer',
+              fontSize: 14,
+              padding: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}
+          >
+            {isPlaying ? '⏹ Stop' : '▶ Play'}
+          </button>
+          <button
             onClick={onClose}
             style={{
               background: 'none',
@@ -139,7 +202,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
         </div>
       </div>
 
-      <div style={{ padding: 16, fontSize: 16, lineHeight: 1.5, minHeight: 60, maxHeight: '60vh', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+      <div style={{ padding: 16, fontSize: 16, lineHeight: 1.5, minHeight: 60, maxHeight: '60vh', overflowY: 'auto', wordBreak: 'break-word' }}>
         {isLoading ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, color: '#88a' }}>
             <div style={{ fontSize: 13 }}>{status || 'Recognizing text...'}</div>
@@ -148,12 +211,27 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
             </div>
           </div>
         ) : (
-          <div
-            ref={textRef}
-            contentEditable={true}
-            suppressContentEditableWarning
-            style={{ outline: 'none', cursor: 'text', minHeight: '60px', width: '100%' }}
-          />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div
+              ref={textRef}
+              contentEditable={true}
+              suppressContentEditableWarning
+              style={{ outline: 'none', cursor: 'text', minHeight: '60px', width: '100%', whiteSpace: 'pre-wrap' }}
+            />
+            {translatedText && (
+              <div style={{ 
+                fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Noto Sans', sans-serif",
+                fontSize: '0.875em',
+                color: '#6688bb',
+                padding: '3px 0 5px 10px',
+                borderLeft: '2px solid #2a3a5a',
+                fontStyle: 'normal',
+                lineHeight: 1.6
+              }}>
+                {translatedText}
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>

@@ -103,7 +103,7 @@ export default function Options() {
       `}</style>
       <header style={styles.header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-          <span style={styles.logo}>📖 CXT English</span>
+          <span style={styles.logo}>📖 HZone - Learning</span>
           <button 
             title={!(settings?.sync?.enabled ?? false) ? "Go to Settings to enable Cloud Sync" : ""}
             style={{
