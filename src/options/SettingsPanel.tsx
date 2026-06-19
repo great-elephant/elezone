@@ -54,7 +54,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     return undefined
   }, [])
 
-  function set<K extends 'readAloud' | 'translation' | 'sync'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
+  function set<K extends 'readAloud' | 'translation' | 'sync' | 'srsNotifications'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
     const next = { ...settings, [section]: { ...settings[section], [key]: value } } as Settings
     if (section !== 'sync') {
       next.updatedAt = Date.now()
@@ -158,6 +158,42 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             </span>
           </div>
         </Field>
+      </section>
+
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>Notifications</h2>
+
+        <Field label="Flashcard Notifications">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input
+              type="checkbox"
+              checked={settings.srsNotifications?.enabled ?? true}
+              onChange={e => set('srsNotifications', 'enabled', e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+            />
+            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
+              Push flashcards due for review as system notifications
+            </span>
+          </div>
+        </Field>
+
+        {(settings.srsNotifications?.enabled ?? true) && (
+          <Field label={`Check Interval: ${settings.srsNotifications?.intervalMinutes ?? 30} minutes`}>
+            <input
+              type="range" min={1} max={120} step={1}
+              value={settings.srsNotifications?.intervalMinutes ?? 30}
+              style={styles.range}
+              onChange={e => set('srsNotifications', 'intervalMinutes', parseInt(e.target.value))}
+            />
+          </Field>
+        )}
+
+        <button 
+          style={{...styles.testBtn, marginTop: 8, alignSelf: 'flex-start'}}
+          onClick={() => chrome.runtime.sendMessage({ type: 'TEST_NOTIFICATION' })}
+        >
+          🔔 Test Notification
+        </button>
       </section>
 
       <section style={styles.section}>

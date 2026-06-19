@@ -195,6 +195,43 @@ export async function markOrphaned(id: string): Promise<void> {
 }
 
 
+// ── Spaced Repetition (SRS) ──────────────────────────────────────────────────
+
+export function updateSrsMetrics(item: SavedItem, passed: boolean): SavedItem {
+  let ease = item.ease ?? 2.5
+  let interval = item.interval ?? 0
+  let repetitions = item.repetitions ?? 0
+
+  if (passed) {
+    repetitions += 1
+    if (repetitions === 1) {
+      interval = 1
+    } else if (repetitions === 2) {
+      interval = 6
+    } else {
+      interval = Math.round(interval * ease)
+    }
+    // SM-2 Ease adjustment (quality = 4 for "I knew it")
+    ease = ease + (0.1 - (5 - 4) * (0.08 + (5 - 4) * 0.02))
+  } else {
+    repetitions = 0
+    interval = 1
+    // SM-2 Ease adjustment (quality = 0 for "Forgot")
+    ease = Math.max(1.3, ease - 0.2)
+  }
+
+  // Next review date calculation
+  const nextReview = Date.now() + interval * 24 * 60 * 60 * 1000
+
+  return {
+    ...item,
+    ease,
+    interval,
+    repetitions,
+    nextReview
+  }
+}
+
 // ── Google Drive Sync ────────────────────────────────────────────────────────
 
 let isSyncing = false

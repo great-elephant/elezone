@@ -8,7 +8,8 @@ import {
   markOrphaned,
   syncToDrive,
   logActivity,
-  getActivityLog
+  getActivityLog,
+  updateSrsMetrics
 } from '../shared/library'
 import {
   SavedItem,
@@ -40,13 +41,123 @@ const COLOR_EMOJI: Record<BookmarkColor, string> = {
   orange: '🟠', purple: '🟣', pink: '🩷', teal: '🩵', gray: '⚫',
 }
 
-chrome.runtime.onInstalled.addListener(setupContextMenus)
-chrome.runtime.onStartup.addListener(setupContextMenus)
+chrome.runtime.onInstalled.addListener(() => {
+  setupContextMenus()
+  setupSrsAlarm()
+})
+chrome.runtime.onStartup.addListener(() => {
+  setupContextMenus()
+  setupSrsAlarm()
+})
 
 // Rebuild menus whenever settings change (handles label and order changes).
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes['settings']) {
     void setupContextMenus()
+    void setupSrsAlarm()
+  }
+})
+
+async function setupSrsAlarm() {
+  const settings = await getSettings()
+  const srs = settings.srsNotifications
+  if (srs?.enabled) {
+    chrome.alarms.create('srs-tick', { periodInMinutes: srs.intervalMinutes || 30 })
+  } else {
+    chrome.alarms.clear('srs-tick')
+  }
+}
+
+async function triggerSrsNotification(testMode = false) {
+  const settings = await getSettings()
+  if (!settings.srsNotifications?.enabled && !testMode) return
+
+  const items = await getAllItems()
+  let dueItems = items.filter(i => !i.orphaned && i.text)
+  
+  if (!testMode) {
+    const strictlyDue = dueItems.filter(i => (i.nextReview || 0) <= Date.now())
+    if (strictlyDue.length > 0) {
+      dueItems = strictlyDue
+      dueItems.sort((a, b) => (a.nextReview || 0) - (b.nextReview || 0))
+    } else {
+      // Fallback: If no items are strictly due, just pick a random one to keep the user engaged!
+      dueItems.sort(() => Math.random() - 0.5)
+    }
+  } else {
+    // Test mode: always random
+    dueItems.sort(() => Math.random() - 0.5)
+  }
+  
+  if (dueItems.length === 0) return
+
+  const item = dueItems[0]
+
+  chrome.notifications.create(`srs-q-${item.id}`, {
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title: `Review: ${item.text}`,
+    message: 'Click "Show Answer" to flip the card.',
+    buttons: [{ title: 'Show Answer' }],
+    requireInteraction: true
+  })
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'srs-tick') {
+    await triggerSrsNotification(false)
+  }
+})
+
+chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
+  if (notificationId.startsWith('srs-q-')) {
+    const id = notificationId.replace('srs-q-', '')
+    const items = await getAllItems()
+    const item = items.find(i => i.id === id)
+    if (!item) return
+    
+    chrome.notifications.clear(notificationId)
+    
+    let context = ''
+    if (item.prefix || item.suffix) {
+      context = `\n\nContext: ${item.prefix}${item.text}${item.suffix}`
+    }
+
+    const settings = await getSettings()
+    chrome.tts.stop()
+    if (settings.readAloud?.voice) {
+      chrome.tts.speak(item.text, {
+        pitch: settings.readAloud.pitch,
+        rate: settings.readAloud.speed,
+        voiceName: settings.readAloud.voice,
+        volume: settings.readAloud.volume
+      })
+    } else {
+      chrome.tts.speak(item.text)
+    }
+
+    chrome.notifications.create(`srs-a-${item.id}`, {
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title: `Answer: ${item.text}${item.phonetics ? `  [${item.phonetics}]` : ''}`,
+      message: `${item.translation || '[No translation saved]'}${context}`,
+      buttons: [{ title: 'I knew it (Easy)' }, { title: 'Forgot (Hard)' }],
+      requireInteraction: true
+    })
+  } else if (notificationId.startsWith('srs-a-')) {
+    const id = notificationId.replace('srs-a-', '')
+    const items = await getAllItems()
+    const item = items.find(i => i.id === id)
+    
+    chrome.notifications.clear(notificationId)
+    
+    if (!item) return
+    
+    const passed = buttonIndex === 0
+    const updated = updateSrsMetrics(item, passed)
+    
+    await saveItem(updated)
+    await logActivity('review')
   }
 })
 
@@ -360,6 +471,9 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return { ok: true }
     case 'UPDATE_ITEM':
       await saveItem(msg.payload as any)
+      return { ok: true }
+    case 'TEST_NOTIFICATION':
+      await triggerSrsNotification(true)
       return { ok: true }
 
     case 'SYNC_ITEMS':

@@ -28,6 +28,12 @@ export interface SavedItem {
   // Optional Dictionary fields
   phonetics?: string
   translation?: string
+
+  // SRS fields
+  nextReview?: number
+  interval?: number
+  ease?: number
+  repetitions?: number
 }
 
 export interface ReadAloudSettings {
@@ -63,6 +69,8 @@ export interface Settings {
   deckLabels?: Partial<Record<BookmarkColor, string>>
   // User-defined display order for deck colors (persisted as an array of BookmarkColor).
   deckOrder?: BookmarkColor[]
+  
+  srsNotifications?: { enabled: boolean; intervalMinutes: number }
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -88,7 +96,11 @@ export const DEFAULT_SETTINGS: Settings = {
     pointsPerSave: 1,
     pointsPerReview: 2
   },
-  deckLabels: {}
+  deckLabels: {},
+  srsNotifications: {
+    enabled: true,
+    intervalMinutes: 30
+  }
 }
 
 export const BOOKMARK_COLORS: Record<BookmarkColor, string> = {
@@ -127,6 +139,7 @@ export type MessageType =
   | 'GET_SELECTION_CONTEXT'
   | 'START_READ_ALOUD_FROM'
   | 'HIGHLIGHT_BOOKMARK'
+  | 'TEST_NOTIFICATION'
 
 export interface Message {
   type: MessageType
