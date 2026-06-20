@@ -10,7 +10,6 @@ const ALL_COLORS: BookmarkColor[] = [
 const STUDY_MODES: { value: StudyMode; label: string }[] = [
   { value: 'passive', label: 'Passive Flashcard' },
   { value: 'typing', label: 'Typing (Active Recall)' },
-  { value: 'speaking', label: 'Speaking (Pronunciation)' },
   { value: 'listening', label: 'Listening (Dictation)' },
   { value: 'multiple_choice', label: 'Multiple Choice' },
 ]
@@ -360,7 +359,7 @@ export default function Library({
     const groups: Record<string, SavedItem[]> = {}
     for (const item of filtered) {
       const url = item.url || 'Dictionary (No URL)'
-      ;(groups[url] ||= []).push(item)
+        ; (groups[url] ||= []).push(item)
     }
     const urls = Object.keys(groups).sort((a, b) =>
       Math.max(...groups[b].map(i => i.createdAt)) - Math.max(...groups[a].map(i => i.createdAt))

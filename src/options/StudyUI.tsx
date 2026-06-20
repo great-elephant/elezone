@@ -19,8 +19,6 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   const [verificationPassed, setVerificationPassed] = useState(false)
   const [userAnswer, setUserAnswer] = useState('')
   const [mcOptions, setMcOptions] = useState<string[]>([])
-  const [isRecording, setIsRecording] = useState(false)
-  const [speechError, setSpeechError] = useState('')
   const [verifyError, setVerifyError] = useState(false)
   const [wrongOptions, setWrongOptions] = useState<Set<string>>(new Set())
   const [sessionScore, setSessionScore] = useState({ correct: 0, giveUps: 0 })
@@ -36,7 +34,6 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
       setShowHint(!!settings?.showHintInitially)
       setVerificationPassed(mode === 'passive')
       setUserAnswer('')
-      setSpeechError('')
       setVerifyError(false)
       setWrongOptions(new Set())
       setSessionScore({ correct: 0, giveUps: 0 })
@@ -95,7 +92,6 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         setShowHint(!!settings?.showHintInitially)
         setVerificationPassed(mode === 'passive')
         setUserAnswer('')
-        setSpeechError('')
         setVerifyError(false)
         setWrongOptions(new Set())
         if (mode === 'multiple_choice') generateMcOptions(nextQueue[0], items)
@@ -135,49 +131,6 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     if (activeItem) {
       speakText(activeItem.text)
     }
-  }
-
-  function startSpeaking() {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      setSpeechError('Speech recognition is not supported in your browser.')
-      return
-    }
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    const recognition = new SpeechRecognition()
-    recognition.lang = 'en-US'
-    recognition.interimResults = false
-    recognition.maxAlternatives = 1
-
-    recognition.onstart = () => {
-      setIsRecording(true)
-      setSpeechError('')
-    }
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript
-      setUserAnswer(transcript)
-      if (transcript.trim().toLowerCase().replace(/[.,?!]/g, '') === activeItem?.text.trim().toLowerCase().replace(/[.,?!]/g, '')) {
-        setVerificationPassed(true)
-        setShowAnswer(true)
-        setSessionScore(prev => ({ ...prev, correct: prev.correct + 1 }))
-        setEarnedSpark(true)
-        speakText(activeItem?.text || '')
-      } else {
-        setSpeechError(`You said: "${transcript}". Try again!`)
-      }
-    }
-
-    recognition.onerror = (event: any) => {
-      setSpeechError(`Error: ${event.error}`)
-      setIsRecording(false)
-    }
-
-    recognition.onend = () => {
-      setIsRecording(false)
-    }
-
-    recognition.start()
   }
 
   if (showSessionSummary) {
@@ -299,22 +252,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
                     </div>
                   )}
 
-                  {mode === 'speaking' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                      <button
-                        style={{
-                          ...styles.showBtn,
-                          borderRadius: '50%', width: '64px', height: '64px', fontSize: '24px',
-                          background: isRecording ? '#ff6b6b' : '#4a5a9a'
-                        }}
-                        onClick={startSpeaking}
-                      >
-                        🎤
-                      </button>
-                      {isRecording && <span style={{ color: '#ff6b6b' }}>Listening...</span>}
-                      {speechError && <span style={{ color: '#ffb36b', fontSize: '14px' }}>{speechError}</span>}
-                    </div>
-                  )}
+
 
                   {mode === 'multiple_choice' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%', alignItems: 'center' }}>

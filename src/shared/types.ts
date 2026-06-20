@@ -2,7 +2,7 @@ export type BookmarkColor =
   | 'red' | 'yellow' | 'cyan' | 'green' | 'blue'
   | 'orange' | 'purple' | 'pink' | 'teal' | 'gray'
 
-export type StudyMode = 'passive' | 'typing' | 'speaking' | 'listening' | 'multiple_choice'
+export type StudyMode = 'passive' | 'typing' | 'listening' | 'multiple_choice'
 
 export interface DailyActivity {
   saved: number
