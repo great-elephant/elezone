@@ -367,6 +367,45 @@ export default function Dashboard() {
           }}></div>
         </div>
       )}
+      
+      {/* Floating Help Button */}
+      <button
+        onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL("src/options/guide.html") })}
+        style={{
+          position: 'fixed',
+          bottom: '30px',
+          right: '30px',
+          width: '44px',
+          height: '44px',
+          borderRadius: '22px',
+          backgroundColor: '#111122',
+          color: '#5a5a8a',
+          border: '1px solid #2a2a4a',
+          cursor: 'pointer',
+          boxShadow: '0 4px 10px rgba(0,0,0,0.3)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+          transition: 'all 0.2s ease'
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.backgroundColor = '#2a2a4a';
+          e.currentTarget.style.color = '#c0c0e0';
+          e.currentTarget.style.transform = 'translateY(-2px)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.backgroundColor = '#111122';
+          e.currentTarget.style.color = '#5a5a8a';
+          e.currentTarget.style.transform = 'translateY(0)';
+        }}
+        title="View Feature Guide"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+        </svg>
+      </button>
 
     </div>
   )

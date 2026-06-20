@@ -63,7 +63,7 @@ async function setupSrsAlarm() {
   const settings = await getSettings()
   const srs = settings.srsNotifications
   if (srs?.enabled) {
-    chrome.alarms.create('srs-tick', { periodInMinutes: srs.intervalMinutes || 30 })
+    chrome.alarms.create('srs-tick', { periodInMinutes: srs.intervalMinutes || 15 })
   } else {
     chrome.alarms.clear('srs-tick')
   }

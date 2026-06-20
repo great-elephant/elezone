@@ -115,7 +115,7 @@ export const DEFAULT_SETTINGS: Settings = {
   deckLabels: {},
   srsNotifications: {
     enabled: true,
-    intervalMinutes: 30
+    intervalMinutes: 15
   }
 }
 

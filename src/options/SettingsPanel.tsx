@@ -34,6 +34,7 @@ interface Props {
 export default function SettingsPanel({ settings, onChange }: Props) {
   const [voices, setVoices] = useState<TtsVoice[]>([])
   const [testing, setTesting] = useState(false)
+  const [aiStatus, setAiStatus] = useState<AiStatus>('checking')
 
   const deckOrder: BookmarkColor[] = settings.deckOrder?.length === ALL_COLORS.length
     ? settings.deckOrder
@@ -178,10 +179,10 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         </Field>
 
         {(settings.srsNotifications?.enabled ?? true) && (
-          <Field label={`Check Interval: ${settings.srsNotifications?.intervalMinutes ?? 30} minutes`}>
+          <Field label={`Check Interval: ${settings.srsNotifications?.intervalMinutes ?? 15} minutes`}>
             <input
               type="range" min={1} max={120} step={1}
-              value={settings.srsNotifications?.intervalMinutes ?? 30}
+              value={settings.srsNotifications?.intervalMinutes ?? 15}
               style={styles.range}
               onChange={e => set('srsNotifications', 'intervalMinutes', parseInt(e.target.value))}
             />
@@ -312,26 +313,35 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             ['disableAI',             '🔒 On-device AI (Gemini Nano)'],
             ['disableGoogleContext',  '🌐 Google · sentence context'],
             ['disableGoogleSenses',   '🌐 Google · dictionary senses'],
-          ] as const).map(([key, label]) => (
-            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <input
-                type="checkbox"
-                id={`src-${key}`}
-                checked={!(tr[key] ?? false)}
-                onChange={e => set('translation', key, !e.target.checked)}
-                style={{ width: 16, height: 16, accentColor: '#4f6ef7' }}
-              />
-              <label htmlFor={`src-${key}`} style={{ fontSize: 13, color: '#e0e0e0', cursor: 'pointer' }}>
-                {label}
-              </label>
-            </div>
-          ))}
+          ] as const).map(([key, label]) => {
+            const isAiSrc = key === 'disableAI';
+            const isDisabled = isAiSrc && aiStatus !== 'available';
+            const isChecked = isAiSrc 
+              ? (aiStatus === 'available' && !(tr[key] ?? false))
+              : !(tr[key] ?? false);
+
+            return (
+              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input
+                  type="checkbox"
+                  id={`src-${key}`}
+                  checked={isChecked}
+                  disabled={isDisabled}
+                  onChange={e => set('translation', key, !e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: '#4f6ef7', opacity: isDisabled ? 0.5 : 1 }}
+                />
+                <label htmlFor={`src-${key}`} style={{ fontSize: 13, color: '#e0e0e0', cursor: isDisabled ? 'not-allowed' : 'pointer', opacity: isDisabled ? 0.5 : 1 }}>
+                  {label} {isDisabled && aiStatus !== 'checking' ? '(Needs Download)' : ''}
+                </label>
+              </div>
+            )
+          })}
           <span style={{ fontSize: 12, color: '#556688' }}>
             🌐 Google · plain translate is always the last resort
           </span>
         </div>
 
-        <OnDeviceAi targetLang={tr.defaultTargetLanguage} />
+        <OnDeviceAi targetLang={tr.defaultTargetLanguage} onStatusChange={setAiStatus} />
       </section>
 
       <section style={styles.section}>
@@ -372,9 +382,14 @@ export default function SettingsPanel({ settings, onChange }: Props) {
 
 type AiStatus = 'checking' | 'unsupported' | 'downloadable' | 'downloading' | 'available'
 
-function OnDeviceAi({ targetLang }: { targetLang: string }) {
-  const [status, setStatus] = useState<AiStatus>('checking')
+function OnDeviceAi({ targetLang, onStatusChange }: { targetLang: string, onStatusChange: (s: AiStatus) => void }) {
+  const [status, setStatusInternal] = useState<AiStatus>('checking')
   const [progress, setProgress] = useState(0)
+  
+  const setStatus = (s: AiStatus) => {
+    setStatusInternal(s);
+    onStatusChange(s);
+  };
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 

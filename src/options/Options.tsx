@@ -103,7 +103,7 @@ export default function Options() {
           setSyncStatus("idle");
           alert(
             "❌ Failed to sync to Google Drive.\nReason: " +
-              (res.error || "Unknown error"),
+            (res.error || "Unknown error"),
           );
         }
       },
@@ -138,7 +138,12 @@ export default function Options() {
             <img
               src="/icons/icon32.png"
               alt="logo"
-              style={{ width: "28px", height: "28px", marginRight: "10px" }}
+              style={{
+                width: "28px",
+                height: "28px",
+                marginRight: "10px",
+                filter: "drop-shadow(rgba(107, 207, 255, 0.5) 0px 0px 4px)",
+              }}
             />
             HZone - Learning
           </span>

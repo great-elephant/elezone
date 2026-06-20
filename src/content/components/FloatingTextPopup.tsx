@@ -70,7 +70,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
       setIsPlaying(false);
       return;
     }
-    
+
     const currentText = textRef.current?.innerText || textRef.current?.textContent || text;
     if (!currentText) return;
 
@@ -104,7 +104,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
       if (popupRef.current && popupRef.current.contains(target)) return;
       // Ignore if clicking inside dictionary popover or tooltip
       if (target.closest('.cxt-dict-host') || target.closest('.cxt-delete-tooltip')) return;
-      
+
       onClose();
     };
 
@@ -243,10 +243,10 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
               contentEditable={true}
               suppressContentEditableWarning
               onInput={handleInput}
-              style={{ outline: 'none', cursor: 'text', minHeight: '60px', width: '100%', whiteSpace: 'pre-wrap' }}
+              style={{ outline: 'none', cursor: 'text', width: '100%', whiteSpace: 'pre-wrap' }}
             />
             {translatedText && (
-              <div style={{ 
+              <div style={{
                 fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Noto Sans', sans-serif",
                 fontSize: '0.875em',
                 color: '#6688bb',
