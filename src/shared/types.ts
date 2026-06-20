@@ -67,6 +67,12 @@ export interface OcrSettings {
   removeExtraSpaces: boolean
 }
 
+export interface RoastSettings {
+  enabled: boolean
+  noNewItemsDaysThreshold: number
+  overdueItemsThreshold: number
+}
+
 export interface Settings {
   updatedAt?: number
   defaultStudyMode?: StudyMode
@@ -81,7 +87,13 @@ export interface Settings {
   // User-defined display order for deck colors (persisted as an array of BookmarkColor).
   deckOrder?: BookmarkColor[]
   
-  srsNotifications?: { enabled: boolean; intervalMinutes: number }
+  srsNotifications?: { 
+    enabled: boolean; 
+    intervalMinutes: number;
+    activeHoursStart: number;
+    activeHoursEnd: number;
+  }
+  roast?: RoastSettings
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -115,7 +127,14 @@ export const DEFAULT_SETTINGS: Settings = {
   deckLabels: {},
   srsNotifications: {
     enabled: true,
-    intervalMinutes: 15
+    intervalMinutes: 15,
+    activeHoursStart: 8,
+    activeHoursEnd: 22
+  },
+  roast: {
+    enabled: true,
+    noNewItemsDaysThreshold: 3,
+    overdueItemsThreshold: 10
   }
 }
 
@@ -157,6 +176,7 @@ export type MessageType =
   | 'START_READ_ALOUD_FROM'
   | 'HIGHLIGHT_BOOKMARK'
   | 'TEST_NOTIFICATION'
+  | 'TEST_ROAST_NOTIFICATION'
 
 export interface Message {
   type: MessageType

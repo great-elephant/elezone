@@ -44,10 +44,11 @@ const ROASTS = [
   "Even Shakespeare is telling you to chill out bro."
 ];
 
-export default function Dashboard() {
+export default function Dashboard({ onNavigate }: { onNavigate?: (tab: 'dashboard' | 'library' | 'settings') => void }) {
   const [log, setLog] = useState<ActivityLog>({})
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [tooltip, setTooltip] = useState<{ visible: boolean, text: string, x: number, y: number }>({ visible: false, text: '', x: 0, y: 0 })
+  const [slackingState, setSlackingState] = useState<{ isSlacking: boolean, level: number, message: string } | null>(null)
 
   useEffect(() => {
     chrome.runtime.sendMessage({ type: 'GET_ACTIVITY_LOG' }, (res) => {
@@ -55,6 +56,9 @@ export default function Dashboard() {
     })
     chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (s) => {
       if (s) setSettings(s)
+    })
+    chrome.storage.local.get('slacking_state', (res) => {
+      if (res.slacking_state) setSlackingState(res.slacking_state)
     })
 
     const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
@@ -64,6 +68,9 @@ export default function Dashboard() {
         }
         if (changes['settings']) {
           setSettings(changes['settings'].newValue || DEFAULT_SETTINGS)
+        }
+        if (changes['slacking_state']) {
+          setSlackingState(changes['slacking_state'].newValue || null)
         }
       }
     }
@@ -173,9 +180,69 @@ export default function Dashboard() {
         .heatmap-square {
           position: relative;
         }
+        .roast-banner {
+          grid-column: 1 / -1;
+          background: #2a1111;
+          padding: 12px 16px;
+          border-radius: 6px;
+          border: 1px solid #4a2222;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          font-size: 13px;
+        }
+        .roast-btn {
+          background: transparent;
+          color: #ff6b6b;
+          border: 1px solid #ff6b6b;
+          padding: 6px 12px;
+          border-radius: 4px;
+          font-weight: 500;
+          cursor: pointer;
+          font-size: 12px;
+          white-space: nowrap;
+          transition: background 0.2s;
+        }
+        .roast-btn:hover {
+          background: rgba(255, 107, 107, 0.1);
+        }
       `}</style>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px', width: '100%', maxWidth: '850px' }}>
+
+        {/* Roast Banner */}
+        {slackingState && (
+          <div className="roast-banner">
+            <div style={{ flex: 1, color: '#e0e0e0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>{slackingState.message}</span>
+            </div>
+            <button
+              className="roast-btn"
+              onClick={() => { if (onNavigate) onNavigate('library') }}>
+              Ôn tập ngay
+            </button>
+            <button
+              onClick={() => chrome.storage.local.remove('slacking_state')}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#ff8888',
+                cursor: 'pointer',
+                padding: '4px',
+                fontSize: '14px',
+                display: 'flex',
+                alignItems: 'center',
+                opacity: 0.7,
+                marginLeft: '4px'
+              }}
+              title="Tạm ẩn cảnh báo"
+              onMouseOver={e => e.currentTarget.style.opacity = '1'}
+              onMouseOut={e => e.currentTarget.style.opacity = '0.7'}
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Player Profile Banner */}
         <div style={{ gridColumn: '1 / -1', background: 'linear-gradient(135deg, #1e1e32 0%, #111122 100%)', padding: '30px', borderRadius: '16px', border: '1px solid #3a3a6a', display: 'flex', flexDirection: 'column', gap: '20px', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }}>
@@ -367,7 +434,7 @@ export default function Dashboard() {
           }}></div>
         </div>
       )}
-      
+
       {/* Floating Help Button */}
       <button
         onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL("src/options/guide.html") })}

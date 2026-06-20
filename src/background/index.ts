@@ -20,6 +20,7 @@ import {
   Settings,
 } from '../shared/types'
 import { translateInContext, ContextTranslateRequest } from './aiTranslate'
+import { getRandomRoast, RoastLevel } from '../shared/roasts'
 
 type ActiveReadAloudSession = {
   currentIndex: number
@@ -73,6 +74,15 @@ async function triggerSrsNotification(testMode = false) {
   const settings = await getSettings()
   if (!settings.srsNotifications?.enabled && !testMode) return
 
+  if (!testMode) {
+    const startHour = settings.srsNotifications?.activeHoursStart ?? 8
+    const endHour = settings.srsNotifications?.activeHoursEnd ?? 22
+    const currentHour = new Date().getHours()
+    if (currentHour < startHour || currentHour >= endHour) {
+      return
+    }
+  }
+
   const items = await getAllItems()
   let dueItems = items.filter(i => !i.orphaned && i.text)
   
@@ -107,8 +117,95 @@ async function triggerSrsNotification(testMode = false) {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'srs-tick') {
     await triggerSrsNotification(false)
+    await evaluateSlackingState(false)
   }
 })
+
+async function evaluateSlackingState(testMode = false) {
+  const settings = await getSettings()
+  if (!settings.roast?.enabled && !testMode) {
+    await chrome.storage.local.remove('slacking_state')
+    return
+  }
+
+  if (testMode) {
+    const roastMessage = getRandomRoast(3)
+    const state = { isSlacking: true, level: 3, message: roastMessage }
+    await chrome.storage.local.set({ slacking_state: state })
+    
+    chrome.notifications.create(`roast-test-${Date.now()}`, {
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title: 'HZone Cảnh Báo 🚨 (Test)',
+      message: roastMessage,
+      requireInteraction: false
+    })
+    return
+  }
+
+  const items = await getAllItems()
+  if (items.length === 0) {
+    await chrome.storage.local.remove('slacking_state')
+    return
+  }
+  const now = Date.now()
+  
+  const overdueItems = items.filter(i => !i.orphaned && i.text && (i.nextReview || 0) <= now).length
+  
+  let latestSaveTime = 0
+  for (const item of items) {
+    if (item.createdAt > latestSaveTime) {
+      latestSaveTime = item.createdAt
+    }
+  }
+  
+  const daysSinceLastSave = (now - latestSaveTime) / (1000 * 60 * 60 * 24)
+  
+  const thresholdDays = settings.roast?.noNewItemsDaysThreshold || 3
+  const thresholdOverdue = settings.roast?.overdueItemsThreshold || 10
+
+  let slacking = false
+  let level: RoastLevel = 1
+
+  if (overdueItems > thresholdOverdue || daysSinceLastSave > thresholdDays) {
+    slacking = true
+    const severity = Math.max(
+      overdueItems / thresholdOverdue,
+      daysSinceLastSave / thresholdDays
+    )
+    if (severity >= 3) level = 3
+    else if (severity >= 2) level = 2
+    else level = 1
+  }
+
+  if (slacking) {
+    const roastMessage = getRandomRoast(level)
+    const state = { isSlacking: true, level, message: roastMessage }
+    await chrome.storage.local.set({ slacking_state: state })
+    
+    const { last_roast_time = 0 } = await chrome.storage.local.get('last_roast_time')
+    const HOURS_6 = 6 * 60 * 60 * 1000
+    
+    // Do not notify during sleep hours
+    const startHour = settings.srsNotifications?.activeHoursStart ?? 8
+    const endHour = settings.srsNotifications?.activeHoursEnd ?? 22
+    const currentHour = new Date().getHours()
+    const isAwakeTime = currentHour >= startHour && currentHour < endHour
+
+    if (now - last_roast_time > HOURS_6 && isAwakeTime) {
+      chrome.notifications.create(`roast-${now}`, {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png',
+        title: 'HZone Cảnh Báo 🚨',
+        message: roastMessage,
+        requireInteraction: false
+      })
+      await chrome.storage.local.set({ last_roast_time: now })
+    }
+  } else {
+    await chrome.storage.local.remove('slacking_state')
+  }
+}
 
 chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
   if (notificationId.startsWith('srs-q-')) {
@@ -475,6 +572,9 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return { ok: true }
     case 'TEST_NOTIFICATION':
       await triggerSrsNotification(true)
+      return { ok: true }
+    case 'TEST_ROAST_NOTIFICATION':
+      await evaluateSlackingState(true)
       return { ok: true }
 
     case 'SYNC_ITEMS':

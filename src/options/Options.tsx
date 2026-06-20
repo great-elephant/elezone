@@ -225,7 +225,7 @@ export default function Options() {
       </header>
 
       <main style={styles.main}>
-        {tab === "dashboard" && <Dashboard />}
+        {tab === "dashboard" && <Dashboard onNavigate={setTab} />}
         {tab === "library" && (
           <Library
             items={items}

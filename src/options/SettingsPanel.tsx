@@ -55,7 +55,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     return undefined
   }, [])
 
-  function set<K extends 'readAloud' | 'translation' | 'sync' | 'srsNotifications' | 'ocr'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
+  function set<K extends 'readAloud' | 'translation' | 'sync' | 'srsNotifications' | 'ocr' | 'roast'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
     const next = { ...settings, [section]: { ...settings[section], [key]: value } } as Settings
     if (section !== 'sync') {
       next.updatedAt = Date.now()
@@ -179,18 +179,48 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         </Field>
 
         {(settings.srsNotifications?.enabled ?? true) && (
-          <Field label={`Check Interval: ${settings.srsNotifications?.intervalMinutes ?? 15} minutes`}>
-            <input
-              type="range" min={1} max={120} step={1}
-              value={settings.srsNotifications?.intervalMinutes ?? 15}
-              style={styles.range}
-              onChange={e => set('srsNotifications', 'intervalMinutes', parseInt(e.target.value))}
-            />
-          </Field>
+          <>
+            <Field label={`Check Interval: ${settings.srsNotifications?.intervalMinutes ?? 15} minutes`}>
+              <input
+                type="range" min={1} max={120} step={1}
+                value={settings.srsNotifications?.intervalMinutes ?? 15}
+                style={styles.range}
+                onChange={e => set('srsNotifications', 'intervalMinutes', parseInt(e.target.value))}
+              />
+            </Field>
+
+            <Field label="Active Hours (Do Not Disturb outside these hours)">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <select
+                  value={settings.srsNotifications?.activeHoursStart ?? 8}
+                  style={{ ...styles.select, width: 'auto' }}
+                  onChange={e => set('srsNotifications', 'activeHoursStart', parseInt(e.target.value))}
+                >
+                  {Array.from({ length: 24 }).map((_, i) => (
+                    <option key={i} value={i} disabled={i >= (settings.srsNotifications?.activeHoursEnd ?? 22)}>
+                      {String(i).padStart(2, '0')}:00
+                    </option>
+                  ))}
+                </select>
+                <span style={{ color: '#8888aa' }}>to</span>
+                <select
+                  value={settings.srsNotifications?.activeHoursEnd ?? 22}
+                  style={{ ...styles.select, width: 'auto' }}
+                  onChange={e => set('srsNotifications', 'activeHoursEnd', parseInt(e.target.value))}
+                >
+                  {Array.from({ length: 24 }).map((_, i) => (
+                    <option key={i} value={i} disabled={i <= (settings.srsNotifications?.activeHoursStart ?? 8)}>
+                      {String(i).padStart(2, '0')}:00
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </Field>
+          </>
         )}
 
-        <button 
-          style={{...styles.testBtn, marginTop: 8, alignSelf: 'flex-start'}}
+        <button
+          style={{ ...styles.testBtn, marginTop: 8, alignSelf: 'flex-start' }}
           onClick={() => chrome.runtime.sendMessage({ type: 'TEST_NOTIFICATION' })}
         >
           🔔 Test Notification
@@ -310,13 +340,13 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <label style={{ fontSize: 13, color: '#8888aa' }}>Word translation sources (tried in order, first hit wins)</label>
           {([
-            ['disableAI',             '🔒 On-device AI (Gemini Nano)'],
-            ['disableGoogleContext',  '🌐 Google · sentence context'],
-            ['disableGoogleSenses',   '🌐 Google · dictionary senses'],
+            ['disableAI', '🔒 On-device AI (Gemini Nano)'],
+            ['disableGoogleContext', '🌐 Google · sentence context'],
+            ['disableGoogleSenses', '🌐 Google · dictionary senses'],
           ] as const).map(([key, label]) => {
             const isAiSrc = key === 'disableAI';
             const isDisabled = isAiSrc && aiStatus !== 'available';
-            const isChecked = isAiSrc 
+            const isChecked = isAiSrc
               ? (aiStatus === 'available' && !(tr[key] ?? false))
               : !(tr[key] ?? false);
 
@@ -376,6 +406,55 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         </Field>
       </section>
 
+
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>Tough Love</h2>
+        <p style={{ fontSize: 13, color: '#ff6b6b', margin: '0 0 12px' }}>
+          * This feature is mandatory and cannot be disabled. We warned you😈!!!
+        </p>
+
+        <Field label="Enable Roasting">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input
+              type="checkbox"
+              checked={true}
+              disabled={true}
+              onChange={() => { }}
+              style={{ width: 18, height: 18, accentColor: '#ff4444', opacity: 0.6, cursor: 'not-allowed' }}
+            />
+            <span style={{ fontSize: 13, color: '#aaaaaa' }}>
+              Scold me if I start slacking off on my learning
+            </span>
+          </div>
+        </Field>
+
+        <Field label={`Overdue Items Threshold: ${settings.roast?.overdueItemsThreshold ?? 10} items`}>
+          <input
+            type="range" min={1} max={50} step={1}
+            value={settings.roast?.overdueItemsThreshold ?? 10}
+            disabled={true}
+            style={{ ...styles.range, opacity: 0.6, cursor: 'not-allowed' }}
+            onChange={() => { }}
+          />
+        </Field>
+
+        <Field label={`Days without new words: ${settings.roast?.noNewItemsDaysThreshold ?? 3} days`}>
+          <input
+            type="range" min={1} max={30} step={1}
+            value={settings.roast?.noNewItemsDaysThreshold ?? 3}
+            disabled={true}
+            style={{ ...styles.range, opacity: 0.6, cursor: 'not-allowed' }}
+            onChange={() => { }}
+          />
+        </Field>
+
+        {/* <button
+          style={{ ...styles.testBtn, marginTop: 8, alignSelf: 'flex-start' }}
+          onClick={() => chrome.runtime.sendMessage({ type: 'TEST_ROAST_NOTIFICATION' })}
+        >
+          🚨 Test Roast Notification
+        </button> */}
+      </section>
     </div>
   )
 }
@@ -385,7 +464,7 @@ type AiStatus = 'checking' | 'unsupported' | 'downloadable' | 'downloading' | 'a
 function OnDeviceAi({ targetLang, onStatusChange }: { targetLang: string, onStatusChange: (s: AiStatus) => void }) {
   const [status, setStatusInternal] = useState<AiStatus>('checking')
   const [progress, setProgress] = useState(0)
-  
+
   const setStatus = (s: AiStatus) => {
     setStatusInternal(s);
     onStatusChange(s);
