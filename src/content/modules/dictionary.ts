@@ -1,6 +1,7 @@
 import { translate } from './translation'
 import { getSelectionContext, applyHighlight } from './anchor'
 import { BookmarkColor } from '../../shared/types'
+import type { ContextTranslateResult } from '../../background/aiTranslate'
 
 let host: HTMLElement | null = null
 let shadow: ShadowRoot | null = null
@@ -46,6 +47,38 @@ const DICTIONARY_CSS = `
   .translation-input:focus {
     outline: none;
     border-color: #5a5a8a;
+  }
+  .senses-label {
+    font-size: 0.75em;
+    color: #556688;
+    margin-bottom: 2px;
+  }
+  .senses {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .sense-chip {
+    background: #222244;
+    border: 1px solid #3a3a6a;
+    color: #c0c0e0;
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 0.82em;
+    cursor: pointer;
+  }
+  .sense-chip:hover {
+    background: #33335a;
+    border-color: #5a5a8a;
+  }
+  .source-badge {
+    font-size: 0.72em;
+    color: #556;
+    background: #111820;
+    border-radius: 3px;
+    padding: 2px 6px;
+    display: inline-block;
+    margin-top: 2px;
   }
   .loading {
     font-size: 0.9em;
@@ -180,12 +213,21 @@ async function showPopover(
   const hasContext = !!(context?.prefix || context?.suffix)
   const sentence = hasContext
     ? ((context?.prefix || '') + word + (context?.suffix || '')).trim()
-    : null
+    : ''
 
-  // Fire both calls in parallel: word translation (→ editable field) +
-  // sentence translation (→ context hint, only when surrounding text exists).
+  // Fire both calls in parallel:
+  //  - context-aware word translation (background hybrid) → editable field
+  //  - full-sentence translation → 💬 context hint (only when context exists)
   const [wordResult, sentenceResult] = await Promise.all([
-    translate(word, targetLang).catch(() => ({ text: 'Failed to translate' })),
+    chrome.runtime.sendMessage({
+      type: 'TRANSLATE_IN_CONTEXT',
+      payload: {
+        word, sentence, targetLang,
+        disableAI: settings?.translation?.disableAI ?? false,
+        disableGoogleContext: settings?.translation?.disableGoogleContext ?? false,
+        disableGoogleSenses: settings?.translation?.disableGoogleSenses ?? false,
+      },
+    }).catch(() => null) as Promise<ContextTranslateResult | null>,
     sentence ? translate(sentence, targetLang).catch(() => null) : Promise.resolve(null),
   ])
 
@@ -202,7 +244,50 @@ async function showPopover(
   const input = document.createElement('input')
   input.type = 'text'
   input.className = 'translation-input'
-  input.value = wordResult.text
+
+  // Auto-fill with the context-aware translation; always show dictionary senses as chips.
+  const senses = wordResult?.senses ?? []
+  if (wordResult?.mode === 'context') {
+    input.value = wordResult.translation
+  } else {
+    input.value = senses[0] ?? 'Failed to translate'
+  }
+
+  let sensesRow: HTMLDivElement | null = null
+  if (senses.length > 0) {
+    sensesRow = document.createElement('div')
+
+    const label = document.createElement('div')
+    label.className = 'senses-label'
+    label.textContent = 'Choose alternative translation:'
+
+    const chips = document.createElement('div')
+    chips.className = 'senses'
+    for (const sense of senses) {
+      const chip = document.createElement('button')
+      chip.type = 'button'
+      chip.className = 'sense-chip'
+      chip.textContent = sense
+      chip.onclick = () => {
+        input.value = sense
+        input.focus()
+      }
+      chips.append(chip)
+    }
+
+    sensesRow.append(label, chips)
+  }
+
+  const sourceBadge = document.createElement('span')
+  sourceBadge.className = 'source-badge'
+  const SOURCE_LABELS: Record<string, string> = {
+    'ai+on-device': '🔒 AI · on-device',
+    'ai+google': '🤖 AI · Google translate',
+    'google-context': '🌐 Google · sentence context',
+    'google-senses': '🌐 Google dictionary',
+    'google-basic': '🌐 Google translate',
+  }
+  sourceBadge.textContent = SOURCE_LABELS[wordResult?.source ?? ''] ?? '🌐 Google translate'
 
   const actions = document.createElement('div')
   actions.className = 'actions'
@@ -248,6 +333,8 @@ async function showPopover(
   }
 
   actions.append(cancelBtn, saveBtn)
-  popover.append(input, actions)
+  popover.append(input)
+  if (sensesRow) popover.append(sensesRow)
+  popover.append(sourceBadge, actions)
   input.focus()
 }

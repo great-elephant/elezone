@@ -48,6 +48,10 @@ export interface TranslationSettings {
   defaultTargetLanguage: string
   enabled: boolean
   mode: 'paragraph' | 'sentence'
+  asideForceGoogle?: boolean   // translation overlay uses Google by default (skip on-device)
+  disableAI?: boolean
+  disableGoogleContext?: boolean
+  disableGoogleSenses?: boolean
 }
 
 export type ReadAloudState = 'idle' | 'playing' | 'paused'
@@ -58,13 +62,20 @@ export interface GamificationSettings {
   pointsPerReview: number
 }
 
+export interface OcrSettings {
+  sentenceCase: boolean
+  removeExtraSpaces: boolean
+}
+
 export interface Settings {
   updatedAt?: number
+  defaultStudyMode?: StudyMode
   showHintInitially?: boolean
   readAloud: ReadAloudSettings
   translation: TranslationSettings
   sync: { enabled: boolean; debounceSeconds: number }
   gamification: GamificationSettings
+  ocr: OcrSettings
   // User-given names for each bookmark color, turning colors into named decks.
   deckLabels?: Partial<Record<BookmarkColor, string>>
   // User-defined display order for deck colors (persisted as an array of BookmarkColor).
@@ -74,6 +85,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  defaultStudyMode: 'listening',
   showHintInitially: false,
   readAloud: {
     speed: 1,
@@ -95,6 +107,10 @@ export const DEFAULT_SETTINGS: Settings = {
     dailyGoalPoints: 100,
     pointsPerSave: 1,
     pointsPerReview: 2
+  },
+  ocr: {
+    sentenceCase: false,
+    removeExtraSpaces: true
   },
   deckLabels: {},
   srsNotifications: {
@@ -134,6 +150,7 @@ export type MessageType =
   | 'CONTROL_READ_ALOUD'
   | 'READ_ALOUD_UPDATE'
   | 'TOGGLE_TRANSLATION'
+  | 'TRANSLATE_IN_CONTEXT'
   | 'GET_TRANSLATION_API_AVAILABLE'
   | 'SHOW_DICTIONARY_POPOVER'
   | 'GET_SELECTION_CONTEXT'

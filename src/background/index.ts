@@ -19,6 +19,7 @@ import {
   ReadAloudState,
   Settings,
 } from '../shared/types'
+import { translateInContext, ContextTranslateRequest } from './aiTranslate'
 
 type ActiveReadAloudSession = {
   currentIndex: number
@@ -491,6 +492,8 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
     case 'MARK_ORPHANED':
       await markOrphaned(msg.payload as string)
       return { ok: true }
+    case 'TRANSLATE_IN_CONTEXT':
+      return translateInContext(msg.payload as ContextTranslateRequest)
     case 'START_READ_ALOUD_SESSION':
       return startReadAloudSession(sender, msg.payload)
     case 'CONTROL_READ_ALOUD':

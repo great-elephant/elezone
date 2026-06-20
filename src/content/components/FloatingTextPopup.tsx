@@ -18,6 +18,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   const popupRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef({ x: 0, y: 0 });
+  const translateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (textRef.current && !isLoading) {
@@ -40,17 +41,42 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     }
   }, [text, isLoading]);
 
+  const handleInput = () => {
+    if (translateTimerRef.current) {
+      clearTimeout(translateTimerRef.current);
+    }
+    translateTimerRef.current = setTimeout(() => {
+      const currentText = textRef.current?.innerText || textRef.current?.textContent || '';
+      if (!currentText.trim()) {
+        setTranslatedText('');
+        return;
+      }
+      chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+        .then((settings: Settings) => {
+          const tgtLang = settings?.translation?.defaultTargetLanguage || 'en';
+          return translate(currentText, tgtLang);
+        })
+        .then(res => setTranslatedText(res.text))
+        .catch(err => {
+          console.error('Translation error:', err);
+          setTranslatedText('⚠ Translation failed');
+        });
+    }, 1000);
+  };
+
   const handleReadAloud = async () => {
     if (isPlaying) {
       window.speechSynthesis.cancel();
       setIsPlaying(false);
       return;
     }
-    if (!text) return;
+    
+    const currentText = textRef.current?.innerText || textRef.current?.textContent || text;
+    if (!currentText) return;
 
     try {
       const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
-      const utterance = new SpeechSynthesisUtterance(text);
+      const utterance = new SpeechSynthesisUtterance(currentText);
       if (settings?.readAloud) {
         utterance.rate = settings.readAloud.speed || 1;
         utterance.pitch = settings.readAloud.pitch || 1;
@@ -176,14 +202,14 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
               border: 'none',
               color: isPlaying ? '#6bcfff' : '#aab',
               cursor: 'pointer',
-              fontSize: 14,
+              fontSize: 16,
               padding: 0,
               display: 'flex',
               alignItems: 'center',
               gap: '4px'
             }}
           >
-            {isPlaying ? '⏹ Stop' : '▶ Play'}
+            {isPlaying ? '⏹' : '🔊'}
           </button>
           <button
             onClick={onClose}
@@ -216,6 +242,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
               ref={textRef}
               contentEditable={true}
               suppressContentEditableWarning
+              onInput={handleInput}
               style={{ outline: 'none', cursor: 'text', minHeight: '60px', width: '100%', whiteSpace: 'pre-wrap' }}
             />
             {translatedText && (

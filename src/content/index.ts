@@ -6,7 +6,7 @@ import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor } from '../shared/t
 import { initDictionary } from './modules/dictionary'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import { ComicOcrManager } from './components/ComicOcrManager'
+import { OcrManager } from './components/OcrManager'
 
 injectHighlightStyles()
 
@@ -295,10 +295,10 @@ async function init() {
   checkScrollTarget()
   
   const ocrContainer = document.createElement('div')
-  ocrContainer.id = 'cxt-comic-ocr-root'
+  ocrContainer.id = 'cxt-ocr-root'
   document.body.appendChild(ocrContainer)
   const root = createRoot(ocrContainer)
-  root.render(React.createElement(ComicOcrManager))
+  root.render(React.createElement(OcrManager))
   
   // Translation is NOT auto-started on page load.
   // It starts only when the user presses "Start Reading" with the toggle ON.
@@ -343,7 +343,7 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
       showWidget()
       // Start translation alongside reading if the toggle is ON
       if (settings.translation?.enabled) {
-        await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode)
+        await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
       }
       await start(settings.readAloud, msg => showWarning(msg))
       return { ok: true }

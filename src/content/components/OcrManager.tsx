@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { CropOverlay } from './CropOverlay';
 import { FloatingTextPopup } from './FloatingTextPopup';
 import { recognizeText } from '../modules/ocr';
+import { Settings } from '../../shared/types';
 
 type State = 'idle' | 'cropping' | 'processing' | 'done';
 
-export const ComicOcrManager: React.FC = () => {
+export const OcrManager: React.FC = () => {
   const [state, setState] = useState<State>('idle');
   const [screenshot, setScreenshot] = useState<string>('');
   const [ocrText, setOcrText] = useState('');
@@ -38,10 +39,28 @@ export const ComicOcrManager: React.FC = () => {
     setStatus('Initializing OCR...');
     
     try {
-      const text = await recognizeText(croppedDataUrl, (statusStr, prog) => {
+      let text = await recognizeText(croppedDataUrl, (statusStr, prog) => {
         setStatus(statusStr);
         setProgress(prog);
       });
+
+      try {
+        const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+        const ocr = settings?.ocr;
+        if (ocr) {
+          if (ocr.removeExtraSpaces) {
+            text = text.replace(/\s+/g, ' ').trim();
+          }
+          if (ocr.sentenceCase) {
+            text = text.toLowerCase()
+              .replace(/(^\s*|[.!?]\s+)([a-z])/g, (_, prefix, char) => prefix + char.toUpperCase())
+              .replace(/\b(i)(['’](m|ll|d|ve))?\b/g, (_, _i, suffix) => 'I' + (suffix || ''));
+          }
+        }
+      } catch (e) {
+        console.error('Failed to get settings for OCR formatting', e);
+      }
+
       setOcrText(text);
       setState('done');
     } catch (err) {

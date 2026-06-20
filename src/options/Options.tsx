@@ -42,11 +42,25 @@ export default function Options() {
     }
     chrome.storage.onChanged.addListener(handleStorageChange)
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadItems()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
     return () => {
       chrome.runtime.onMessage.removeListener(handleMessage)
       chrome.storage.onChanged.removeListener(handleStorageChange)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [])
+
+  useEffect(() => {
+    if (tab === 'library' || tab === 'dashboard') {
+      loadItems()
+    }
+  }, [tab])
 
   function loadItems() {
     chrome.runtime.sendMessage({ type: 'GET_ITEMS' }, (list: SavedItem[]) => {
@@ -163,6 +177,7 @@ export default function Options() {
             settings={settings}
             onDelete={deleteItem}
             onUpdateColor={updateItemColor}
+            onUpdateSettings={saveSettings}
           />
         )}
 

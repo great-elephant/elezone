@@ -25,17 +25,19 @@ export default function Library({
   items,
   settings,
   onDelete,
-  onUpdateColor
+  onUpdateColor,
+  onUpdateSettings
 }: {
   items: SavedItem[]
   settings: Settings
   onDelete: (id: string) => void
   onUpdateColor: (id: string, color: BookmarkColor) => void
+  onUpdateSettings: (settings: Settings) => void
 }) {
   // Study session
   const [sessionActive, setSessionActive] = useState(false)
   const [sessionItems, setSessionItems] = useState<SavedItem[]>([])
-  const [studyMode, setStudyMode] = useState<StudyMode>('passive')
+  const [studyMode, setStudyMode] = useState<StudyMode>(settings.defaultStudyMode || 'listening')
 
   // Browse controls
   const [search, setSearch] = useState('')
@@ -168,7 +170,11 @@ export default function Library({
           <select
             style={styles.modeSelect}
             value={studyMode}
-            onChange={e => setStudyMode(e.target.value as StudyMode)}
+            onChange={e => {
+              const newMode = e.target.value as StudyMode
+              setStudyMode(newMode)
+              onUpdateSettings({ ...settings, defaultStudyMode: newMode, updatedAt: Date.now() })
+            }}
           >
             {STUDY_MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
           </select>

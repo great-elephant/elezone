@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { SavedItem, BOOKMARK_COLORS, Settings, StudyMode } from '../shared/types'
 
 interface StudyUIProps {
@@ -12,6 +12,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   const [sessionQueue, setSessionQueue] = useState<SavedItem[]>([])
   const [sessionTotal, setSessionTotal] = useState(0)
   const [activeItem, setActiveItem] = useState<SavedItem | null>(null)
+  const nextBtnRef = useRef<HTMLButtonElement>(null)
 
   const [showAnswer, setShowAnswer] = useState(false)
   const [showHint, setShowHint] = useState(false)
@@ -46,9 +47,17 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         setTimeout(() => speakText((items[0].prefix || '') + items[0].text + (items[0].suffix || '')), 300)
       }
     } else {
+      setActiveItem(null)
       setShowSessionSummary(true)
     }
   }, [items, mode])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      nextBtnRef.current?.focus()
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [verificationPassed, showAnswer, wrongOptions.size, activeItem, showSessionSummary])
 
   function speakText(text: string) {
     chrome.tts.stop()
@@ -194,7 +203,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
               </div>
             </div>
           )}
-          <button style={{ ...styles.startBtn, width: 'auto', padding: '12px 32px' }} onClick={onClose}>
+          <button ref={nextBtnRef} style={{ ...styles.startBtn, width: 'auto', padding: '12px 32px' }} onClick={onClose}>
             Back to Library
           </button>
         </div>
@@ -279,7 +288,12 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
                           setUserAnswer(e.target.value)
                           if (verifyError) setVerifyError(false)
                         }}
-                        onKeyDown={(e) => e.key === 'Enter' && handleVerify(userAnswer)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            handleVerify(userAnswer)
+                          }
+                        }}
                       />
                       {verifyError && <span style={{ color: '#ff6b6b', fontSize: '14px' }}>Incorrect, try again!</span>}
                     </div>
@@ -339,6 +353,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
                       </div>
                       {wrongOptions.size > 0 && (
                         <button
+                          ref={nextBtnRef}
                           style={{ ...styles.startBtn, marginTop: '8px', padding: '10px 24px', fontSize: '16px', width: 'auto' }}
                           onClick={() => {
                             setSessionScore(prev => ({ ...prev, giveUps: prev.giveUps + 1 }))
@@ -415,7 +430,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
           )}
         </div>
       ) : !showAnswer && mode === 'passive' ? (
-        <button style={styles.showBtn} onClick={() => {
+        <button ref={nextBtnRef} style={styles.showBtn} onClick={() => {
           setShowAnswer(true)
           if (activeItem.text) speakText(activeItem.text)
         }}>
@@ -423,6 +438,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         </button>
       ) : (
         <button
+          ref={nextBtnRef}
           style={{ ...styles.startBtn, background: '#6bcfff', color: '#111122' }}
           onClick={handleNext}
         >

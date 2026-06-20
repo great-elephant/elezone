@@ -54,7 +54,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     return undefined
   }, [])
 
-  function set<K extends 'readAloud' | 'translation' | 'sync' | 'srsNotifications'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
+  function set<K extends 'readAloud' | 'translation' | 'sync' | 'srsNotifications' | 'ocr'>(section: K, key: keyof NonNullable<Settings[K]>, value: unknown) {
     const next = { ...settings, [section]: { ...settings[section], [key]: value } } as Settings
     if (section !== 'sync') {
       next.updatedAt = Date.now()
@@ -291,10 +291,228 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             <option value="sentence">Sentence by sentence</option>
           </select>
         </Field>
+
+        <Field label="Translation aside (read aloud overlay)">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input
+              type="checkbox"
+              checked={tr.asideForceGoogle ?? true}
+              onChange={e => set('translation', 'asideForceGoogle', e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+            />
+            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
+              Use Google Translate (uncheck to try on-device first)
+            </span>
+          </div>
+        </Field>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={{ fontSize: 13, color: '#8888aa' }}>Word translation sources (tried in order, first hit wins)</label>
+          {([
+            ['disableAI',             '🔒 On-device AI (Gemini Nano)'],
+            ['disableGoogleContext',  '🌐 Google · sentence context'],
+            ['disableGoogleSenses',   '🌐 Google · dictionary senses'],
+          ] as const).map(([key, label]) => (
+            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <input
+                type="checkbox"
+                id={`src-${key}`}
+                checked={!(tr[key] ?? false)}
+                onChange={e => set('translation', key, !e.target.checked)}
+                style={{ width: 16, height: 16, accentColor: '#4f6ef7' }}
+              />
+              <label htmlFor={`src-${key}`} style={{ fontSize: 13, color: '#e0e0e0', cursor: 'pointer' }}>
+                {label}
+              </label>
+            </div>
+          ))}
+          <span style={{ fontSize: 12, color: '#556688' }}>
+            🌐 Google · plain translate is always the last resort
+          </span>
+        </div>
+
+        <OnDeviceAi targetLang={tr.defaultTargetLanguage} />
+      </section>
+
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>OCR</h2>
+
+        <Field label="Auto-format to sentence case">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input
+              type="checkbox"
+              checked={settings.ocr?.sentenceCase ?? false}
+              onChange={e => set('ocr', 'sentenceCase', e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+            />
+            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
+              Only capitalize the first letter of sentences
+            </span>
+          </div>
+        </Field>
+
+        <Field label="Remove extra spaces and line breaks">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input
+              type="checkbox"
+              checked={settings.ocr?.removeExtraSpaces ?? true}
+              onChange={e => set('ocr', 'removeExtraSpaces', e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+            />
+            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
+              Normalize multiple spaces and newlines into a single space
+            </span>
+          </div>
+        </Field>
       </section>
 
     </div>
   )
+}
+
+type AiStatus = 'checking' | 'unsupported' | 'downloadable' | 'downloading' | 'available'
+
+function OnDeviceAi({ targetLang }: { targetLang: string }) {
+  const [status, setStatus] = useState<AiStatus>('checking')
+  const [progress, setProgress] = useState(0)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const needsTranslator = !targetLang.startsWith('en')
+
+  async function refresh() {
+    const LM = globalThis.LanguageModel
+    if (!LM) { setStatus('unsupported'); return }
+    try {
+      const lm = await LM.availability()
+      if (lm === 'unavailable') { setStatus('unsupported'); return }
+
+      let tr: AIAvailability = 'available'
+      if (needsTranslator) {
+        tr = globalThis.Translator
+          ? await globalThis.Translator.availability({ sourceLanguage: 'en', targetLanguage: targetLang })
+          : 'unavailable'
+      }
+      if (tr === 'unavailable') { setStatus('unsupported'); return }
+
+      if (lm === 'available' && tr === 'available') setStatus('available')
+      else if (lm === 'downloading' || tr === 'downloading') setStatus('downloading')
+      else setStatus('downloadable')
+    } catch {
+      setStatus('unsupported')
+    }
+  }
+
+  useEffect(() => { void refresh() }, [targetLang])
+
+  async function enable() {
+    const LM = globalThis.LanguageModel
+    if (!LM) return
+    setBusy(true)
+    setError('')
+    setProgress(0)
+    setStatus('downloading')
+    const onProgress = (m: AICreateMonitor) =>
+      m.addEventListener('downloadprogress', e => setProgress(Math.round(e.loaded * 100)))
+    try {
+      const session = await LM.create({
+        monitor: onProgress,
+        expectedOutputs: [{ type: 'text', languages: ['en'] }]
+      })
+      session.destroy()
+      if (needsTranslator && globalThis.Translator) {
+        const t = await globalThis.Translator.create({
+          sourceLanguage: 'en',
+          targetLanguage: targetLang,
+          monitor: onProgress,
+        })
+        t.destroy()
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Download failed')
+    } finally {
+      setBusy(false)
+      await refresh()
+    }
+  }
+
+  return (
+    <div style={aiStyles.box}>
+      <div style={aiStyles.title}>On-device AI · context-aware word translation</div>
+      <p style={aiStyles.desc}>
+        Uses Chrome's built-in Gemini Nano to translate saved words by their meaning
+        in the sentence (e.g. "bank" in "river bank"). Runs locally, no account.
+        Without it, saving falls back to a list of dictionary senses to pick from.
+      </p>
+
+      {status === 'checking' && <div style={aiStyles.status}>Checking availability…</div>}
+
+      {status === 'available' && (
+        <div style={{ ...aiStyles.status, color: '#6bff9e' }}>✓ Ready — saved words use context-aware translation.</div>
+      )}
+
+      {status === 'unsupported' && (
+        <div style={aiStyles.status}>
+          Not available in this browser. Requires Chrome 138+ with built-in AI support
+          {needsTranslator ? ` and an EN→${targetLang} on-device translator` : ''}. Saving uses the dictionary-senses fallback.
+        </div>
+      )}
+
+      {status === 'downloadable' && (
+        <button style={aiStyles.btn} disabled={busy} onClick={enable}>
+          ⬇ Enable on-device AI (one-time model download)
+        </button>
+      )}
+
+      {status === 'downloading' && (
+        <div>
+          <div style={aiStyles.status}>Downloading model… {progress}%</div>
+          <div style={aiStyles.progressTrack}>
+            <div style={{ ...aiStyles.progressBar, width: `${progress}%` }} />
+          </div>
+        </div>
+      )}
+
+      {error && <div style={{ ...aiStyles.status, color: '#ff8888' }}>{error}</div>}
+    </div>
+  )
+}
+
+const aiStyles: Record<string, React.CSSProperties> = {
+  box: {
+    background: '#0f0f1a',
+    border: '1px solid #2a2a4a',
+    borderRadius: 8,
+    padding: '12px 14px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  title: { fontSize: 13, fontWeight: 600, color: '#c0c0e0' },
+  desc: { fontSize: 12, color: '#8888aa', margin: 0, lineHeight: 1.5 },
+  status: { fontSize: 12, color: '#8888aa' },
+  btn: {
+    alignSelf: 'flex-start',
+    background: '#2a2a4a',
+    border: '1px solid #3a3a6a',
+    color: '#c0c0e0',
+    borderRadius: 6,
+    padding: '6px 14px',
+    fontSize: 13,
+    cursor: 'pointer',
+  },
+  progressTrack: {
+    marginTop: 6,
+    height: 6,
+    background: '#1a1a2e',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressBar: {
+    height: '100%',
+    background: '#4f6ef7',
+    transition: 'width 0.2s',
+  },
 }
 
 function SortableDeckItem({

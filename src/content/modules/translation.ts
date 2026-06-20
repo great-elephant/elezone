@@ -8,49 +8,33 @@ import {
   getTitleContextElements,
 } from './contentDiscovery'
 
-type TranslatorAPI = {
-  translate: (text: string) => Promise<string>
-  destroy: () => void
-}
-
-type AITranslator = {
-  capabilities: () => Promise<{
-    available: string
-    languagePairAvailable: (s: string, t: string) => string
-  }>
-  create: (opts: { sourceLanguage: string; targetLanguage: string }) => Promise<TranslatorAPI>
-}
-
 let enabled = false
 let targetLang = 'en'
-let onDeviceTranslator: TranslatorAPI | null = null
+let onDeviceTranslator: TranslatorInstance | null = null
 let observer: IntersectionObserver | null = null
 let articleText = '' // normalized Readability text content for filtering
 
-// ── On-device API ────────────────────────────────────────────────────────────
-
-function getAITranslator(): AITranslator | null {
-  return (window as unknown as { ai?: { translator?: AITranslator } }).ai?.translator ?? null
-}
+// ── On-device API (Chrome 138+ global `Translator`, not the removed window.ai) ──
 
 export async function isTranslatorAvailable(): Promise<boolean> {
-  const api = getAITranslator()
+  const api = globalThis.Translator
   if (!api) return false
   try {
-    const cap = await api.capabilities()
-    return cap.available !== 'no'
+    const src = document.documentElement.lang?.split('-')[0] || 'en'
+    const status = await api.availability({ sourceLanguage: src, targetLanguage: targetLang })
+    return status !== 'unavailable'
   } catch {
     return false
   }
 }
 
-async function initOnDevice(src: string, tgt: string): Promise<TranslatorAPI | null> {
-  const api = getAITranslator()
+async function initOnDevice(src: string, tgt: string): Promise<TranslatorInstance | null> {
+  const api = globalThis.Translator
   if (!api) return null
   try {
-    const cap = await api.capabilities()
-    if (cap.available === 'no') return null
-    if (cap.languagePairAvailable(src, tgt) === 'no') return null
+    if ((await api.availability({ sourceLanguage: src, targetLanguage: tgt })) !== 'available') {
+      return null
+    }
     return await api.create({ sourceLanguage: src, targetLanguage: tgt })
   } catch {
     return null
@@ -224,7 +208,7 @@ async function injectTitleOverlay() {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export async function enable(tgt: string, mode: TranslationMode = 'paragraph') {
+export async function enable(tgt: string, mode: TranslationMode = 'paragraph', forceGoogle = false) {
   if (enabled) {
     disable()
   }
@@ -232,7 +216,7 @@ export async function enable(tgt: string, mode: TranslationMode = 'paragraph') {
   targetLang = tgt
 
   const srcLang = document.documentElement.lang?.split('-')[0] || 'en'
-  onDeviceTranslator = await initOnDevice(srcLang, tgt)
+  onDeviceTranslator = forceGoogle ? null : await initOnDevice(srcLang, tgt)
 
   const article = extractReadableArticle()
   if (article) articleText = article.textContent
