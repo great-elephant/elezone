@@ -379,7 +379,7 @@ export default function Library({
                   style={styles.groupStudyBtn}
                   onClick={e => { e.stopPropagation(); startStudySession(groupItems) }}
                 >
-                  ▶ Study Source
+                  ▶ Study
                 </button>
               </div>
               {open && <div style={styles.groupBody}>{groupItems.map(renderRow)}</div>}
@@ -467,7 +467,7 @@ function DeckPicker({ current, deckName, order, onPick, anchor }: {
 }
 
 const styles: Record<string, React.CSSProperties> = {
-  container: { maxWidth: 820, margin: '0 auto' },
+  container: { width: '100%' },
   overlay: { position: 'fixed', inset: 0, zIndex: 9 },
   empty: {
     textAlign: 'center', padding: '60px 20px', color: '#9a9ac0',
@@ -535,7 +535,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 7, padding: '6px 12px', fontSize: 13, cursor: 'pointer',
   },
   bulkClear: { background: 'none', border: 'none', color: '#9a9ac0', fontSize: 13, cursor: 'pointer' },
-  list: { display: 'flex', flexDirection: 'column', gap: 6 },
+  list: { display: 'flex', flexDirection: 'column', gap: 12 },
   noResults: { textAlign: 'center', padding: '40px 20px', color: '#9a9ac0' },
   linkBtn: { background: 'none', border: 'none', color: '#6b8aff', cursor: 'pointer', fontSize: 'inherit', padding: 0 },
   row: {

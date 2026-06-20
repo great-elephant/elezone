@@ -7,10 +7,11 @@ type Props = {
   isLoading: boolean;
   progress: number;
   status: string;
+  cropBox?: { x: number; y: number; width: number; height: number } | null;
   onClose: () => void;
 };
 
-export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, status, onClose }) => {
+export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, status, cropBox, onClose }) => {
   const [position, setPosition] = useState({ x: 20, y: 20 });
   const [isDragging, setIsDragging] = useState(false);
   const [translatedText, setTranslatedText] = useState('');
@@ -24,6 +25,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     if (textRef.current && !isLoading) {
       if (text) {
         textRef.current.textContent = text;
+        setTranslatedText('⏳ Translating...');
         chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
           .then((settings: Settings) => {
             const tgtLang = settings?.translation?.defaultTargetLanguage || 'en';
@@ -51,6 +53,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
         setTranslatedText('');
         return;
       }
+      setTranslatedText('⏳ Translating...');
       chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
         .then((settings: Settings) => {
           const tgtLang = settings?.translation?.defaultTargetLanguage || 'en';
@@ -113,12 +116,43 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   }, [onClose]);
 
   useEffect(() => {
-    // Initial centering
-    setPosition({
-      x: Math.max(20, window.innerWidth / 2 - 150),
-      y: Math.max(20, window.innerHeight / 2 - 100)
-    });
-  }, []);
+    const POPUP_WIDTH = 340; // width + margin
+    const MARGIN = 20;
+    
+    if (cropBox) {
+      // Try right side first
+      let x = cropBox.x + cropBox.width + MARGIN;
+      let y = cropBox.y;
+
+      // If not enough space on the right, try the left
+      if (x + POPUP_WIDTH > window.innerWidth) {
+        x = cropBox.x - POPUP_WIDTH - MARGIN;
+        
+        // If not enough space on the left either, put it below
+        if (x < MARGIN) {
+          x = Math.max(MARGIN, cropBox.x + cropBox.width / 2 - POPUP_WIDTH / 2);
+          y = cropBox.y + cropBox.height + MARGIN;
+          
+          // If not enough space below, put it above
+          if (y + 150 > window.innerHeight) {
+            y = Math.max(MARGIN, cropBox.y - 150 - MARGIN);
+          }
+        }
+      }
+      
+      // Ensure it doesn't go off screen
+      x = Math.max(MARGIN, Math.min(x, window.innerWidth - POPUP_WIDTH));
+      y = Math.max(MARGIN, Math.min(y, window.innerHeight - 150));
+      
+      setPosition({ x, y });
+    } else {
+      // Fallback if no cropBox
+      let x = window.innerWidth - POPUP_WIDTH - MARGIN;
+      if (x < MARGIN) x = MARGIN;
+      const y = Math.max(MARGIN, window.innerHeight / 2 - 150);
+      setPosition({ x, y });
+    }
+  }, [cropBox]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     // Only drag on the header
@@ -249,10 +283,10 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
               <div style={{
                 fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Noto Sans', sans-serif",
                 fontSize: '0.875em',
-                color: '#6688bb',
+                color: translatedText.startsWith('⚠') ? '#ff6b6b' : translatedText.startsWith('⏳') ? '#8888aa' : '#6bcfff',
                 padding: '3px 0 5px 10px',
-                borderLeft: '2px solid #2a3a5a',
-                fontStyle: 'normal',
+                borderLeft: `2px solid ${translatedText.startsWith('⚠') ? '#aa3333' : translatedText.startsWith('⏳') ? '#3a3a5a' : '#2a3a5a'}`,
+                fontStyle: translatedText.startsWith('⏳') ? 'italic' : 'normal',
                 lineHeight: 1.6
               }}>
                 {translatedText}

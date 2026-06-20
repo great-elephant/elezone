@@ -9,7 +9,8 @@ import {
   syncToDrive,
   logActivity,
   getActivityLog,
-  updateSrsMetrics
+  updateSrsMetrics,
+  getLocalYMD
 } from '../shared/library'
 import {
   SavedItem,
@@ -150,32 +151,45 @@ async function evaluateSlackingState(testMode = false) {
   }
   const now = Date.now()
   
-  const overdueItems = items.filter(i => !i.orphaned && i.text && (i.nextReview || 0) <= now).length
-  
-  let latestSaveTime = 0
-  for (const item of items) {
-    if (item.createdAt > latestSaveTime) {
-      latestSaveTime = item.createdAt
-    }
-  }
-  
-  const daysSinceLastSave = (now - latestSaveTime) / (1000 * 60 * 60 * 24)
-  
+
+  const activityLog = await getActivityLog()
+  const dailyGoal = settings.gamification?.dailyGoalPoints || 100
   const thresholdDays = settings.roast?.noNewItemsDaysThreshold || 3
-  const thresholdOverdue = settings.roast?.overdueItemsThreshold || 10
 
   let slacking = false
   let level: RoastLevel = 1
+  
+  let consecutiveMissedDays = 0
+  for (let i = 0; i < 30; i++) {
+    const date = new Date()
+    date.setDate(date.getDate() - i)
+    const year = date.getFullYear()
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    const ymd = `${year}-${month}-${day}`
+    
+    const points = activityLog[ymd]?.points || 0
+    if (points < dailyGoal) {
+      consecutiveMissedDays++
+    } else {
+      break
+    }
+  }
 
-  if (overdueItems > thresholdOverdue || daysSinceLastSave > thresholdDays) {
+  // User is slacking if they haven't met their daily goal for `thresholdDays` consecutive days
+  if (consecutiveMissedDays >= thresholdDays) {
     slacking = true
-    const severity = Math.max(
-      overdueItems / thresholdOverdue,
-      daysSinceLastSave / thresholdDays
-    )
+    const severity = consecutiveMissedDays / thresholdDays
     if (severity >= 3) level = 3
     else if (severity >= 2) level = 2
     else level = 1
+  }
+
+  const today = getLocalYMD()
+  const todayPoints = activityLog[today]?.points || 0
+
+  if (todayPoints >= dailyGoal && !testMode) {
+    slacking = false
   }
 
   if (slacking) {
@@ -184,7 +198,7 @@ async function evaluateSlackingState(testMode = false) {
     await chrome.storage.local.set({ slacking_state: state })
     
     const { last_roast_time = 0 } = await chrome.storage.local.get('last_roast_time')
-    const HOURS_6 = 6 * 60 * 60 * 1000
+    const HOURS_48 = 48 * 60 * 60 * 1000
     
     // Do not notify during sleep hours
     const startHour = settings.srsNotifications?.activeHoursStart ?? 8
@@ -192,7 +206,7 @@ async function evaluateSlackingState(testMode = false) {
     const currentHour = new Date().getHours()
     const isAwakeTime = currentHour >= startHour && currentHour < endHour
 
-    if (now - last_roast_time > HOURS_6 && isAwakeTime) {
+    if (now - last_roast_time > HOURS_48 && isAwakeTime) {
       chrome.notifications.create(`roast-${now}`, {
         type: 'basic',
         iconUrl: 'icons/icon128.png',

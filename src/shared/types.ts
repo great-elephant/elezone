@@ -70,7 +70,6 @@ export interface OcrSettings {
 export interface RoastSettings {
   enabled: boolean
   noNewItemsDaysThreshold: number
-  overdueItemsThreshold: number
 }
 
 export interface Settings {
@@ -110,6 +109,7 @@ export const DEFAULT_SETTINGS: Settings = {
     defaultTargetLanguage: 'vi',
     enabled: false,
     mode: 'paragraph',
+    disableAI: true,
   },
   sync: {
     enabled: false,
@@ -133,8 +133,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   roast: {
     enabled: true,
-    noNewItemsDaysThreshold: 3,
-    overdueItemsThreshold: 10
+    noNewItemsDaysThreshold: 3
   }
 }
 

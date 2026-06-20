@@ -174,7 +174,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (tab: 'dashboar
   }
 
   return (
-    <div className="dashboard-root" style={{ padding: '40px', color: '#fff', display: 'flex', justifyContent: 'center', borderRadius: '16px' }}>
+    <div className="dashboard-root" style={{ color: '#fff', width: '100%', borderRadius: '16px' }}>
 
       <style>{`
         .heatmap-square {
@@ -208,7 +208,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (tab: 'dashboar
         }
       `}</style>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px', width: '100%', maxWidth: '850px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px', width: '100%' }}>
 
         {/* Roast Banner */}
         {slackingState && (

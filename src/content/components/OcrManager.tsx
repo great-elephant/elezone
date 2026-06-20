@@ -12,6 +12,7 @@ export const OcrManager: React.FC = () => {
   const [ocrText, setOcrText] = useState('');
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
+  const [cropBox, setCropBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
 
   useEffect(() => {
     const handleMessage = (msg: any) => {
@@ -33,8 +34,9 @@ export const OcrManager: React.FC = () => {
     return () => chrome.runtime.onMessage.removeListener(handleMessage);
   }, []);
 
-  const handleCropComplete = async (croppedDataUrl: string) => {
+  const handleCropComplete = async (croppedDataUrl: string, rect: { x: number; y: number; width: number; height: number }) => {
     setState('processing');
+    setCropBox(rect);
     setProgress(0);
     setStatus('Initializing OCR...');
     
@@ -96,6 +98,7 @@ export const OcrManager: React.FC = () => {
           isLoading={state === 'processing'}
           progress={progress}
           status={status}
+          cropBox={cropBox}
           onClose={handleClosePopup}
         />
       )}

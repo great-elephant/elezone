@@ -37,7 +37,7 @@ interface LanguageModelCreateOptions {
 }
 
 interface LanguageModelFactory {
-  availability(): Promise<AIAvailability>
+  availability(options?: { expectedOutputs?: Array<{ type: string; languages: string[] }> }): Promise<AIAvailability>
   create(options?: LanguageModelCreateOptions): Promise<LanguageModelSession>
 }
 

@@ -56,7 +56,7 @@ async function getLmSession(): Promise<LanguageModelSession | null> {
   const LM = globalThis.LanguageModel
   if (!LM) return null
   try {
-    if ((await LM.availability()) !== 'available') return null
+    if ((await LM.availability({ expectedOutputs: [{ type: 'text', languages: ['en'] }] })) !== 'available') return null
   } catch {
     return null
   }

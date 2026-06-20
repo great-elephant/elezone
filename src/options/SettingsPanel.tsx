@@ -346,9 +346,10 @@ export default function SettingsPanel({ settings, onChange }: Props) {
           ] as const).map(([key, label]) => {
             const isAiSrc = key === 'disableAI';
             const isDisabled = isAiSrc && aiStatus !== 'available';
+            const defaultDisabled = isAiSrc ? true : false;
             const isChecked = isAiSrc
-              ? (aiStatus === 'available' && !(tr[key] ?? false))
-              : !(tr[key] ?? false);
+              ? (aiStatus === 'available' && !(tr[key] ?? defaultDisabled))
+              : !(tr[key] ?? defaultDisabled);
 
             return (
               <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -371,7 +372,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
           </span>
         </div>
 
-        <OnDeviceAi targetLang={tr.defaultTargetLanguage} onStatusChange={setAiStatus} />
+        <OnDeviceAi targetLang={tr.defaultTargetLanguage} onStatusChange={setAiStatus} onModelDownloaded={() => set('translation', 'disableAI', false)} />
       </section>
 
       <section style={styles.section}>
@@ -428,17 +429,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
           </div>
         </Field>
 
-        <Field label={`Overdue Items Threshold: ${settings.roast?.overdueItemsThreshold ?? 10} items`}>
-          <input
-            type="range" min={1} max={50} step={1}
-            value={settings.roast?.overdueItemsThreshold ?? 10}
-            disabled={true}
-            style={{ ...styles.range, opacity: 0.6, cursor: 'not-allowed' }}
-            onChange={() => { }}
-          />
-        </Field>
-
-        <Field label={`Days without new words: ${settings.roast?.noNewItemsDaysThreshold ?? 3} days`}>
+        <Field label={`Days without reaching goal: ${settings.roast?.noNewItemsDaysThreshold ?? 3} days`}>
           <input
             type="range" min={1} max={30} step={1}
             value={settings.roast?.noNewItemsDaysThreshold ?? 3}
@@ -461,7 +452,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
 
 type AiStatus = 'checking' | 'unsupported' | 'downloadable' | 'downloading' | 'available'
 
-function OnDeviceAi({ targetLang, onStatusChange }: { targetLang: string, onStatusChange: (s: AiStatus) => void }) {
+function OnDeviceAi({ targetLang, onStatusChange, onModelDownloaded }: { targetLang: string, onStatusChange: (s: AiStatus) => void, onModelDownloaded?: () => void }) {
   const [status, setStatusInternal] = useState<AiStatus>('checking')
   const [progress, setProgress] = useState(0)
 
@@ -478,7 +469,7 @@ function OnDeviceAi({ targetLang, onStatusChange }: { targetLang: string, onStat
     const LM = globalThis.LanguageModel
     if (!LM) { setStatus('unsupported'); return }
     try {
-      const lm = await LM.availability()
+      const lm = await LM.availability({ expectedOutputs: [{ type: 'text', languages: ['en'] }] })
       if (lm === 'unavailable') { setStatus('unsupported'); return }
 
       let tr: AIAvailability = 'available'
@@ -522,6 +513,7 @@ function OnDeviceAi({ targetLang, onStatusChange }: { targetLang: string, onStat
         })
         t.destroy()
       }
+      onModelDownloaded?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Download failed')
     } finally {
@@ -721,7 +713,7 @@ const LANGUAGES: [string, string][] = [
 ]
 
 const styles: Record<string, React.CSSProperties> = {
-  root: { display: 'flex', flexDirection: 'column', gap: 32, maxWidth: 540 },
+  root: { display: 'flex', flexDirection: 'column', gap: 32, maxWidth: 600, margin: '0 auto' },
   section: {
     background: '#111122',
     borderRadius: 16,

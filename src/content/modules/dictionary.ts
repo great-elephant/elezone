@@ -165,39 +165,37 @@ async function showPopover(
 
   const popover = document.createElement('div')
   popover.className = 'dict-popover'
-  popover.style.left = `${rect.left}px`
-  if (rect.top > 250) {
-    popover.style.bottom = `${window.innerHeight - rect.top + 5}px`
-    popover.style.top = 'auto'
-  } else {
-    popover.style.top = `${rect.bottom + 5}px`
-    popover.style.bottom = 'auto'
+  const POPUP_WIDTH = 280; // approximate width (250px + padding)
+  const MARGIN = 10;
+
+  // Calculate horizontal position to prevent going off-screen
+  let left = rect.left;
+  if (left + POPUP_WIDTH > window.innerWidth) {
+    left = window.innerWidth - POPUP_WIDTH - MARGIN;
+  }
+  if (left < MARGIN) left = MARGIN;
+  popover.style.left = `${left}px`;
+
+  // Default is above the selected text
+  let isAbove = true;
+  if (rect.top < 250) { // Not enough space above
+    // Switch to below if there's more space below or enough space below
+    if (window.innerHeight - rect.bottom > rect.top || window.innerHeight - rect.bottom > 250) {
+      isAbove = false;
+    }
   }
 
-  // Fetch phonetics from Dictionary API
-  let phonetics = ''
-  try {
-    const words = word.split(/\s+/)
-    const phoneticsPromises = words.map(async (w) => {
-      let cleanWord = w.replace(/^[^\w]+|[^\w]+$/g, '')
-      cleanWord = cleanWord.replace(/['']s$/i, '')
-      if (!cleanWord) return ''
-      try {
-        const pRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord)}`)
-        if (pRes.ok) {
-          const pData = await pRes.json()
-          return pData[0]?.phonetics?.find((p: any) => p.text)?.text || pData[0]?.phonetic || ''
-        }
-      } catch { /* ignore */ }
-      return ''
-    })
-    const results = await Promise.all(phoneticsPromises)
-    phonetics = results.filter(Boolean).join(' ')
-  } catch { /* ignore */ }
+  if (isAbove) {
+    popover.style.bottom = `${window.innerHeight - rect.top + 5}px`;
+    popover.style.top = 'auto';
+  } else {
+    popover.style.top = `${rect.bottom + 5}px`;
+    popover.style.bottom = 'auto';
+  }
 
   const header = document.createElement('div')
   header.className = 'word-header'
-  header.innerHTML = `${word} <span style="color:#8888aa; font-weight:normal; font-size:0.85em; margin-left:6px">${phonetics}</span>`
+  header.innerHTML = `${word} <span class="phonetics" style="color:#8888aa; font-weight:normal; font-size:0.85em; margin-left:6px"></span>`
 
   const loading = document.createElement('div')
   loading.className = 'loading'
@@ -206,6 +204,33 @@ async function showPopover(
   popover.append(header, loading)
   shadow.append(style, popover)
   document.body.appendChild(host)
+
+  // Fetch phonetics asynchronously without blocking the UI
+  let phonetics = ''
+  ;(async () => {
+    try {
+      const words = word.split(/\s+/)
+      const phoneticsPromises = words.map(async (w) => {
+        let cleanWord = w.replace(/^[^\w]+|[^\w]+$/g, '')
+        cleanWord = cleanWord.replace(/['']s$/i, '')
+        if (!cleanWord) return ''
+        try {
+          const pRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord)}`)
+          if (pRes.ok) {
+            const pData = await pRes.json()
+            return pData[0]?.phonetics?.find((p: any) => p.text)?.text || pData[0]?.phonetic || ''
+          }
+        } catch { /* ignore */ }
+        return ''
+      })
+      const results = await Promise.all(phoneticsPromises)
+      phonetics = results.filter(Boolean).join(' ')
+      if (phonetics) {
+        const span = shadow?.querySelector('.phonetics') as HTMLElement
+        if (span) span.textContent = phonetics
+      }
+    } catch { /* ignore */ }
+  })()
 
   const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
   const targetLang = settings?.translation?.defaultTargetLanguage || 'en'
@@ -223,7 +248,7 @@ async function showPopover(
       type: 'TRANSLATE_IN_CONTEXT',
       payload: {
         word, sentence, targetLang,
-        disableAI: settings?.translation?.disableAI ?? false,
+        disableAI: settings?.translation?.disableAI ?? true,
         disableGoogleContext: settings?.translation?.disableGoogleContext ?? false,
         disableGoogleSenses: settings?.translation?.disableGoogleSenses ?? false,
       },
@@ -336,5 +361,12 @@ async function showPopover(
   popover.append(input)
   if (sensesRow) popover.append(sensesRow)
   popover.append(sourceBadge, actions)
+  
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      saveBtn.click()
+    }
+  })
   input.focus()
 }

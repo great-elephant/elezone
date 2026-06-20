@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 
 type Point = { x: number; y: number };
 
+type Rect = { x: number; y: number; width: number; height: number };
+
 type Props = {
   screenshotDataUrl: string;
-  onCropComplete: (croppedDataUrl: string) => void;
+  onCropComplete: (croppedDataUrl: string, rect: Rect) => void;
   onCancel: () => void;
 };
 
@@ -63,7 +65,7 @@ export const CropOverlay: React.FC<Props> = ({ screenshotDataUrl, onCropComplete
         x * ratio, y * ratio, width * ratio, height * ratio,
         0, 0, width, height
       );
-      onCropComplete(canvas.toDataURL('image/png'));
+      onCropComplete(canvas.toDataURL('image/png'), { x, y, width, height });
     };
     img.src = screenshotDataUrl;
   };

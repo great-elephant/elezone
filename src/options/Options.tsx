@@ -130,6 +130,7 @@ export default function Options() {
           background-color: #0d0d1a !important;
           background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1.5px, transparent 1.5px) !important;
           background-size: 24px 24px !important;
+          overflow-y: scroll !important;
         }
       `}</style>
       <header style={styles.header}>
@@ -282,7 +283,7 @@ const styles: Record<string, React.CSSProperties> = {
   main: {
     flex: 1,
     padding: "28px 32px",
-    maxWidth: 900,
+    maxWidth: 850,
     width: "100%",
     margin: "0 auto",
   },
