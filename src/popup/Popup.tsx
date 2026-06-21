@@ -282,7 +282,7 @@ export default function Popup() {
               </div>
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 120, height: 120, margin: '4px auto' }}>
                 <BreathingRing state={pomodoroState} settings={settings.pomodoro || DEFAULT_SETTINGS.pomodoro!} />
-                <div style={{ ...styles.pomodoroTime, margin: 0, fontSize: 30 }}>
+                <div style={{ ...styles.pomodoroTime, margin: 0 }}>
                   {Math.floor(pomodoroState.timeRemaining / 60).toString().padStart(2, '0')}:{(pomodoroState.timeRemaining % 60).toString().padStart(2, '0')}
                 </div>
               </div>
@@ -611,11 +611,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8888aa"
   },
   pomodoroTime: {
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: "bold",
     color: "#fff",
     fontFamily: "monospace",
-    letterSpacing: 2
+    letterSpacing: 1
   },
   pomodoroControls: {
     display: "flex",

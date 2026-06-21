@@ -127,7 +127,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   translation: {
     defaultTargetLanguage: 'vi',
-    enabled: false,
+    enabled: true,
     mode: 'paragraph',
     disableAI: true,
   },
