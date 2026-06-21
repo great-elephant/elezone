@@ -17,13 +17,18 @@ export async function initOcr(
 
   onProgress?.('Loading Tesseract engine...', 0);
 
-  const langPath = chrome.runtime.getURL('tesseract');
+  const localLangs = ['eng', 'chi_sim', 'chi_tra'];
+  const isLocal = localLangs.includes(lang);
+
+  const langPath = isLocal 
+    ? chrome.runtime.getURL('tesseract') 
+    : 'https://tessdata.projectnaptha.com/4.0.0';
 
   const newWorker = await createWorker(lang, 1, {
     workerPath: chrome.runtime.getURL('tesseract/worker.min.js'),
     corePath: chrome.runtime.getURL('tesseract/tesseract-core-simd-lstm.wasm.js'),
     langPath,
-    gzip: false,          // Our .traineddata files are NOT gzipped
+    gzip: !isLocal,       // Local files are uncompressed, remote are gzipped
     workerBlobURL: false,
     logger: m => {
       onProgress?.(m.status, m.progress ?? 0);
