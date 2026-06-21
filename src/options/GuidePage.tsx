@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 
-const SLIDES_COUNT = 8;
+const SLIDES_COUNT = 9;
 
 export default function GuidePage() {
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -193,6 +193,47 @@ export default function GuidePage() {
         .close-btn:hover {
           background: #3a3a4a;
         }
+        
+        .breathing-ring {
+          width: 80px; height: 80px;
+          border-radius: 50%;
+          border: 6px solid transparent;
+          margin: 0 auto 20px;
+          animation: 
+            breatheScale 16s infinite linear,
+            breatheColor 16s infinite step-end;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: bold;
+          font-size: 16px;
+          text-shadow: 0 0 10px rgba(0,0,0,0.8);
+        }
+        .breathing-ring::after {
+          content: '';
+          animation: breatheText 16s infinite step-end;
+        }
+        @keyframes breatheScale {
+          0%   { transform: scale(0.5); opacity: 0.6; }
+          25%  { transform: scale(1.1); opacity: 1; }
+          50%  { transform: scale(1.1); opacity: 1; }
+          75%  { transform: scale(0.5); opacity: 0.6; }
+          100% { transform: scale(0.5); opacity: 0.6; }
+        }
+        @keyframes breatheColor {
+          0%   { border-color: #4ade80; box-shadow: 0 0 20px #4ade80, inset 0 0 20px #4ade80; color: #4ade80; }
+          25%  { border-color: #facc15; box-shadow: 0 0 20px #facc15, inset 0 0 20px #facc15; color: #facc15; }
+          50%  { border-color: #60a5fa; box-shadow: 0 0 20px #60a5fa, inset 0 0 20px #60a5fa; color: #60a5fa; }
+          75%  { border-color: #c084fc; box-shadow: 0 0 20px #c084fc, inset 0 0 20px #c084fc; color: #c084fc; }
+          100% { border-color: #4ade80; box-shadow: 0 0 20px #4ade80, inset 0 0 20px #4ade80; color: #4ade80; }
+        }
+        @keyframes breatheText {
+          0%   { content: 'Inhale'; }
+          25%  { content: 'Hold'; }
+          50%  { content: 'Exhale'; }
+          75%  { content: 'Hold'; }
+          100% { content: 'Inhale'; }
+        }
       `}</style>
 
       {/* Top Right Close Button */}
@@ -296,7 +337,7 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 4: Notifications */}
+        {/* Slide 5: Notifications */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#ffeb3b' } as React.CSSProperties}>
             <div className="icon">🔔</div>
@@ -308,7 +349,19 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 5: Gamification */}
+        {/* Slide 6: Pomodoro & Box Breathing */}
+        <div className="slide">
+          <div className="card" style={{ '--glow-color': '#4ade80' } as React.CSSProperties}>
+            <div className="breathing-ring" />
+            <h2>Focus with Pomodoro & Box Breathing</h2>
+            <p>HZone integrates a Pomodoro timer paired with Box Breathing techniques. Box breathing (inhale-hold-exhale-hold) is scientifically proven to reduce anxiety and lower heart rate, while Pomodoro helps you study in highly focused sprints for better memory retention.</p>
+            <div className="instruction-box">
+              <strong>💡 How to use:</strong> Open the extension popup, turn on "Breathe", and click "Start Focus" to begin a Pomodoro session.
+            </div>
+          </div>
+        </div>
+
+        {/* Slide 7: Gamification */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#46ff6a' } as React.CSSProperties}>
             <div className="icon">🔥</div>
@@ -320,7 +373,7 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 6: Cloud Sync & Footer */}
+        {/* Slide 8: Cloud Sync & Footer */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#ff6b6b' } as React.CSSProperties}>
             <div className="icon">☁️</div>
@@ -354,8 +407,9 @@ function getSlideColor(index: number) {
     case 3: return '#ff6bd6';
     case 4: return '#ffb36b';
     case 5: return '#ffeb3b';
-    case 6: return '#46ff6a';
-    case 7: return '#ff6b6b';
+    case 6: return '#4ade80';
+    case 7: return '#46ff6a';
+    case 8: return '#ff6b6b';
     default: return '#6bcfff';
   }
 }

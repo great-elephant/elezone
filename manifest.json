@@ -12,6 +12,15 @@
       "128": "icons/icon128.png"
     }
   },
+  "commands": {
+    "play_pause": {
+      "suggested_key": {
+        "default": "MediaPlayPause",
+        "mac": "MediaPlayPause"
+      },
+      "description": "Play or pause Read Aloud"
+    }
+  },
   "options_page": "src/options/index.html",
   "background": {
     "service_worker": "src/background/index.ts",
@@ -38,7 +47,8 @@
     "tts",
     "identity",
     "alarms",
-    "notifications"
+    "notifications",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"

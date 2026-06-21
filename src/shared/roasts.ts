@@ -1,27 +1,27 @@
 export type RoastLevel = 1 | 2 | 3
 
 export const ROASTS_LEVEL_1 = [
-  "🥺 Alo, từ vựng đang khóc chờ bạn ôn kìa.",
-  "⏰ Chỉ 5 phút thôi mà, vào học đi kẻo quên sạch.",
-  "🤨 Hình như bạn đang lười đúng không? Quay lại ôn tập xíu đi.",
-  "🌱 Đừng để từ mới mọc rêu, vào tưới nước cho não đi nào.",
-  "🙄 Có vài từ đang đến hạn, bạn không định bơ chúng luôn chứ?"
+  "🥺 Hello? Your vocabulary is crying, waiting for you to review.",
+  "⏰ It only takes 5 minutes. Go study before you forget everything.",
+  "🤨 Seems like you're being lazy, aren't you? Come back and review a bit.",
+  "🌱 Don't let your new words grow moss, go water your brain.",
+  "🙄 Some words are due. You're not going to ignore them, are you?"
 ]
 
 export const ROASTS_LEVEL_2 = [
-  "🫠 Não bạn đã quên mất kha khá từ rồi đấy, và có vẻ nó cũng quên luôn cách học.",
-  "📉 Lười thế này thì bao giờ mới không cần dùng Vietsub?",
-  "🗑️ Chắc bạn định chờ đến khi từ vựng bay màu hết mới vào học?",
-  "🤡 Tôi cá là bạn đang dành thời gian lướt TikTok thay vì học ở đây.",
-  "🪫 Hello? Anybody home? Não bạn đang đình công vì thiếu từ mới kìa."
+  "🫠 Your brain has already forgotten quite a few words, and it seems to have forgotten how to study too.",
+  "📉 With this level of laziness, when will you ever not need subtitles?",
+  "🗑️ Are you waiting for your vocabulary to completely vanish before studying?",
+  "🤡 I bet you're spending time scrolling TikTok instead of studying.",
+  "🪫 Hello? Anybody home? Your brain is on strike due to a lack of new words."
 ]
 
 export const ROASTS_LEVEL_3 = [
-  "🔥 Báo động đỏ: Mức độ lười biếng của bạn đã đạt cảnh giới tối cao.",
-  "💣 Bạn có định học tiếng Anh nữa không hay để tôi xóa app luôn cho nhẹ máy?",
-  "💀 Kỷ luật kém thế này thì giấc mơ bắn tiếng Anh như gió còn xa lắm bạn êi.",
-  "🤦‍♂️ Tôi thực sự quan ngại về sự nghiệp học hành của bạn lúc này.",
-  "😱 Trời đất ơi, từ vựng đang thi nhau bốc hơi khỏi não bạn kìa, học ngay đi!"
+  "🔥 Red alert: Your laziness has reached the supreme level.",
+  "💣 Are you going to study English or should I just delete this app to free up space?",
+  "💀 With discipline this poor, your dream of speaking fluent English is still far away, buddy.",
+  "🤦‍♂️ I'm seriously concerned about your academic career right now.",
+  "😱 Oh my goodness, the vocabulary is evaporating from your brain! Study right now!"
 ]
 
 export function getRandomRoast(level: RoastLevel): string {

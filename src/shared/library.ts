@@ -21,7 +21,23 @@ export async function getSettings(): Promise<Settings> {
     gamification: {
       ...DEFAULT_SETTINGS.gamification,
       ...saved.gamification,
-    }
+    },
+    ocr: {
+      ...DEFAULT_SETTINGS.ocr,
+      ...saved.ocr,
+    },
+    srsNotifications: {
+      ...DEFAULT_SETTINGS.srsNotifications,
+      ...saved.srsNotifications,
+    } as Settings['srsNotifications'],
+    roast: {
+      ...DEFAULT_SETTINGS.roast,
+      ...saved.roast,
+    } as Settings['roast'],
+    pomodoro: {
+      ...DEFAULT_SETTINGS.pomodoro,
+      ...saved.pomodoro,
+    } as Settings['pomodoro']
   }
 }
 

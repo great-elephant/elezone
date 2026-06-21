@@ -72,6 +72,22 @@ export interface RoastSettings {
   noNewItemsDaysThreshold: number
 }
 
+export interface PomodoroSettings {
+  focusTime: number; // minutes
+  shortBreakTime: number; // minutes
+  longBreakTime: number; // minutes
+  longBreakInterval: number; // after how many focus sessions
+  inhale: number; // seconds
+  hold1: number; // seconds
+  exhale: number; // seconds
+  hold2: number; // seconds
+  breathingEnabled?: boolean; // whether to show/play the breathing circle and audio
+  volume?: number; // volume for breathing and success sound
+  autoStartPomodoro?: boolean;
+  autoStartBreak?: boolean;
+}
+
+
 export interface Settings {
   updatedAt?: number
   defaultStudyMode?: StudyMode
@@ -93,6 +109,7 @@ export interface Settings {
     activeHoursEnd: number;
   }
   roast?: RoastSettings
+  pomodoro?: PomodoroSettings
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -134,6 +151,20 @@ export const DEFAULT_SETTINGS: Settings = {
   roast: {
     enabled: true,
     noNewItemsDaysThreshold: 3
+  },
+  pomodoro: {
+    focusTime: 25,
+    shortBreakTime: 5,
+    longBreakTime: 15,
+    longBreakInterval: 4,
+    inhale: 8,
+    hold1: 4,
+    exhale: 8,
+    hold2: 4,
+    breathingEnabled: true,
+    volume: 1,
+    autoStartPomodoro: false,
+    autoStartBreak: false
   }
 }
 
@@ -176,8 +207,23 @@ export type MessageType =
   | 'HIGHLIGHT_BOOKMARK'
   | 'TEST_NOTIFICATION'
   | 'TEST_ROAST_NOTIFICATION'
+  | 'POMODORO_COMMAND'
+  | 'GET_POMODORO_STATE'
+  | 'POMODORO_STATE_UPDATE'
 
 export interface Message {
   type: MessageType
   payload?: unknown
 }
+
+export type PomodoroPhase = 'idle' | 'focus' | 'shortBreak' | 'longBreak';
+export type PomodoroStatus = 'stopped' | 'running' | 'paused';
+
+export interface PomodoroState {
+  phase: PomodoroPhase;
+  status: PomodoroStatus;
+  timeRemaining: number;
+  completedFocusSessions: number;
+  breathStartTime?: number;
+}
+

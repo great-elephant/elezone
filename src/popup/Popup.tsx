@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { ReadAloudState, Settings, DEFAULT_SETTINGS } from "../shared/types";
+import { ReadAloudState, Settings, DEFAULT_SETTINGS, PomodoroState, PomodoroSettings } from "../shared/types";
 
 export default function Popup() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
-  const [onDevice, setOnDevice] = useState<boolean | null>(null); // null = checking
+
   const [readable, setReadable] = useState<boolean | null>(null);
   const [readAloudState, setReadAloudState] = useState<ReadAloudState>("idle");
+  const [pomodoroState, setPomodoroState] = useState<PomodoroState | null>(null);
 
   useEffect(() => {
     let activeTabId: number | null = null;
@@ -13,9 +14,13 @@ export default function Popup() {
     chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (s: Settings) => {
       if (s) setSettings(s);
     });
+    chrome.runtime.sendMessage({ type: "GET_POMODORO_STATE" }, (res: PomodoroState) => {
+      void chrome.runtime.lastError;
+      if (res) setPomodoroState(res);
+    });
 
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-      if (!tab?.id) return;
+      if (!tab?.id || tab.id < 0) return;
       activeTabId = tab.id;
       chrome.runtime.sendMessage(
         { type: "GET_READ_ALOUD_STATE", payload: { tabId: tab.id } },
@@ -24,14 +29,7 @@ export default function Popup() {
           setReadAloudState(res?.state ?? "idle");
         },
       );
-      chrome.tabs.sendMessage(
-        tab.id,
-        { type: "CHECK_TRANSLATOR_AVAILABLE" },
-        (res: boolean | null) => {
-          void chrome.runtime.lastError;
-          setOnDevice(res ?? false);
-        },
-      );
+
       chrome.tabs.sendMessage(
         tab.id,
         { type: "CHECK_READABLE" },
@@ -46,12 +44,15 @@ export default function Popup() {
       msg: { type: string; payload?: unknown },
       _sender: chrome.runtime.MessageSender,
     ) => {
-      if (msg.type !== "READ_ALOUD_STATE") return;
-      const payload = msg.payload as
-        | { tabId?: number; state?: ReadAloudState }
-        | undefined;
-      if (payload?.tabId === activeTabId && payload.state) {
-        setReadAloudState(payload.state);
+      if (msg.type === "READ_ALOUD_STATE") {
+        const payload = msg.payload as
+          | { tabId?: number; state?: ReadAloudState }
+          | undefined;
+        if (payload?.tabId === activeTabId && payload.state) {
+          setReadAloudState(payload.state);
+        }
+      } else if (msg.type === "POMODORO_STATE_UPDATE") {
+        setPomodoroState(msg.payload as PomodoroState);
       }
     };
     chrome.runtime.onMessage.addListener(listener);
@@ -72,26 +73,35 @@ export default function Popup() {
       active: true,
       currentWindow: true,
     });
-    if (tab?.id) {
+    if (tab?.id && tab.id >= 0) {
       chrome.tabs
         .sendMessage(tab.id, {
           type: "TOGGLE_TRANSLATION",
           payload: { enabled: next.translation.enabled },
         })
-        .catch(() => {});
+        .catch(() => { });
     }
   }
 
   async function startReadAloud() {
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = tabs[0];
+      if (tab?.id && tab.id >= 0)
+        chrome.tabs
+          .sendMessage(tab.id, { type: "START_READ_ALOUD" })
+          .catch(() => { });
     });
-    if (tab?.id)
-      chrome.tabs
-        .sendMessage(tab.id, { type: "START_READ_ALOUD" })
-        .catch(() => {});
-    window.close();
+  }
+
+  function controlReadAloud(action: 'pause' | 'resume' | 'stop') {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tab = tabs[0];
+      if (tab?.id && tab.id >= 0) {
+        chrome.runtime
+          .sendMessage({ type: "CONTROL_READ_ALOUD", payload: { action, tabId: tab.id } })
+          .catch(() => { });
+      }
+    });
   }
 
   async function openDashboard() {
@@ -99,11 +109,38 @@ export default function Popup() {
     window.close();
   }
 
+  async function openGuide() {
+    window.open(chrome.runtime.getURL("src/options/guide.html"));
+    window.close();
+  }
+
+  function sendPomodoroCmd(action: string) {
+    chrome.runtime.sendMessage({ type: "POMODORO_COMMAND", payload: { action, settings: settings.pomodoro || DEFAULT_SETTINGS.pomodoro } }, (res: PomodoroState) => {
+      void chrome.runtime.lastError;
+      if (res) setPomodoroState(res);
+    });
+  }
+
+  async function toggleBreathing() {
+    const next: Settings = {
+      ...settings,
+      pomodoro: {
+        ...(settings.pomodoro || DEFAULT_SETTINGS.pomodoro),
+        breathingEnabled: !(settings.pomodoro?.breathingEnabled ?? true),
+      } as PomodoroSettings,
+    };
+    setSettings(next);
+    await chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
+
+    chrome.runtime.sendMessage({
+      type: "POMODORO_COMMAND",
+      payload: { action: 'updateSettings', settings: next.pomodoro }
+    });
+  }
+
   const startDisabled = readable === false;
 
-  // Translation source hint shown next to the toggle
-  const translationHint =
-    onDevice === null ? "" : onDevice ? "🔒 on-device" : "🌐 Google";
+
 
   return (
     <div style={styles.container}>
@@ -116,44 +153,176 @@ export default function Popup() {
           />
         </span>
         <span style={styles.title}>HZone - Learning</span>
+        <button
+          onClick={openGuide}
+          style={{
+            marginLeft: 'auto',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: '#8888aa',
+            padding: 4,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 4
+          }}
+          onMouseEnter={e => e.currentTarget.style.color = '#c0c0e0'}
+          onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
+          title="View Feature Guide"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+          </svg>
+        </button>
       </header>
 
       <div style={styles.body}>
-        <button
-          style={{
-            ...styles.primaryBtn,
-            ...(readAloudState !== "idle" ? styles.primaryBtnActive : {}),
-            ...(startDisabled ? styles.btnDisabled : {}),
-          }}
-          onClick={startReadAloud}
-          disabled={startDisabled || readAloudState !== "idle"}
-          title={startDisabled ? "No readable content found on this page" : ""}
-        >
-          {readAloudState === "idle" ? "▶  Start Reading" : "▶  Reading…"}
-        </button>
 
-        <div style={styles.toggleRow}>
-          <div style={styles.toggleLabelGroup}>
-            <span style={styles.toggleLabel}>Translation Aside</span>
-            {translationHint && (
-              <span style={styles.sourceChip}>{translationHint}</span>
-            )}
+        {/* Pomodoro Section */}
+        <div style={styles.pomodoroBox}>
+          <div style={styles.pomodoroHeader}>
+            <span>Pomodoro</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>Breathe</span>
+              <button
+                style={{
+                  ...styles.toggle,
+                  ...(settings.pomodoro?.breathingEnabled !== false ? styles.toggleOn : {}),
+                }}
+                onClick={toggleBreathing}
+              >
+                <span
+                  style={{
+                    ...styles.toggleThumb,
+                    ...(settings.pomodoro?.breathingEnabled !== false ? styles.toggleThumbOn : {}),
+                  }}
+                />
+              </button>
+            </div>
           </div>
-          <button
-            style={{
-              ...styles.toggle,
-              ...(settings.translation.enabled ? styles.toggleOn : {}),
-            }}
-            onClick={toggleTranslation}
-            aria-pressed={settings.translation.enabled}
-          >
-            <span
-              style={{
-                ...styles.toggleThumb,
-                ...(settings.translation.enabled ? styles.toggleThumbOn : {}),
+
+          {pomodoroState && pomodoroState.phase !== 'idle' ? (
+            <div style={styles.pomodoroDisplay}>
+              <div style={styles.pomodoroPhaseTitle}>
+                {pomodoroState.phase === 'focus' ? 'Focus Session' : pomodoroState.phase === 'shortBreak' ? 'Short Break' : 'Long Break'}
+              </div>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 140, height: 140, margin: '10px auto' }}>
+                <BreathingRing state={pomodoroState} settings={settings.pomodoro || DEFAULT_SETTINGS.pomodoro!} />
+                <div style={{ ...styles.pomodoroTime, margin: 0, fontSize: 32 }}>
+                  {Math.floor(pomodoroState.timeRemaining / 60).toString().padStart(2, '0')}:{(pomodoroState.timeRemaining % 60).toString().padStart(2, '0')}
+                </div>
+              </div>
+              <div style={styles.pomodoroControls}>
+                {pomodoroState.status === 'running' ? (
+                  <button style={styles.pomodoroBtn} onClick={() => sendPomodoroCmd('pause')}>Pause</button>
+                ) : (
+                  <button style={styles.pomodoroBtn} onClick={() => sendPomodoroCmd('resume')}>Resume</button>
+                )}
+                <button style={styles.pomodoroBtnSecondary} onClick={() => sendPomodoroCmd('stop')}>Stop</button>
+              </div>
+            </div>
+          ) : (
+            <div style={styles.pomodoroControls}>
+              <button style={styles.pomodoroBtnPrimary} onClick={() => sendPomodoroCmd('startFocus')}>Start Focus</button>
+              <button style={styles.pomodoroBtnSecondary} onClick={() => sendPomodoroCmd('startShortBreak')}>Break</button>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+            <span style={{ fontSize: 11, color: '#8888aa', width: 45 }}>Volume</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={settings.pomodoro?.volume ?? 1}
+              onChange={(e) => {
+                const vol = parseFloat(e.target.value);
+                const newSettings = { ...settings, updatedAt: Date.now(), pomodoro: { ...settings.pomodoro!, volume: vol } };
+                setSettings(newSettings);
+                chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
+                chrome.runtime.sendMessage({ type: "POMODORO_COMMAND", payload: { action: 'updateSettings', settings: newSettings.pomodoro } });
               }}
+              style={{ flex: 1, accentColor: '#4ade80', height: 4 }}
             />
-          </button>
+            <span style={{ fontSize: 11, color: '#8888aa', width: 32, textAlign: 'right' }}>
+              {Math.round((settings.pomodoro?.volume ?? 1) * 100)}%
+            </span>
+          </div>
+        </div>
+
+        <div style={styles.pomodoroBox}>
+          <div style={styles.pomodoroHeader}>
+            <span>Page Read Aloud</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>Translate</span>
+              <button
+                style={{
+                  ...styles.toggle,
+                  ...(settings.translation.enabled ? styles.toggleOn : {}),
+                }}
+                onClick={toggleTranslation}
+                aria-pressed={settings.translation.enabled}
+              >
+                <span
+                  style={{
+                    ...styles.toggleThumb,
+                    ...(settings.translation.enabled ? styles.toggleThumbOn : {}),
+                  }}
+                />
+              </button>
+            </div>
+          </div>
+
+          {readAloudState === 'idle' ? (
+            <button
+              style={{
+                ...styles.primaryBtn,
+                ...(startDisabled ? styles.btnDisabled : {}),
+              }}
+              onClick={startReadAloud}
+              disabled={startDisabled}
+              title={startDisabled ? "No readable content found on this page" : ""}
+            >
+              ▶  Start
+            </button>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#2d4fd4', borderRadius: 8, padding: '8px 12px' }}>
+              <span style={{ fontSize: 13, color: '#fff', fontWeight: 600, flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 3, backgroundColor: readAloudState === 'playing' ? '#4ade80' : '#facc15' }} />
+                {readAloudState === 'playing' ? 'Reading...' : 'Paused'}
+              </span>
+              {readAloudState === 'playing' ? (
+                <button style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }} onClick={() => controlReadAloud('pause')}>Pause</button>
+              ) : (
+                <button style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }} onClick={() => controlReadAloud('resume')}>Resume</button>
+              )}
+              <button style={{ background: 'rgba(255,100,100,0.5)', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }} onClick={() => controlReadAloud('stop')}>Stop</button>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+            <span style={{ fontSize: 11, color: '#8888aa', width: 45 }}>Volume</span>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={settings.readAloud?.volume ?? 1}
+              onChange={(e) => {
+                const vol = parseFloat(e.target.value);
+                const newSettings = { ...settings, updatedAt: Date.now(), readAloud: { ...settings.readAloud, volume: vol } };
+                setSettings(newSettings);
+                chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
+              }}
+              style={{ flex: 1, accentColor: '#4ade80', height: 4 }}
+            />
+            <span style={{ fontSize: 11, color: '#8888aa', width: 32, textAlign: 'right' }}>
+              {Math.round((settings.readAloud?.volume ?? 1) * 100)}%
+            </span>
+          </div>
         </div>
 
         <button style={styles.dashboardBtn} onClick={openDashboard}>
@@ -161,6 +330,99 @@ export default function Popup() {
         </button>
       </div>
     </div>
+  );
+}
+
+function BreathingRing({ state, settings }: { state: PomodoroState, settings: PomodoroSettings }) {
+  const [progress, setProgress] = useState({ currentPhaseIdx: 0, phaseProgress: 0, activePhases: [] as any[] });
+
+  useEffect(() => {
+    if (state.status !== 'running' || settings.breathingEnabled === false || !state.breathStartTime) return;
+
+    let frameId: number;
+    const i = settings.inhale ?? 8;
+    const h1 = settings.hold1 ?? 4;
+    const e = settings.exhale ?? 8;
+    const h2 = settings.hold2 ?? 4;
+    const totalCycle = i + h1 + e + h2;
+
+    const activePhases: { type: string, duration: number, color: string }[] = [];
+    if (i > 0) activePhases.push({ type: 'inhale', duration: i, color: '#4ade80' });
+    if (h1 > 0) activePhases.push({ type: 'hold1', duration: h1, color: '#facc15' });
+    if (e > 0) activePhases.push({ type: 'exhale', duration: e, color: '#60a5fa' });
+    if (h2 > 0) activePhases.push({ type: 'hold2', duration: h2, color: '#c084fc' });
+
+    const numSegments = activePhases.length;
+    if (numSegments === 0) return;
+
+    function loop() {
+      const elapsed = (Date.now() - state.breathStartTime!) / 1000;
+      const cycleTime = elapsed % totalCycle;
+
+      let currentPhaseIdx = 0;
+      let phaseProgress = 0;
+      let accumulatedTime = 0;
+
+      for (let idx = 0; idx < numSegments; idx++) {
+        const phase = activePhases[idx];
+        if (cycleTime < accumulatedTime + phase.duration) {
+          currentPhaseIdx = idx;
+          phaseProgress = (cycleTime - accumulatedTime) / phase.duration;
+          break;
+        }
+        accumulatedTime += phase.duration;
+      }
+
+      setProgress({ currentPhaseIdx, phaseProgress, activePhases });
+      frameId = requestAnimationFrame(loop);
+    }
+    frameId = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(frameId);
+  }, [state.status, state.breathStartTime, settings]);
+
+  if (settings.breathingEnabled === false || state.status !== 'running' || !state.breathStartTime || progress.activePhases.length === 0) {
+    return null;
+  }
+
+  const radius = 64;
+  const strokeWidth = 8;
+  const normalizedRadius = radius - strokeWidth / 2;
+  const circumference = normalizedRadius * 2 * Math.PI;
+  const totalCycleDuration = progress.activePhases.reduce((acc, p) => acc + p.duration, 0);
+
+  return (
+    <svg width={130} height={130} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-90deg)', pointerEvents: 'none' }}>
+      <circle cx="65" cy="65" r={normalizedRadius} fill="transparent" stroke="#2a2a4a" strokeWidth={strokeWidth} />
+
+      {progress.activePhases.map((phase, k) => {
+        if (k > progress.currentPhaseIdx) return null;
+
+        let accumulatedDuration = 0;
+        for (let i = 0; i < k; i++) accumulatedDuration += progress.activePhases[i].duration;
+
+        const rotateAngle = (accumulatedDuration / totalCycleDuration) * 360;
+        
+        let lengthRatio = 0;
+        if (k < progress.currentPhaseIdx) {
+          lengthRatio = phase.duration / totalCycleDuration;
+        } else {
+          lengthRatio = (phase.duration / totalCycleDuration) * progress.phaseProgress;
+        }
+
+        const currentLength = lengthRatio * circumference;
+        const strokeDashoffset = circumference - currentLength;
+
+        return (
+          <circle
+            key={k}
+            cx="65" cy="65" r={normalizedRadius} fill="transparent"
+            stroke={phase.color} strokeWidth={strokeWidth}
+            strokeDasharray={circumference} strokeDashoffset={strokeDashoffset}
+            style={{ transformOrigin: '65px 65px', transform: `rotate(${rotateAngle}deg)` }}
+          />
+        )
+      })}
+    </svg>
   );
 }
 
@@ -238,4 +500,83 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     width: "100%",
   },
+  pomodoroBox: {
+    background: "#1a1a2e",
+    border: "1px solid #2a2a4a",
+    borderRadius: 8,
+    padding: "10px 12px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  pomodoroHeader: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#c0c0e0",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center"
+  },
+  pomodoroActiveBadge: {
+    fontSize: 10,
+    background: "#4f6ef7",
+    color: "#fff",
+    padding: "2px 6px",
+    borderRadius: 10,
+    textTransform: "uppercase"
+  },
+  pomodoroDisplay: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 6
+  },
+  pomodoroPhaseTitle: {
+    fontSize: 12,
+    color: "#8888aa"
+  },
+  pomodoroTime: {
+    fontSize: 28,
+    fontWeight: "bold",
+    color: "#fff",
+    fontFamily: "monospace",
+    letterSpacing: 2
+  },
+  pomodoroControls: {
+    display: "flex",
+    gap: 8,
+    width: "100%",
+    marginTop: 4
+  },
+  pomodoroBtnPrimary: {
+    flex: 2,
+    background: "#4f6ef7",
+    color: "#fff",
+    border: "none",
+    borderRadius: 6,
+    padding: "6px 0",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  pomodoroBtn: {
+    flex: 1,
+    background: "#3a3a5a",
+    color: "#e0e0e0",
+    border: "none",
+    borderRadius: 6,
+    padding: "6px 0",
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  pomodoroBtnSecondary: {
+    flex: 1,
+    background: "transparent",
+    color: "#8888aa",
+    border: "1px solid #3a3a5a",
+    borderRadius: 6,
+    padding: "5px 0",
+    fontSize: 13,
+    cursor: "pointer",
+  }
 };

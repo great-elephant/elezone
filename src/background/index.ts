@@ -23,6 +23,27 @@ import {
 import { translateInContext, ContextTranslateRequest } from './aiTranslate'
 import { getRandomRoast, RoastLevel } from '../shared/roasts'
 
+let creatingOffscreen: Promise<void> | null = null;
+
+async function setupOffscreenDocument(path: string) {
+  if (await chrome.offscreen.hasDocument()) return;
+  if (creatingOffscreen) {
+    await creatingOffscreen;
+  } else {
+    creatingOffscreen = chrome.offscreen.createDocument({
+      url: path,
+      reasons: [
+        chrome.offscreen.Reason.AUDIO_PLAYBACK,
+        chrome.offscreen.Reason.DOM_PARSER
+      ],
+      justification: 'Run Pomodoro timer accurately and generate animated badge icon',
+    });
+    await creatingOffscreen;
+    creatingOffscreen = null;
+  }
+}
+
+
 type ActiveReadAloudSession = {
   currentIndex: number
   currentRep: number
@@ -37,6 +58,7 @@ const COLORS = Object.keys(BOOKMARK_COLORS) as BookmarkColor[]
 const readAloudStateByTab = new Map<number, ReadAloudState>()
 let activeSession: ActiveReadAloudSession | null = null
 let sessionCounter = 0
+let ttsRestartTimeout: ReturnType<typeof setTimeout> | null = null
 let speakingWatchdog: ReturnType<typeof setInterval> | null = null
 
 const COLOR_EMOJI: Record<BookmarkColor, string> = {
@@ -119,6 +141,20 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'srs-tick') {
     await triggerSrsNotification(false)
     await evaluateSlackingState(false)
+  }
+})
+
+chrome.commands.onCommand.addListener(async (command) => {
+  if (command === 'play_pause' && activeSession) {
+    if (activeSession.state === 'playing') {
+      activeSession.state = 'paused'
+      chrome.tts.pause()
+      await broadcastReadAloudState(activeSession.tabId, 'paused', activeSession.currentIndex)
+    } else if (activeSession.state === 'paused') {
+      activeSession.state = 'playing'
+      chrome.tts.resume()
+      await broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
+    }
   }
 })
 
@@ -471,8 +507,9 @@ async function controlReadAloud(
   sender: chrome.runtime.MessageSender,
   payload: unknown,
 ): Promise<{ ok: boolean }> {
-  const tabId = sender.tab?.id
-  const action = (payload as { action?: string } | undefined)?.action
+  const payloadObj = payload as { action?: string, tabId?: number } | undefined;
+  const tabId = payloadObj?.tabId || sender.tab?.id;
+  const action = payloadObj?.action;
   if (!tabId || activeSession?.tabId !== tabId || !action) return { ok: false }
 
   if (action === 'pause' && activeSession.state === 'playing') {
@@ -600,9 +637,25 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return getActivityLog()
     case 'GET_SETTINGS':
       return getSettings()
-    case 'SAVE_SETTINGS':
-      await saveSettings(msg.payload as Settings)
+    case 'SAVE_SETTINGS': {
+      const newSettings = msg.payload as Settings
+      await saveSettings(newSettings)
+      if (activeSession) {
+        const oldVolume = activeSession.settings.volume ?? 1
+        activeSession.settings = newSettings.readAloud
+        if (activeSession.state === 'playing' && oldVolume !== (newSettings.readAloud.volume ?? 1)) {
+          if (ttsRestartTimeout) clearTimeout(ttsRestartTimeout)
+          ttsRestartTimeout = setTimeout(() => {
+            if (activeSession?.state === 'playing') {
+              activeSession.token = Date.now() // Prevent old 'interrupted' event from killing the session
+              chrome.tts.stop()
+              void speakCurrentSentence(activeSession.token)
+            }
+          }, 400)
+        }
+      }
       return { ok: true }
+    }
     case 'MARK_ORPHANED':
       await markOrphaned(msg.payload as string)
       return { ok: true }
@@ -648,6 +701,38 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
           }
         )
       })
+    case 'POMODORO_COMMAND':
+      await setupOffscreenDocument('src/offscreen/index.html');
+      return chrome.runtime.sendMessage({ type: 'POMODORO_COMMAND', payload: msg.payload });
+    case 'GET_POMODORO_STATE':
+      await setupOffscreenDocument('src/offscreen/index.html');
+      return chrome.runtime.sendMessage({ type: 'GET_POMODORO_STATE' });
+    case 'UPDATE_ACTION_BADGE': {
+      const { text, color } = msg.payload as { text: string; color?: string };
+      chrome.action.setBadgeText({ text });
+      if (color) {
+        chrome.action.setBadgeBackgroundColor({ color });
+      }
+      return { ok: true };
+    }
+    case 'RESTORE_ACTION_ICON': {
+      chrome.action.setIcon({
+        path: {
+          "16": "/icons/icon16.png",
+          "32": "/icons/icon32.png",
+          "48": "/icons/icon48.png",
+          "128": "/icons/icon128.png"
+        }
+      });
+      return { ok: true };
+    }
+    case 'UPDATE_ACTION_ICON': {
+      const { data, width, height } = msg.payload as { data: number[]; width: number; height: number };
+      const clampedArray = new Uint8ClampedArray(data);
+      const imageData = new ImageData(clampedArray, width, height);
+      chrome.action.setIcon({ imageData: { "32": imageData } });
+      return { ok: true };
+    }
     default:
       return null
   }

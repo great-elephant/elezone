@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Settings, BookmarkColor, BOOKMARK_COLORS } from '../shared/types'
+import { Settings, BookmarkColor, BOOKMARK_COLORS, DEFAULT_SETTINGS } from '../shared/types'
 import {
   DndContext,
   closestCenter,
@@ -67,6 +67,14 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     }
   }
 
+  function setPomodoro(key: keyof NonNullable<Settings['pomodoro']>, value: unknown) {
+    const currentPomodoro = settings.pomodoro || DEFAULT_SETTINGS.pomodoro!
+    const next = { ...settings, pomodoro: { ...currentPomodoro, [key]: value } } as Settings
+    next.updatedAt = Date.now()
+    onChange(next)
+    chrome.runtime.sendMessage({ type: 'POMODORO_COMMAND', payload: { action: 'updateSettings', settings: next.pomodoro } })
+  }
+
   function testVoice() {
     chrome.tts.stop()
     if (testing) {
@@ -110,6 +118,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
 
   const ra = settings.readAloud
   const tr = settings.translation
+  const pm = settings.pomodoro || DEFAULT_SETTINGS.pomodoro!
 
   return (
     <div style={styles.root}>
@@ -295,6 +304,84 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             style={styles.range}
             onChange={e => set('readAloud', 'volume', parseFloat(e.target.value))} />
         </Field>
+      </section>
+
+      <section style={styles.section}>
+        <h2 style={styles.sectionTitle}>Focus & Breathe</h2>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+          <Field label="Focus (min)">
+            <input type="number" min={1} max={120} value={pm.focusTime}
+              style={styles.select}
+              onChange={e => setPomodoro('focusTime', parseInt(e.target.value) || 25)} />
+          </Field>
+          <Field label="Short Break (min)">
+            <input type="number" min={1} max={60} value={pm.shortBreakTime}
+              style={styles.select}
+              onChange={e => setPomodoro('shortBreakTime', parseInt(e.target.value) || 5)} />
+          </Field>
+          <Field label="Long Break (min)">
+            <input type="number" min={1} max={120} value={pm.longBreakTime}
+              style={styles.select}
+              onChange={e => setPomodoro('longBreakTime', parseInt(e.target.value) || 15)} />
+          </Field>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 12 }}>
+          <Field label="Auto-start Focus">
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={pm.autoStartPomodoro ?? false}
+                onChange={e => setPomodoro('autoStartPomodoro', e.target.checked)}
+                style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+              />
+            </div>
+          </Field>
+          <Field label="Auto-start Break">
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <input
+                type="checkbox"
+                checked={pm.autoStartBreak ?? false}
+                onChange={e => setPomodoro('autoStartBreak', e.target.checked)}
+                style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+              />
+            </div>
+          </Field>
+        </div>
+
+        <h3 style={{ fontSize: 13, color: '#8888aa', marginTop: 12, marginBottom: 0 }}>Breathing Cycle (Seconds)</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
+          <Field label="Inhale">
+            <input type="number" min={0} max={30} value={pm.inhale}
+              style={styles.select}
+              onChange={e => setPomodoro('inhale', parseInt(e.target.value) || 0)} />
+          </Field>
+          <Field label="Hold">
+            <input type="number" min={0} max={30} value={pm.hold1}
+              style={styles.select}
+              onChange={e => setPomodoro('hold1', parseInt(e.target.value) || 0)} />
+          </Field>
+          <Field label="Exhale">
+            <input type="number" min={0} max={30} value={pm.exhale}
+              style={styles.select}
+              onChange={e => setPomodoro('exhale', parseInt(e.target.value) || 0)} />
+          </Field>
+          <Field label="Hold">
+            <input type="number" min={0} max={30} value={pm.hold2}
+              style={styles.select}
+              onChange={e => setPomodoro('hold2', parseInt(e.target.value) || 0)} />
+          </Field>
+        </div>
+        {(pm.inhale === 0 || pm.exhale === 0) && (
+          <div style={{ fontSize: 13, color: '#facc15', marginTop: 12, padding: '8px 12px', background: 'rgba(250,204,21,0.1)', borderRadius: 6 }}>
+            {pm.inhale === 0 && pm.exhale === 0
+              ? "Not breathing at all? Ok fine, this app doesn't discriminate against aliens! 👽 Wellcome to the Earth🥳🙄🥳"
+              : pm.inhale === 0
+                ? "Only exhaling? Are you deflating like a balloon? 🎈"
+                : "Only inhaling? Are you trying to inflate yourself and float away? 🐡"}
+          </div>
+        )}
       </section>
 
       <section style={styles.section}>
