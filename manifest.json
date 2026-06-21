@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "HZone - Learning",
+  "name": "EleZone",
   "version": "0.1.0",
-  "description": "Bookmark words, read pages aloud, and translate alongside — all local, no account needed.",
+  "description": "Bookmark words, read pages aloud, translate alongside, box breathing, pomodoro timer.",
   "action": {
     "default_popup": "src/popup/index.html",
     "default_icon": {
@@ -19,6 +19,13 @@
         "mac": "MediaPlayPause"
       },
       "description": "Play or pause Read Aloud"
+    },
+    "trigger_ocr": {
+      "suggested_key": {
+        "default": "Alt+O",
+        "mac": "Alt+O"
+      },
+      "description": "Capture region for OCR"
     }
   },
   "options_page": "src/options/index.html",
@@ -64,5 +71,18 @@
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "tesseract/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
 }

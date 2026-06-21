@@ -49,6 +49,7 @@ type ActiveReadAloudSession = {
   currentRep: number
   sentences: string[]
   settings: ReadAloudSettings
+  lang?: string
   state: ReadAloudState
   tabId: number
   token: number
@@ -66,9 +67,13 @@ const COLOR_EMOJI: Record<BookmarkColor, string> = {
   orange: '🟠', purple: '🟣', pink: '🩷', teal: '🩵', gray: '⚫',
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
   setupContextMenus()
   setupSrsAlarm()
+  
+  if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/options/guide.html') })
+  }
 })
 chrome.runtime.onStartup.addListener(() => {
   setupContextMenus()
@@ -155,6 +160,11 @@ chrome.commands.onCommand.addListener(async (command) => {
       chrome.tts.resume()
       await broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
     }
+  } else if (command === 'trigger_ocr') {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+    if (tabs[0]?.id) {
+      chrome.tabs.sendMessage(tabs[0].id, { type: 'START_CROP_MODE' }).catch(() => {})
+    }
   }
 })
 
@@ -173,7 +183,7 @@ async function evaluateSlackingState(testMode = false) {
     chrome.notifications.create(`roast-test-${Date.now()}`, {
       type: 'basic',
       iconUrl: 'icons/icon128.png',
-      title: 'HZone Cảnh Báo 🚨 (Test)',
+      title: 'EleZone Cảnh Báo 🚨 (Test)',
       message: roastMessage,
       requireInteraction: false
     })
@@ -246,7 +256,7 @@ async function evaluateSlackingState(testMode = false) {
       chrome.notifications.create(`roast-${now}`, {
         type: 'basic',
         iconUrl: 'icons/icon128.png',
-        title: 'HZone Cảnh Báo 🚨',
+        title: 'EleZone Cảnh Báo 🚨',
         message: roastMessage,
         requireInteraction: false
       })
@@ -330,8 +340,16 @@ async function setupContextMenus() {
     ? settings.deckOrder
     : COLORS
 
+  const ocrLangMap: Record<string, string> = {
+    eng: 'EN',
+    chi_sim: 'ZH-S',
+    chi_tra: 'ZH-T'
+  };
+  const ocrLang = settings?.ocr?.language || 'eng';
+  const displayLang = ocrLangMap[ocrLang] || ocrLang.toUpperCase();
+
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: 'ocr', title: 'Image to text(OCR)', contexts: ['page', 'image', 'selection'] })
+    chrome.contextMenus.create({ id: 'ocr', title: `Image to text(OCR) [${displayLang}]`, contexts: ['page', 'image', 'selection'] })
     chrome.contextMenus.create({ id: 'read-from-here', title: 'Read from this sentence', contexts: ['selection'] })
     for (const color of order) {
       chrome.contextMenus.create({
@@ -457,7 +475,8 @@ async function speakCurrentSentence(token: number) {
     onEvent: event => handleTtsEvent(token, event),
     pitch: session.settings.pitch,
     rate: session.settings.speed,
-    voiceName: session.settings.voice || undefined,
+    lang: session.lang,
+    voiceName: (session.lang && session.settings.languageVoices?.[session.lang]) || session.settings.voice || undefined,
     volume: session.settings.volume,
   }, async () => {
     if (chrome.runtime.lastError && activeSession?.token === token) {
@@ -473,10 +492,11 @@ async function startReadAloudSession(
   const tabId = sender.tab?.id
   if (!tabId) return { ok: false }
 
-  const { sentences, startIndex, settings } = payload as {
+  const { sentences, startIndex, settings, lang } = payload as {
     sentences: string[]
     startIndex: number
     settings: ReadAloudSettings
+    lang?: string
   }
 
   if (!Array.isArray(sentences) || sentences.length === 0) return { ok: false }
@@ -493,6 +513,7 @@ async function startReadAloudSession(
     currentRep: 0,
     sentences,
     settings,
+    lang,
     state: 'playing',
     tabId,
     token,
@@ -602,7 +623,9 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(async details => {
 })
 
 chrome.runtime.onMessage.addListener((msg: { type: string; payload?: unknown }, sender, sendResponse) => {
-  dispatch(msg, sender).then(sendResponse).catch(() => sendResponse(null))
+  dispatch(msg, sender)
+    .then(res => sendResponse(res))
+    .catch(() => sendResponse(null))
   return true
 })
 
@@ -665,22 +688,36 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return startReadAloudSession(sender, msg.payload)
     case 'CONTROL_READ_ALOUD':
       return controlReadAloud(sender, msg.payload)
-    case 'SPEAK_TEXT':
+    case 'SPEAK_TEXT': {
+      const payload = msg.payload as { text: string, lang?: string } | string
+      const text = typeof payload === 'string' ? payload : payload.text
+      const lang = typeof payload === 'string' ? undefined : payload.lang
+
       const settings = await getSettings()
       if (settings?.readAloud) {
         chrome.tts.stop()
-        if (settings.readAloud.voice) {
-          chrome.tts.speak(msg.payload as string, {
+        if (lang && settings.readAloud.languageVoices?.[lang]) {
+          chrome.tts.speak(text, {
             pitch: settings.readAloud.pitch,
             rate: settings.readAloud.speed,
+            lang: lang,
+            voiceName: settings.readAloud.languageVoices[lang],
+            volume: settings.readAloud.volume
+          })
+        } else if (settings.readAloud.voice) {
+          chrome.tts.speak(text, {
+            pitch: settings.readAloud.pitch,
+            rate: settings.readAloud.speed,
+            lang: lang,
             voiceName: settings.readAloud.voice,
             volume: settings.readAloud.volume
           })
         } else {
-          chrome.tts.speak(msg.payload as string)
+          chrome.tts.speak(text, { lang })
         }
       }
       return { ok: true }
+    }
     case 'GET_READ_ALOUD_STATE': {
       const tabId = (msg.payload as { tabId?: number } | undefined)?.tabId ?? sender.tab?.id
       return { state: tabId ? (readAloudStateByTab.get(tabId) ?? 'idle') : 'idle' as ReadAloudState }
@@ -704,6 +741,33 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
     case 'POMODORO_COMMAND':
       await setupOffscreenDocument('src/offscreen/index.html');
       return chrome.runtime.sendMessage({ type: 'POMODORO_COMMAND', payload: msg.payload });
+    case 'FORWARD_RECOGNIZE_TEXT': {
+      const tabId = sender.tab?.id;
+      const payload = msg.payload as any;
+      // Fire-and-forget: setup offscreen then kick off OCR without awaiting result
+      // Result will come back via OCR_COMPLETE message
+      setupOffscreenDocument('src/offscreen/index.html').then(() => {
+        chrome.runtime.sendMessage({ 
+          type: 'RECOGNIZE_TEXT', 
+          payload: { ...payload, tabId }
+        }).catch(() => {});
+      }).catch(() => {});
+      return { ack: true }; // Respond immediately so channel doesn't die
+    }
+    case 'OCR_PROGRESS': {
+      const { tabId, status, progress } = msg.payload as { tabId?: number; status: string; progress: number };
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { type: 'OCR_PROGRESS', payload: { status, progress } }).catch(() => {});
+      }
+      return { ok: true };
+    }
+    case 'OCR_COMPLETE': {
+      const { tabId, text, error } = msg.payload as { tabId?: number; text?: string; error?: string };
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, { type: 'OCR_COMPLETE', payload: { text, error } }).catch(() => {});
+      }
+      return { ok: true };
+    }
     case 'GET_POMODORO_STATE':
       await setupOffscreenDocument('src/offscreen/index.html');
       return chrome.runtime.sendMessage({ type: 'GET_POMODORO_STATE' });

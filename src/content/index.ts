@@ -27,6 +27,13 @@ function injectHighlightStyles() {
     ::highlight(cxt-gray)   { background-color: rgba(192, 192, 192, 0.45); color: inherit; }
     ::highlight(cxt-flash)    { background-color: rgba(255, 217, 61, 0.7); color: inherit; }
     ::highlight(cxt-speaking) { background-color: rgba(79, 110, 247, 0.25); color: inherit; }
+
+    /* Force text selection to work inside extension popups, overriding any site CSS */
+    #cxt-ocr-root *, .cxt-dict-host *, .cxt-delete-tooltip * {
+      user-select: text !important;
+      -webkit-user-select: text !important;
+      pointer-events: auto !important;
+    }
   `
   document.head.appendChild(style)
 }
@@ -37,7 +44,7 @@ async function reanchor(url: string) {
   for (const item of pageItems) {
     const found = applyHighlight(item)
     if (!found && !item.orphaned) {
-      chrome.runtime.sendMessage({ type: 'MARK_ORPHANED', payload: item.id }).catch(() => {})
+      chrome.runtime.sendMessage({ type: 'MARK_ORPHANED', payload: item.id }).catch(() => { })
     }
   }
 }
@@ -68,7 +75,7 @@ const tooltipDots: Partial<Record<BookmarkColor, HTMLDivElement>> = {}
 // Keep deck labels in sync so tooltip titles stay current.
 chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).then((s: Settings) => {
   cachedDeckLabels = s?.deckLabels || {}
-}).catch(() => {})
+}).catch(() => { })
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes['settings']) {
@@ -83,7 +90,7 @@ async function updateTooltipContent(id: string) {
   const items: SavedItem[] = await chrome.runtime.sendMessage({ type: 'GET_ITEMS' })
   const item = items.find(i => i.id === id)
   if (!item || tooltipBookmarkId !== id) return
-  
+
   if (item.text || item.translation || item.phonetics) {
     tooltipContentContainer.style.display = 'flex'
     if (item.text) {
@@ -100,7 +107,7 @@ async function updateTooltipContent(id: string) {
       topRow.style.alignItems = 'flex-start'
       topRow.style.gap = '8px'
       topRow.style.maxWidth = '300px'
-      
+
       const textSpan = document.createElement('span')
       textSpan.textContent = item.text
       textSpan.style.color = '#ffffff'
@@ -116,12 +123,12 @@ async function updateTooltipContent(id: string) {
       speakerBtn.onmouseover = () => { speakerBtn.style.opacity = '1' }
       speakerBtn.onmouseout = () => { speakerBtn.style.opacity = '0.7' }
       speakerBtn.onmousedown = (e) => {
-         e.preventDefault()
-         e.stopPropagation()
-         chrome.runtime.sendMessage({ type: 'SPEAK_TEXT', payload: item.text }).catch(() => {})
+        e.preventDefault()
+        e.stopPropagation()
+        chrome.runtime.sendMessage({ type: 'SPEAK_TEXT', payload: { text: item.text, lang: item.sourceLang } }).catch(() => { })
       }
       topRow.appendChild(speakerBtn)
-      
+
       origContainer.appendChild(topRow)
 
       if (item.phonetics) {
@@ -131,7 +138,7 @@ async function updateTooltipContent(id: string) {
         pSpan.style.fontSize = '13px'
         origContainer.appendChild(pSpan)
       }
-      
+
       tooltipContentContainer.appendChild(origContainer)
     }
     if (item.translation) {
@@ -181,16 +188,16 @@ function ensureTooltip(): HTMLDivElement {
       e.preventDefault()
       e.stopPropagation()
       if (!tooltipBookmarkId) return
-      
+
       const items: SavedItem[] = await chrome.runtime.sendMessage({ type: 'GET_ITEMS' })
       const item = items.find(i => i.id === tooltipBookmarkId)
       if (!item) return
-      
+
       removeHighlight(item.id)
       item.color = color as BookmarkColor
       applyHighlight(item)
-      
-      chrome.runtime.sendMessage({ type: 'UPDATE_ITEM', payload: item }).catch(() => {})
+
+      chrome.runtime.sendMessage({ type: 'UPDATE_ITEM', payload: item }).catch(() => { })
       hideNow()
     }
     colorsRow.appendChild(dot)
@@ -213,7 +220,7 @@ function ensureTooltip(): HTMLDivElement {
     e.stopPropagation()
     if (!tooltipBookmarkId) return
     removeHighlight(tooltipBookmarkId)
-    chrome.runtime.sendMessage({ type: 'DELETE_ITEM', payload: tooltipBookmarkId }).catch(() => {})
+    chrome.runtime.sendMessage({ type: 'DELETE_ITEM', payload: tooltipBookmarkId }).catch(() => { })
     hideNow()
   }
 
@@ -245,7 +252,7 @@ function showDeleteTooltip(id: string, range: Range) {
   refreshTooltipDotTitles()
   if (tooltipBookmarkId !== id) {
     tooltipBookmarkId = id
-    updateTooltipContent(id).catch(() => {})
+    updateTooltipContent(id).catch(() => { })
   }
   const r = range.getBoundingClientRect()
   t.style.display = 'flex'
@@ -289,17 +296,25 @@ document.addEventListener('mousemove', (e: MouseEvent) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+function protectFromSiteEvents(container: HTMLElement) {
+  const stopProp = (e: Event) => e.stopPropagation();
+  ['contextmenu', 'selectstart', 'dragstart', 'copy', 'mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup'].forEach(evt => {
+    container.addEventListener(evt, stopProp);
+  });
+}
+
 async function init() {
   initDictionary()
   await reanchor(window.location.href)
   checkScrollTarget()
-  
+
   const ocrContainer = document.createElement('div')
   ocrContainer.id = 'cxt-ocr-root'
   document.body.appendChild(ocrContainer)
   const root = createRoot(ocrContainer)
   root.render(React.createElement(OcrManager))
-  
+  protectFromSiteEvents(ocrContainer)
+
   // Translation is NOT auto-started on page load.
   // It starts only when the user presses "Start Reading" with the toggle ON.
 }

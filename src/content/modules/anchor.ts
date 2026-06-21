@@ -372,6 +372,7 @@ export function buildSentencePlan(
         const pattern = normText(sentence)
           .replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // escape regex metacharacters
           .replace(/\s+/g, '\\s+')                  // each space → flexible \s+
+          .replace(/[。！？]/g, '$&\\s*')             // Chinese punctuation -> optional trailing space
         const re = new RegExp(pattern)
         const match = re.exec(normRaw.slice(searchFrom))
         if (match) {

@@ -31,7 +31,7 @@ export function extractSentences(): string[] {
       .map(s => s.segment.trim())
       .filter(Boolean)
   } catch {
-    return text.split(/(?<=[.!?])\s+/).filter(Boolean)
+    return text.split(/(?<=[.!?。！？])\s*/).filter(Boolean)
   }
 }
 
@@ -40,15 +40,33 @@ function getVoice(name: string): SpeechSynthesisVoice | null {
   return speechSynthesis.getVoices().find(v => v.name === name) ?? null
 }
 
-function checkLanguageMismatch(voiceName: string): string | null {
-  const pageLang = document.documentElement.lang?.split('-')[0]
-  const voice = getVoice(voiceName)
-  if (!pageLang || !voice) return null
-  const voiceLang = voice.lang.split('-')[0]
-  if (voiceLang !== pageLang) {
-    return `Reading with ${voice.lang} voice; page appears to be ${pageLang.toUpperCase()}.`
+function checkLanguageMismatch(settings: ReadAloudSettings, pageLang: string): string | null {
+  if (!pageLang || pageLang === 'en') return null // Ignore warning for 'en' if no specific voice to avoid spamming
+  const shortLang = pageLang.split('-')[0]
+  
+  const specificVoiceName = settings.languageVoices?.[pageLang] || settings.languageVoices?.[shortLang]
+  
+  if (specificVoiceName) {
+    const voice = getVoice(specificVoiceName)
+    if (voice && voice.lang.split('-')[0] !== shortLang) {
+       return `Warning: Your configured voice for ${pageLang.toUpperCase()} is actually a ${voice.lang} voice.`
+    }
+    return null
   }
-  return null
+
+  // If no specific voice, check fallback voice
+  if (settings.voice) {
+    const fallbackVoice = getVoice(settings.voice)
+    if (fallbackVoice) {
+      const fallbackLang = fallbackVoice.lang.split('-')[0]
+      if (fallbackLang !== shortLang) {
+         return `Page is ${pageLang.toUpperCase()}, but your fallback voice is ${fallbackVoice.lang}. Consider adding a specific voice in Settings!`
+      }
+      return null // Fallback voice matches page language!
+    }
+  }
+
+  return `No specific voice configured for ${pageLang.toUpperCase()}. The system will try to auto-detect, but you should add one in Settings for the best experience!`
 }
 
 function clearLocalSession() {
@@ -68,14 +86,15 @@ function applySentenceIndex(index: number) {
 async function beginSession(
   settings: ReadAloudSettings,
   startIndex: number,
+  lang: string,
   warning?: (msg: string) => void,
 ) {
-  const mismatch = checkLanguageMismatch(settings.voice)
+  const mismatch = checkLanguageMismatch(settings, lang)
   if (mismatch && warning) warning(mismatch)
 
   const response = await chrome.runtime.sendMessage({
     type: 'START_READ_ALOUD_SESSION',
-    payload: { sentences, startIndex, settings },
+    payload: { sentences, startIndex, settings, lang },
   }) as { ok?: boolean }
 
   if (!response?.ok) {
@@ -99,7 +118,7 @@ export async function start(settings: ReadAloudSettings, warning?: (msg: string)
   if (sentences.length === 0) return
 
   currentIndex = 0
-  await beginSession(settings, 0, warning)
+  await beginSession(settings, 0, lang, warning)
 }
 
 function normTextFallback(s: string): string {
@@ -169,7 +188,7 @@ export async function startFrom(
   if (sentences.length === 0) return
 
   currentIndex = findSentenceIndex(sentences, sentenceRanges, selectedText, selRange)
-  await beginSession(settings, currentIndex, warning)
+  await beginSession(settings, currentIndex, lang, warning)
 }
 
 export function pause() {

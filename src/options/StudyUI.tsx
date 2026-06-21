@@ -41,7 +41,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
       setEarnedSpark(false)
       if (mode === 'multiple_choice') generateMcOptions(items[0], items)
       if (mode === 'listening') {
-        setTimeout(() => speakText((items[0].prefix || '') + items[0].text + (items[0].suffix || '')), 300)
+        setTimeout(() => speakText((items[0].prefix || '') + items[0].text + (items[0].suffix || ''), items[0].sourceLang), 300)
       }
     } else {
       setActiveItem(null)
@@ -56,18 +56,19 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     return () => clearTimeout(timer)
   }, [verificationPassed, showAnswer, wrongOptions.size, activeItem, showSessionSummary])
 
-  function speakText(text: string) {
+  function speakText(text: string, lang?: string) {
     chrome.tts.stop()
     if (settings?.readAloud) {
       const r = settings.readAloud
       chrome.tts.speak(text, {
         pitch: r.pitch,
         rate: r.speed,
-        voiceName: r.voice || undefined,
+        lang,
+        voiceName: (lang && r.languageVoices?.[lang]) || r.voice || undefined,
         volume: r.volume
       })
     } else {
-      chrome.tts.speak(text)
+      chrome.tts.speak(text, { lang })
     }
   }
 
@@ -96,7 +97,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         setWrongOptions(new Set())
         if (mode === 'multiple_choice') generateMcOptions(nextQueue[0], items)
         if (mode === 'listening') {
-          setTimeout(() => speakText((nextQueue[0].prefix || '') + nextQueue[0].text + (nextQueue[0].suffix || '')), 300)
+          setTimeout(() => speakText((nextQueue[0].prefix || '') + nextQueue[0].text + (nextQueue[0].suffix || ''), nextQueue[0].sourceLang), 300)
         }
       } else {
         setActiveItem(null)
@@ -114,12 +115,12 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
       setSessionScore(prev => ({ ...prev, correct: prev.correct + 1 }))
       setEarnedSpark(true)
       setVerifyError(false)
-      speakText(activeItem.text)
+      speakText(activeItem.text, activeItem.sourceLang)
     } else {
       setVerifyError(true)
       if (mode === 'multiple_choice') {
         setWrongOptions(prev => new Set(prev).add(value))
-        speakText(activeItem.text)
+        speakText(activeItem.text, activeItem.sourceLang)
       }
     }
   }
@@ -129,7 +130,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     setShowAnswer(true)
     setSessionScore(prev => ({ ...prev, giveUps: prev.giveUps + 1 }))
     if (activeItem) {
-      speakText(activeItem.text)
+      speakText(activeItem.text, activeItem.sourceLang)
     }
   }
 
@@ -220,7 +221,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
                 {(showAnswer || mode === 'listening') && (
                   <button
                     style={styles.speakerBtn}
-                    onClick={() => speakText((activeItem.prefix || '') + activeItem.text + (activeItem.suffix || ''))}
+                    onClick={() => speakText((activeItem.prefix || '') + activeItem.text + (activeItem.suffix || ''), activeItem.sourceLang)}
                     title="Read sentence aloud"
                   >
                     🔊
@@ -338,7 +339,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
                   {activeItem.text}
                   <button
                     style={styles.speakerBtn}
-                    onClick={() => speakText(activeItem.text)}
+                    onClick={() => speakText(activeItem.text, activeItem.sourceLang)}
                     title="Read word aloud"
                   >
                     🔊
@@ -370,7 +371,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
       ) : !showAnswer && mode === 'passive' ? (
         <button ref={nextBtnRef} style={styles.showBtn} onClick={() => {
           setShowAnswer(true)
-          if (activeItem.text) speakText(activeItem.text)
+          if (activeItem.text) speakText(activeItem.text, activeItem.sourceLang)
         }}>
           Show Answer
         </button>

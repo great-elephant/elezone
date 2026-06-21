@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CropOverlay } from './CropOverlay';
 import { FloatingTextPopup } from './FloatingTextPopup';
-import { recognizeText } from '../modules/ocr';
+
 import { Settings } from '../../shared/types';
 
 type State = 'idle' | 'cropping' | 'processing' | 'done';
@@ -13,11 +13,11 @@ export const OcrManager: React.FC = () => {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState('');
   const [cropBox, setCropBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const settingsRef = useRef<Settings | undefined>(undefined);
 
   useEffect(() => {
     const handleMessage = (msg: any) => {
       if (msg.type === 'START_CROP_MODE') {
-        // Request a screenshot from the background script
         chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE_TAB' })
           .then((response: { dataUrl: string }) => {
             if (response?.dataUrl) {
@@ -28,6 +28,29 @@ export const OcrManager: React.FC = () => {
           .catch(err => {
             console.error('Failed to capture tab:', err);
           });
+      } else if (msg.type === 'OCR_PROGRESS') {
+        setStatus(msg.payload.status);
+        setProgress(msg.payload.progress ?? 0);
+      } else if (msg.type === 'OCR_COMPLETE') {
+        // Final result arrives via tab message (fire-and-forget pattern)
+        const { text, error } = msg.payload as { text?: string; error?: string };
+        if (error) {
+          console.error('OCR Error:', error);
+          setOcrText('Error recognizing text.');
+        } else {
+          let result = text || '';
+          const ocr = settingsRef.current?.ocr;
+          if (ocr) {
+            if (ocr.removeExtraSpaces) result = result.replace(/\s+/g, ' ').trim();
+            if (ocr.sentenceCase) {
+              result = result.toLowerCase()
+                .replace(/(^\s*|[.!?]\s+)([a-z])/g, (_, prefix, char) => prefix + char.toUpperCase())
+                .replace(/\b(i)([''](m|ll|d|ve))?\b/g, (_, _i, suffix) => 'I' + (suffix || ''));
+            }
+          }
+          setOcrText(result);
+        }
+        setState('done');
       }
     };
     chrome.runtime.onMessage.addListener(handleMessage);
@@ -39,32 +62,24 @@ export const OcrManager: React.FC = () => {
     setCropBox(rect);
     setProgress(0);
     setStatus('Initializing OCR...');
-    
-    try {
-      let text = await recognizeText(croppedDataUrl, (statusStr, prog) => {
-        setStatus(statusStr);
-        setProgress(prog);
-      });
 
+    try {
+      let settings: Settings | undefined;
       try {
-        const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
-        const ocr = settings?.ocr;
-        if (ocr) {
-          if (ocr.removeExtraSpaces) {
-            text = text.replace(/\s+/g, ' ').trim();
-          }
-          if (ocr.sentenceCase) {
-            text = text.toLowerCase()
-              .replace(/(^\s*|[.!?]\s+)([a-z])/g, (_, prefix, char) => prefix + char.toUpperCase())
-              .replace(/\b(i)(['’](m|ll|d|ve))?\b/g, (_, _i, suffix) => 'I' + (suffix || ''));
-          }
-        }
+        settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+        settingsRef.current = settings;
       } catch (e) {
-        console.error('Failed to get settings for OCR formatting', e);
+        console.error('Failed to get settings for OCR', e);
       }
 
-      setOcrText(text);
-      setState('done');
+      const lang = settings?.ocr?.language || 'chi_sim';
+
+      // Fire-and-forget: background immediately acks, result comes back via OCR_COMPLETE message
+      chrome.runtime.sendMessage({
+        type: 'FORWARD_RECOGNIZE_TEXT',
+        payload: { imageBase64: croppedDataUrl, lang }
+      }).catch(() => {/* background ack can fail safely */});
+
     } catch (err) {
       console.error('OCR Error:', err);
       setOcrText('Error recognizing text.');
@@ -99,6 +114,7 @@ export const OcrManager: React.FC = () => {
           progress={progress}
           status={status}
           cropBox={cropBox}
+          ocrLang={settingsRef.current?.ocr?.language}
           onClose={handleClosePopup}
         />
       )}

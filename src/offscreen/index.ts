@@ -1,4 +1,5 @@
 import { Message, PomodoroState, PomodoroSettings, DEFAULT_SETTINGS } from '../shared/types';
+import { recognizeText } from './ocr';
 
 let state: PomodoroState = {
   phase: 'idle',
@@ -33,7 +34,7 @@ function playChime() {
     osc.type = 'triangle'; // Bell-like bright tone
     osc.frequency.setValueAtTime(freq, now + index * 0.1);
     
-    const vol = settings.volume ?? 1;
+    const vol = Math.min(settings.volume ?? 1, 1.5); // Cap chime volume to prevent clipping
     gainNode.gain.setValueAtTime(0, now + index * 0.1);
     gainNode.gain.linearRampToValueAtTime(0.2 * vol, now + index * 0.1 + 0.05); // quick attack
     gainNode.gain.exponentialRampToValueAtTime(0.01 * vol, now + index * 0.1 + 1.0); // smooth decay
@@ -52,7 +53,7 @@ function playBattleChime() {
   }
   
   const now = audioCtx.currentTime;
-  const vol = settings.volume ?? 1;
+  const vol = Math.min(settings.volume ?? 1, 1.5); // Cap chime volume to prevent clipping
   const bpm = 140; // fast
   const beat = 60 / bpm; // duration of one beat in seconds
 
@@ -471,6 +472,31 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
     }
     broadcastState();
     sendResponse(state);
+    return true;
+  }
+
+  if (msg.type === 'RECOGNIZE_TEXT') {
+    const { imageBase64, lang, tabId } = msg.payload as { imageBase64: string; lang: string; tabId?: number };
+    // Don't use sendResponse for OCR — takes too long and kills the channel
+    // Instead send OCR_COMPLETE via runtime message so background can forward to tab
+    recognizeText(imageBase64, lang, (status, progress) => {
+      chrome.runtime.sendMessage({
+        type: 'OCR_PROGRESS',
+        payload: { status, progress, tabId }
+      }).catch(() => {});
+    }).then(text => {
+      chrome.runtime.sendMessage({
+        type: 'OCR_COMPLETE',
+        payload: { text, tabId }
+      }).catch(() => {});
+    }).catch(err => {
+      console.error('OCR Error:', err);
+      chrome.runtime.sendMessage({
+        type: 'OCR_COMPLETE',
+        payload: { error: err ? (err.message || err.toString()) : 'Unknown error', tabId }
+      }).catch(() => {});
+    });
+    sendResponse({ ack: true }); // Respond immediately
     return true;
   }
 });

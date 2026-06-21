@@ -88,70 +88,14 @@ export async function logActivity(type: 'save' | 'review'): Promise<void> {
 
 // ── Unified Library (SavedItems) ──────────────────────────────────────────────
 
-const LIBRARY_KEY = 'cxt_library'
-const DRIVE_FILE_NAME = 'cxt_library.json'
+const LIBRARY_KEY = 'elezone_library'
+const DRIVE_FILE_NAME = 'elezone_data.json'
 
 let cachedLibrary: SavedItem[] | null = null
 
-export async function migrateLegacyDataIfNeeded(): Promise<void> {
-  const all = await chrome.storage.local.get(null)
 
-  // Check if we already migrated
-  if (all['cxt_legacy_migrated']) return
-
-  const migratedItems: SavedItem[] = []
-
-  // 1. Migrate Bookmarks (keys starting with 'bookmark:')
-  for (const [key, val] of Object.entries(all)) {
-    if (key.startsWith('bookmark:')) {
-      const b = val as any
-      migratedItems.push({
-        id: b.id,
-        url: b.url,
-        text: b.text,
-        prefix: b.prefix,
-        suffix: b.suffix,
-        occurrenceIndex: b.occurrenceIndex,
-        color: b.color || 'yellow',
-        createdAt: b.createdAt,
-        orphaned: b.orphaned || false,
-      })
-      // Clean up legacy bookmark key
-      await chrome.storage.local.remove(key)
-    }
-  }
-
-  // 2. Migrate Flashcards (from 'cxt_flashcards')
-  const legacyDeck = all['cxt_flashcards'] as any[] | undefined
-  if (legacyDeck && Array.isArray(legacyDeck)) {
-    for (const f of legacyDeck) {
-      migratedItems.push({
-        id: f.id,
-        url: '', // Flashcards lacked URL
-        text: f.word,
-        prefix: f.contextPrefix,
-        suffix: f.contextSuffix,
-        occurrenceIndex: 0,
-        color: 'red', // Default color for old flashcards
-        createdAt: f.createdAt,
-        orphaned: false,
-        translation: f.translation
-      })
-    }
-    await chrome.storage.local.remove('cxt_flashcards')
-  }
-
-  // If there are migrated items, save them to the new library key
-  if (migratedItems.length > 0) {
-    const existing = all[LIBRARY_KEY] as SavedItem[] | undefined || []
-    await chrome.storage.local.set({ [LIBRARY_KEY]: [...existing, ...migratedItems] })
-  }
-
-  await chrome.storage.local.set({ 'cxt_legacy_migrated': true })
-}
 
 export async function getRawItems(): Promise<SavedItem[]> {
-  await migrateLegacyDataIfNeeded()
   if (cachedLibrary) return cachedLibrary
   const data = await chrome.storage.local.get(LIBRARY_KEY)
   cachedLibrary = data[LIBRARY_KEY] || []

@@ -140,10 +140,43 @@ export default function Popup() {
 
   const startDisabled = readable === false;
 
-
-
-  return (
+  const ocrLangMap: Record<string, string> = {
+    eng: 'EN',
+    chi_sim: 'ZH-S',
+    chi_tra: 'ZH-T'
+  };
+  const displayLang = settings.ocr?.language ? (ocrLangMap[settings.ocr.language] || settings.ocr.language.toUpperCase()) : 'EN'; return (
     <div style={styles.container}>
+      <style>{`
+        .premium-start-btn {
+          background: #4f6ef7;
+          color: #fff;
+          border: 1px solid transparent;
+          border-radius: 8px;
+          padding: 10px 0;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          width: 100%;
+          transition: background 0.2s, border-color 0.2s;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+        }
+        .premium-start-btn:hover:not(:disabled) {
+          background: #3b5bdb;
+          border-color: #5b79ff;
+        }
+        .premium-start-btn:active:not(:disabled) {
+          background: #2d4fd4;
+        }
+        .premium-start-btn:disabled {
+          background: #2a2a4a;
+          color: #666688;
+          cursor: not-allowed;
+        }
+      `}</style>
       <header style={styles.header}>
         <span style={styles.logo}>
           <img
@@ -152,30 +185,66 @@ export default function Popup() {
             style={{ width: "20px", height: "20px", display: "block" }}
           />
         </span>
-        <span style={styles.title}>HZone - Learning</span>
-        <button
-          onClick={openGuide}
-          style={{
-            marginLeft: 'auto',
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            color: '#8888aa',
-            padding: 4,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: 4
-          }}
-          onMouseEnter={e => e.currentTarget.style.color = '#c0c0e0'}
-          onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
-          title="View Feature Guide"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
-            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
-          </svg>
-        </button>
+        <span style={styles.title}>EleZone</span>
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          marginLeft: 'auto'
+        }}>
+          <button
+            onClick={() => {
+              chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+                if (tabs[0]?.id) {
+                  chrome.tabs.sendMessage(tabs[0].id, { type: 'START_CROP_MODE' }).catch(() => { });
+                }
+              });
+              window.close();
+            }}
+            style={{
+              marginLeft: 'auto',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: '#8888aa',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 4
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = '#4ade80'}
+            onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
+            title={`Image to Text (OCR) [${displayLang}] - Alt+O`}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <circle cx="8.5" cy="8.5" r="1.5"></circle>
+              <polyline points="21 15 16 10 5 21"></polyline>
+            </svg>
+          </button>
+          <button
+            onClick={openGuide}
+            style={{
+              marginLeft: 4,
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: '#8888aa',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 4
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = '#c0c0e0'}
+            onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
+            title="View Feature Guide"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+              <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+            </svg>
+          </button>
+        </div>
       </header>
 
       <div style={styles.body}>
@@ -202,15 +271,18 @@ export default function Popup() {
               </button>
             </div>
           </div>
+          <div style={{ fontSize: 11, color: '#666688', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
+            Stay focused with Pomodoro timer & Box Breathing.
+          </div>
 
           {pomodoroState && pomodoroState.phase !== 'idle' ? (
             <div style={styles.pomodoroDisplay}>
               <div style={styles.pomodoroPhaseTitle}>
                 {pomodoroState.phase === 'focus' ? 'Focus Session' : pomodoroState.phase === 'shortBreak' ? 'Short Break' : 'Long Break'}
               </div>
-              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 140, height: 140, margin: '10px auto' }}>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 120, height: 120, margin: '4px auto' }}>
                 <BreathingRing state={pomodoroState} settings={settings.pomodoro || DEFAULT_SETTINGS.pomodoro!} />
-                <div style={{ ...styles.pomodoroTime, margin: 0, fontSize: 32 }}>
+                <div style={{ ...styles.pomodoroTime, margin: 0, fontSize: 30 }}>
                   {Math.floor(pomodoroState.timeRemaining / 60).toString().padStart(2, '0')}:{(pomodoroState.timeRemaining % 60).toString().padStart(2, '0')}
                 </div>
               </div>
@@ -225,8 +297,10 @@ export default function Popup() {
             </div>
           ) : (
             <div style={styles.pomodoroControls}>
-              <button style={styles.pomodoroBtnPrimary} onClick={() => sendPomodoroCmd('startFocus')}>Start Focus</button>
-              <button style={styles.pomodoroBtnSecondary} onClick={() => sendPomodoroCmd('startShortBreak')}>Break</button>
+              <button className="premium-start-btn" onClick={() => sendPomodoroCmd('startFocus')}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                Start Focus
+              </button>
             </div>
           )}
 
@@ -235,7 +309,7 @@ export default function Popup() {
             <input
               type="range"
               min="0"
-              max="1"
+              max="2"
               step="0.05"
               value={settings.pomodoro?.volume ?? 1}
               onChange={(e) => {
@@ -247,8 +321,8 @@ export default function Popup() {
               }}
               style={{ flex: 1, accentColor: '#4ade80', height: 4 }}
             />
-            <span style={{ fontSize: 11, color: '#8888aa', width: 32, textAlign: 'right' }}>
-              {Math.round((settings.pomodoro?.volume ?? 1) * 100)}%
+            <span style={{ fontSize: 11, color: '#8888aa', width: 40, textAlign: 'right' }}>
+              {Math.round(((settings.pomodoro?.volume ?? 1) / 2) * 100)}%
             </span>
           </div>
         </div>
@@ -275,18 +349,19 @@ export default function Popup() {
               </button>
             </div>
           </div>
+          <div style={{ fontSize: 11, color: '#666688', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
+            Read aloud and translate text on the fly.
+          </div>
 
           {readAloudState === 'idle' ? (
             <button
-              style={{
-                ...styles.primaryBtn,
-                ...(startDisabled ? styles.btnDisabled : {}),
-              }}
+              className="premium-start-btn"
               onClick={startReadAloud}
               disabled={startDisabled}
               title={startDisabled ? "No readable content found on this page" : ""}
             >
-              ▶  Start
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              Start Reading
             </button>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#2d4fd4', borderRadius: 8, padding: '8px 12px' }}>
@@ -384,15 +459,15 @@ function BreathingRing({ state, settings }: { state: PomodoroState, settings: Po
     return null;
   }
 
-  const radius = 64;
-  const strokeWidth = 8;
+  const radius = 54;
+  const strokeWidth = 6;
   const normalizedRadius = radius - strokeWidth / 2;
   const circumference = normalizedRadius * 2 * Math.PI;
   const totalCycleDuration = progress.activePhases.reduce((acc, p) => acc + p.duration, 0);
 
   return (
-    <svg width={130} height={130} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-90deg)', pointerEvents: 'none' }}>
-      <circle cx="65" cy="65" r={normalizedRadius} fill="transparent" stroke="#2a2a4a" strokeWidth={strokeWidth} />
+    <svg width={112} height={112} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-90deg)', pointerEvents: 'none' }}>
+      <circle cx="56" cy="56" r={normalizedRadius} fill="transparent" stroke="#2a2a4a" strokeWidth={strokeWidth} />
 
       {progress.activePhases.map((phase, k) => {
         if (k > progress.currentPhaseIdx) return null;
@@ -401,7 +476,7 @@ function BreathingRing({ state, settings }: { state: PomodoroState, settings: Po
         for (let i = 0; i < k; i++) accumulatedDuration += progress.activePhases[i].duration;
 
         const rotateAngle = (accumulatedDuration / totalCycleDuration) * 360;
-        
+
         let lengthRatio = 0;
         if (k < progress.currentPhaseIdx) {
           lengthRatio = phase.duration / totalCycleDuration;
@@ -415,10 +490,10 @@ function BreathingRing({ state, settings }: { state: PomodoroState, settings: Po
         return (
           <circle
             key={k}
-            cx="65" cy="65" r={normalizedRadius} fill="transparent"
+            cx="56" cy="56" r={normalizedRadius} fill="transparent"
             stroke={phase.color} strokeWidth={strokeWidth}
             strokeDasharray={circumference} strokeDashoffset={strokeDashoffset}
-            style={{ transformOrigin: '65px 65px', transform: `rotate(${rotateAngle}deg)` }}
+            style={{ transformOrigin: '56px 56px', transform: `rotate(${rotateAngle}deg)` }}
           />
         )
       })}

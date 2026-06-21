@@ -57,14 +57,16 @@ export default function Library({
     ? settings.deckOrder
     : ALL_COLORS
 
-  function playAudio(text: string) {
+  function playAudio(text: string, lang?: string) {
     if (!settings?.readAloud) return
     const r = settings.readAloud
     chrome.tts.stop()
-    if (r.voice) {
-      chrome.tts.speak(text, { pitch: r.pitch, rate: r.speed, voiceName: r.voice || undefined, volume: r.volume })
+    if (lang && r.languageVoices?.[lang]) {
+      chrome.tts.speak(text, { pitch: r.pitch, rate: r.speed, lang, voiceName: r.languageVoices[lang], volume: r.volume })
+    } else if (r.voice) {
+      chrome.tts.speak(text, { pitch: r.pitch, rate: r.speed, lang, voiceName: r.voice || undefined, volume: r.volume })
     } else {
-      chrome.tts.speak(text)
+      chrome.tts.speak(text, { lang })
     }
   }
 
@@ -313,7 +315,7 @@ export default function Library({
           <button
             style={styles.iconBtn}
             title="Read aloud"
-            onClick={e => { e.stopPropagation(); playAudio(item.text) }}
+            onClick={e => { e.stopPropagation(); playAudio(item.text, item.sourceLang) }}
           >
             🔊
           </button>
@@ -327,7 +329,7 @@ export default function Library({
                 <button
                   style={styles.iconBtnSmall}
                   title="Read sentence"
-                  onClick={() => playAudio((item.prefix || '') + item.text + (item.suffix || ''))}
+                  onClick={() => playAudio((item.prefix || '') + item.text + (item.suffix || ''), item.sourceLang)}
                 >
                   🔊
                 </button>

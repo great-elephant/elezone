@@ -278,8 +278,8 @@ export default function GuidePage() {
         <div className="slide">
           <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'center', gap: '30px', maxWidth: '800px' }}>
             <img src="/icons/icon128.png" alt="logo" style={{ width: 120, height: 120, margin: '0 auto', filter: 'drop-shadow(0 0 20px rgba(107, 207, 255, 0.5))' }} />
-            <h1 style={{ fontSize: '4em', margin: 0, textShadow: '0 0 20px rgba(255,255,255,0.2)', lineHeight: 1.2 }}>HZone - The Ultimate<br />Learning Experience</h1>
-            <p style={{ fontSize: '1.5em', margin: '0 auto' }}>Swipe through to discover how HZone transforms your daily web browsing into an effortless language learning journey.</p>
+            <h1 style={{ fontSize: '4em', margin: 0, textShadow: '0 0 20px rgba(255,255,255,0.2)', lineHeight: 1.2 }}>EleZone - The Ultimate<br />Learning Experience</h1>
+            <p style={{ fontSize: '1.5em', margin: '0 auto' }}>Swipe through to discover how EleZone transforms your daily web browsing into an effortless language learning journey.</p>
             <button
               onClick={() => goToSlide(1)}
               style={{ background: '#6bcfff', color: '#111', border: 'none', padding: '16px 32px', borderRadius: '30px', fontSize: '1.2em', fontWeight: 'bold', cursor: 'pointer', margin: '20px auto 0', width: 'fit-content', boxShadow: '0 0 20px rgba(107, 207, 255, 0.4)' }}
@@ -317,8 +317,8 @@ export default function GuidePage() {
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#ff6bd6' } as React.CSSProperties}>
             <div className="icon">🎧</div>
-            <h2>Immersive Read Aloud</h2>
-            <p>Turn any English article into a listening practice session. HZone can read texts aloud with native pronunciation, highlighting each sentence as it speaks. Enable "Translation Aside" to instantly see translations right next to the active sentence, making comprehension effortless.</p>
+            <h2>Listen & Translate</h2>
+            <p>Turn any English article into a listening practice session. EleZone can read texts aloud with native pronunciation, highlighting each sentence as it speaks. Enable "Translation Aside" to instantly see translations right next to the active sentence, making comprehension effortless.</p>
             <div className="instruction-box">
               <strong>💡 How to use:</strong> Highlight a sentence, right-click, and select "Read from this sentence".
             </div>
@@ -330,7 +330,7 @@ export default function GuidePage() {
           <div className="card" style={{ '--glow-color': '#ffb36b' } as React.CSSProperties}>
             <div className="icon">🎴</div>
             <h2>Master Your Vocabulary</h2>
-            <p>Saving words is only the beginning. HZone's built-in library offers four interactive study modes: Passive, Typing, Listening, and Multiple Choice. Dive into a session anytime to practice your saved words and lock them into your long-term memory.</p>
+            <p>Saving words is only the beginning. EleZone's built-in library offers four interactive study modes: Passive, Typing, Listening, and Multiple Choice. Dive into a session anytime to practice your saved words and lock them into your long-term memory.</p>
             <div className="instruction-box">
               <strong>💡 How to use:</strong> Open the Options page, go to the "Library" tab, and click the "Study" button.
             </div>
@@ -353,8 +353,8 @@ export default function GuidePage() {
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#4ade80' } as React.CSSProperties}>
             <div className="breathing-ring" />
-            <h2>Focus with Pomodoro & Box Breathing</h2>
-            <p>HZone integrates a Pomodoro timer paired with Box Breathing techniques. Box breathing (inhale-hold-exhale-hold) is scientifically proven to reduce anxiety and lower heart rate, while Pomodoro helps you study in highly focused sprints for better memory retention.</p>
+            <h2>Focus & Breathe</h2>
+            <p>EleZone integrates a Pomodoro timer paired with Box Breathing techniques. Box breathing is scientifically proven to reduce anxiety and lower heart rate, while Pomodoro helps you study in highly focused sprints for better memory retention.</p>
             <div className="instruction-box">
               <strong>💡 How to use:</strong> Open the extension popup, turn on "Breathe", and click "Start Focus" to begin a Pomodoro session.
             </div>
@@ -365,7 +365,7 @@ export default function GuidePage() {
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#46ff6a' } as React.CSSProperties}>
             <div className="icon">🔥</div>
-            <h2>Gamification & Roasts</h2>
+            <h2>Gamification</h2>
             <p>Consistency is key, so we made it fun. Earn Sparks for every word you save or review, build your daily streak, and watch your activity heatmap light up. But be warned: if you start slacking off, the app won't hesitate to roast you!</p>
             <div className="instruction-box">
               <strong>💡 Where to find:</strong> Open the Options page and go to the "Dashboard" tab to view your Sparks and Level.
@@ -385,7 +385,7 @@ export default function GuidePage() {
             <div style={{ marginTop: '20px', borderTop: '1px solid #3a3a6a', paddingTop: '30px', textAlign: 'center' }}>
               <p style={{ marginBottom: '20px' }}>Ready to level up?</p>
               <button
-                onClick={() => window.close()}
+                onClick={() => window.location.href = 'index.html'}
                 style={{ background: '#ff6b6b', color: '#111', border: 'none', padding: '12px 32px', borderRadius: '8px', cursor: 'pointer', fontSize: '1.2em', fontWeight: 'bold', boxShadow: '0 0 15px rgba(255, 107, 107, 0.4)' }}
               >
                 Return to Dashboard

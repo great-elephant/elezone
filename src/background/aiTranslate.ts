@@ -33,8 +33,8 @@ export type TranslateSource =
   | 'google-basic'    // Google plain translate (last resort)
 
 export type ContextTranslateResult =
-  | { mode: 'context'; translation: string; senses: string[]; source: TranslateSource }
-  | { mode: 'senses'; senses: string[]; source: TranslateSource }
+  | { mode: 'context'; translation: string; senses: string[]; source: TranslateSource; sourceLang?: string; phonetics?: string }
+  | { mode: 'senses'; senses: string[]; source: TranslateSource; sourceLang?: string; phonetics?: string }
 
 export interface ContextTranslateRequest {
   word: string
@@ -174,22 +174,34 @@ async function googleContextTranslate(word: string, sentence: string, tgt: strin
   return newTokens.join(' ')
 }
 
-async function googleSenses(word: string, tgt: string): Promise<string[]> {
+async function googleSenses(word: string, tgt: string): Promise<{ senses: string[]; sourceLang?: string; phonetics?: string }> {
   try {
     const url =
-      `${GT_BASE}&sl=en&tl=${encodeURIComponent(tgt)}&dt=t&dt=bd&q=${encodeURIComponent(word)}`
+      `${GT_BASE}&sl=auto&tl=${encodeURIComponent(tgt)}&dt=t&dt=bd&dt=rm&q=${encodeURIComponent(word)}`
     const res = await fetch(url)
-    if (!res.ok) return []
+    if (!res.ok) return { senses: [] }
     const json = (await res.json()) as [
-      Array<[string, ...unknown[]]> | null,
+      Array<[string | null, string | null, ...unknown[]]> | null,
       Array<[string, string[], ...unknown[]]> | null,
+      string,
       ...unknown[],
     ]
+
+    const sourceLang = typeof json[2] === 'string' ? json[2] : undefined
+    let phonetics: string | undefined
+    
+    if (Array.isArray(json[0]) && json[0].length > 0) {
+      const lastChunk = json[0][json[0].length - 1]
+      // Romanization/Phonetics usually appears at the end of the chunks array with nulls for texts.
+      if (lastChunk && lastChunk.length >= 4 && typeof lastChunk[3] === 'string' && lastChunk[3].trim()) {
+        phonetics = lastChunk[3].trim()
+      }
+    }
 
     // Plain translation goes FIRST — it's the most reliable sense and avoids
     // slang/rare dictionary entries landing as the auto-filled default.
     const plain = Array.isArray(json[0])
-      ? json[0].map(chunk => chunk[0]).join('').trim()
+      ? json[0].map(chunk => chunk[0] || '').join('').trim()
       : ''
 
     const dictSenses: string[] = []
@@ -210,9 +222,9 @@ async function googleSenses(word: string, tgt: string): Promise<string[]> {
       const t = s.trim()
       if (t && !seen.has(t)) { seen.add(t); result.push(t) }
     }
-    return result.slice(0, 6)
+    return { senses: result.slice(0, 6), sourceLang, phonetics }
   } catch {
-    return []
+    return { senses: [] }
   }
 }
 
@@ -228,7 +240,7 @@ export async function translateInContext(
   // Always fetch dictionary senses in parallel — shown as chips regardless of source.
   const sensesPromise = !req.disableGoogleSenses
     ? googleSenses(word, targetLang)
-    : Promise.resolve([] as string[])
+    : Promise.resolve({ senses: [] as string[], sourceLang: undefined as string | undefined, phonetics: undefined as string | undefined })
 
   // Primary: on-device AI — single prompt with the full sentence as context.
   let contextResult: { translation: string; source: TranslateSource } | null = null
@@ -275,18 +287,18 @@ export async function translateInContext(
     if (contextTr) contextResult = { translation: contextTr, source: 'google-context' }
   }
 
-  const senses = await sensesPromise
+  const { senses, sourceLang, phonetics } = await sensesPromise
 
   let result: ContextTranslateResult
 
   if (contextResult) {
-    result = { mode: 'context', translation: contextResult.translation, senses, source: contextResult.source }
+    result = { mode: 'context', translation: contextResult.translation, senses, source: contextResult.source, sourceLang, phonetics }
   } else if (senses.length > 0) {
-    result = { mode: 'senses', senses, source: 'google-senses' }
+    result = { mode: 'senses', senses, source: 'google-senses', sourceLang, phonetics }
   } else {
     // Last resort: plain translation.
     const basic = await googleTranslate(word, targetLang)
-    result = { mode: 'senses', senses: basic ? [basic] : [], source: 'google-basic' }
+    result = { mode: 'senses', senses: basic ? [basic] : [], source: 'google-basic', sourceLang, phonetics }
   }
 
   console.debug('[aiTranslate]', { word, sentence, targetLang, result })

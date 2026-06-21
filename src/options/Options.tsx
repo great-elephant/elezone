@@ -146,7 +146,7 @@ export default function Options() {
                 filter: "drop-shadow(rgba(107, 207, 255, 0.5) 0px 0px 4px)",
               }}
             />
-            HZone - Learning
+            EleZone
           </span>
           <button
             title={

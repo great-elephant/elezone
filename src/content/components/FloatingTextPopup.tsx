@@ -8,10 +8,39 @@ type Props = {
   progress: number;
   status: string;
   cropBox?: { x: number; y: number; width: number; height: number } | null;
+  ocrLang?: string;
   onClose: () => void;
 };
 
-export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, status, cropBox, onClose }) => {
+export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, status, cropBox, ocrLang, onClose }) => {
+  const ocrLangMap: Record<string, string> = {
+    eng: 'EN',
+    chi_sim: 'ZH-S',
+    chi_tra: 'ZH-T',
+    jpn: 'JA',
+    kor: 'KO',
+    vie: 'VI',
+    fra: 'FR',
+    spa: 'ES',
+    deu: 'DE',
+    ita: 'IT',
+    rus: 'RU'
+  };
+  const ocrFullNameMap: Record<string, string> = {
+    eng: 'English',
+    chi_sim: 'Chinese (Simplified)',
+    chi_tra: 'Chinese (Traditional)',
+    jpn: 'Japanese',
+    kor: 'Korean',
+    vie: 'Vietnamese',
+    fra: 'French',
+    spa: 'Spanish',
+    deu: 'German',
+    ita: 'Italian',
+    rus: 'Russian'
+  };
+  const displayLang = ocrLang ? (ocrLangMap[ocrLang] || ocrLang.toUpperCase()) : '';
+  const fullNameLang = ocrLang ? (ocrFullNameMap[ocrLang] || ocrLang) : '';
   const [position, setPosition] = useState({ x: 20, y: 20 });
   const [isDragging, setIsDragging] = useState(false);
   const [translatedText, setTranslatedText] = useState('');
@@ -118,7 +147,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   useEffect(() => {
     const POPUP_WIDTH = 340; // width + margin
     const MARGIN = 20;
-    
+
     if (cropBox) {
       // Try right side first
       let x = cropBox.x + cropBox.width + MARGIN;
@@ -127,23 +156,23 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
       // If not enough space on the right, try the left
       if (x + POPUP_WIDTH > window.innerWidth) {
         x = cropBox.x - POPUP_WIDTH - MARGIN;
-        
+
         // If not enough space on the left either, put it below
         if (x < MARGIN) {
           x = Math.max(MARGIN, cropBox.x + cropBox.width / 2 - POPUP_WIDTH / 2);
           y = cropBox.y + cropBox.height + MARGIN;
-          
+
           // If not enough space below, put it above
           if (y + 150 > window.innerHeight) {
             y = Math.max(MARGIN, cropBox.y - 150 - MARGIN);
           }
         }
       }
-      
+
       // Ensure it doesn't go off screen
       x = Math.max(MARGIN, Math.min(x, window.innerWidth - POPUP_WIDTH));
       y = Math.max(MARGIN, Math.min(y, window.innerHeight - 150));
-      
+
       setPosition({ x, y });
     } else {
       // Fallback if no cropBox
@@ -226,7 +255,17 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
           userSelect: 'none'
         }}
       >
-        <span style={{ fontSize: 13, fontWeight: 'bold', color: '#aab' }}>OCR Result</span>
+        <span style={{ fontSize: 13, fontWeight: 'bold', color: '#aab', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          OCR Result
+          {displayLang && (
+            <span
+              title={`Current OCR Language: ${fullNameLang}\n\nNote: If this doesn't match the actual language in the image, the recognized text will be inaccurate or gibberish.\nYou can change this in the Settings page.`}
+              style={{ fontSize: 9, fontWeight: 700, background: '#3a3a6a', color: '#4ade80', padding: '2px 5px', borderRadius: 4, lineHeight: 1, whiteSpace: 'nowrap', cursor: 'help' }}
+            >
+              {displayLang}
+            </span>
+          )}
+        </span>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <button
             onClick={handleReadAloud}

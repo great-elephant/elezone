@@ -205,32 +205,7 @@ async function showPopover(
   shadow.append(style, popover)
   document.body.appendChild(host)
 
-  // Fetch phonetics asynchronously without blocking the UI
-  let phonetics = ''
-  ;(async () => {
-    try {
-      const words = word.split(/\s+/)
-      const phoneticsPromises = words.map(async (w) => {
-        let cleanWord = w.replace(/^[^\w]+|[^\w]+$/g, '')
-        cleanWord = cleanWord.replace(/['']s$/i, '')
-        if (!cleanWord) return ''
-        try {
-          const pRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(cleanWord)}`)
-          if (pRes.ok) {
-            const pData = await pRes.json()
-            return pData[0]?.phonetics?.find((p: any) => p.text)?.text || pData[0]?.phonetic || ''
-          }
-        } catch { /* ignore */ }
-        return ''
-      })
-      const results = await Promise.all(phoneticsPromises)
-      phonetics = results.filter(Boolean).join(' ')
-      if (phonetics) {
-        const span = shadow?.querySelector('.phonetics') as HTMLElement
-        if (span) span.textContent = phonetics
-      }
-    } catch { /* ignore */ }
-  })()
+
 
   const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
   const targetLang = settings?.translation?.defaultTargetLanguage || 'en'
@@ -257,6 +232,11 @@ async function showPopover(
   ])
 
   loading.remove()
+
+  if (wordResult?.phonetics) {
+    const span = shadow?.querySelector('.phonetics') as HTMLElement
+    if (span) span.textContent = wordResult.phonetics
+  }
 
   // Context hint — shown above the input when a sentence translation is available
   if (sentenceResult?.text) {
@@ -335,7 +315,8 @@ async function showPopover(
       id: crypto.randomUUID(),
       url: window.location.href,
       text: word,
-      phonetics,
+      phonetics: wordResult?.phonetics || '',
+      sourceLang: wordResult?.sourceLang,
       prefix: context?.prefix || '',
       suffix: context?.suffix || '',
       occurrenceIndex: context?.occurrenceIndex || 0,

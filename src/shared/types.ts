@@ -24,6 +24,7 @@ export interface SavedItem {
   updatedAt?: number
   orphaned: boolean
   deleted?: boolean
+  sourceLang?: string
 
   // Optional Dictionary fields
   phonetics?: string
@@ -40,6 +41,7 @@ export interface ReadAloudSettings {
   speed: number
   repetition: number
   voice: string
+  languageVoices?: Record<string, string> // Maps language code to voiceName
   pitch: number
   volume: number
 }
@@ -65,6 +67,7 @@ export interface GamificationSettings {
 export interface OcrSettings {
   sentenceCase: boolean
   removeExtraSpaces: boolean
+  language?: string
 }
 
 export interface RoastSettings {
@@ -101,9 +104,9 @@ export interface Settings {
   deckLabels?: Partial<Record<BookmarkColor, string>>
   // User-defined display order for deck colors (persisted as an array of BookmarkColor).
   deckOrder?: BookmarkColor[]
-  
-  srsNotifications?: { 
-    enabled: boolean; 
+
+  srsNotifications?: {
+    enabled: boolean;
     intervalMinutes: number;
     activeHoursStart: number;
     activeHoursEnd: number;
@@ -139,7 +142,8 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   ocr: {
     sentenceCase: false,
-    removeExtraSpaces: true
+    removeExtraSpaces: true,
+    language: 'eng'
   },
   deckLabels: {},
   srsNotifications: {
@@ -210,6 +214,9 @@ export type MessageType =
   | 'POMODORO_COMMAND'
   | 'GET_POMODORO_STATE'
   | 'POMODORO_STATE_UPDATE'
+  | 'FORWARD_RECOGNIZE_TEXT'
+  | 'RECOGNIZE_TEXT'
+  | 'OCR_PROGRESS'
 
 export interface Message {
   type: MessageType

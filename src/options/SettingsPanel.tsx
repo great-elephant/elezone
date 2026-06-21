@@ -23,7 +23,21 @@ const ALL_COLORS: BookmarkColor[] = [
   'orange', 'purple', 'pink', 'teal', 'gray'
 ]
 
-const TEST_TEXT = 'The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.'
+const TEST_TEXTS: Record<string, string> = {
+  en: "The quick brown fox jumps over the lazy dog.",
+  "zh-CN": "敏捷的棕色狐狸跳过懒狗。",
+  zh: "敏捷的棕色狐狸跳过懒狗。",
+  "zh-TW": "敏捷的棕色狐狸跳過懶狗。",
+  ja: "素早い茶色のキツネはのろまな犬を飛び越える。",
+  vi: "Con cáo nâu nhanh nhẹn nhảy qua con chó lười.",
+  ko: "빠른 갈색 여우가 게으른 개를 뛰어넘습니다.",
+  fr: "Le renard brun rapide saute par-dessus le chien paresseux.",
+  es: "El rápido zorro marrón salta sobre el perro perezoso.",
+  de: "Der schnelle braune Fuchs springt über den faulen Hund.",
+  it: "La rapida volpe marrone salta oltre il cane pigro.",
+  ru: "Быстрая коричневая лиса прыгает через ленивую собаку."
+}
+
 type TtsVoice = chrome.tts.TtsVoice
 
 interface Props {
@@ -33,7 +47,7 @@ interface Props {
 
 export default function SettingsPanel({ settings, onChange }: Props) {
   const [voices, setVoices] = useState<TtsVoice[]>([])
-  const [testing, setTesting] = useState(false)
+  const [testingVoice, setTestingVoice] = useState<string | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus>('checking')
 
   const deckOrder: BookmarkColor[] = settings.deckOrder?.length === ALL_COLORS.length
@@ -75,27 +89,31 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     chrome.runtime.sendMessage({ type: 'POMODORO_COMMAND', payload: { action: 'updateSettings', settings: next.pomodoro } })
   }
 
-  function testVoice() {
+  function testVoice(langCode?: string, voiceName?: string) {
     chrome.tts.stop()
-    if (testing) {
-      setTesting(false)
-      return
+    const testId = langCode || 'default'
+    if (testingVoice !== null) {
+      setTestingVoice(null)
+      if (testingVoice === testId) return
     }
 
-    setTesting(true)
-    chrome.tts.speak(TEST_TEXT, {
+    setTestingVoice(testId)
+    const text = (langCode && TEST_TEXTS[langCode]) || TEST_TEXTS.en
+
+    chrome.tts.speak(text, {
       onEvent: event => {
         if (event.type === 'end' || event.type === 'interrupted' || event.type === 'cancelled' || event.type === 'error') {
-          setTesting(false)
+          setTestingVoice(prev => prev === testId ? null : prev)
         }
       },
       pitch: settings.readAloud.pitch,
       rate: settings.readAloud.speed,
-      voiceName: settings.readAloud.voice || undefined,
+      lang: langCode,
+      voiceName: voiceName || settings.readAloud.voice || undefined,
       volume: settings.readAloud.volume,
     }, () => {
       if (chrome.runtime.lastError) {
-        setTesting(false)
+        setTestingVoice(null)
       }
     })
   }
@@ -273,25 +291,95 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             onChange={e => set('readAloud', 'repetition', parseInt(e.target.value))} />
         </Field>
 
-        <Field label="Voice">
-          <select
-            style={styles.select}
-            value={ra.voice}
-            onChange={e => set('readAloud', 'voice', e.target.value)}
-          >
-            <option value="">System default</option>
-            {voices.map(v => (
-              <option key={v.voiceName} value={v.voiceName}>{v.voiceName} ({v.lang})</option>
-            ))}
-          </select>
+        <Field label="Default Voice (Fallback)">
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select
+              style={styles.select}
+              value={ra.voice}
+              onChange={e => set('readAloud', 'voice', e.target.value)}
+            >
+              <option value="">System auto-detect</option>
+              {voices.map(v => (
+                <option key={v.voiceName} value={v.voiceName}>{v.voiceName} ({v.lang})</option>
+              ))}
+            </select>
+            <button
+              style={{ ...styles.testBtnSmall, ...(testingVoice === 'default' ? styles.testBtnActive : {}) }}
+              onClick={() => testVoice()}
+              title="Test default voice"
+            >
+              {testingVoice === 'default' ? '⏹' : '▶'}
+            </button>
+          </div>
         </Field>
 
-        <div style={styles.voiceTest}>
-          <p style={styles.testText}>{TEST_TEXT}</p>
-          <button style={{ ...styles.testBtn, ...(testing ? styles.testBtnActive : {}) }} onClick={testVoice}>
-            {testing ? '⏹ Stop' : '▶ Test voice'}
-          </button>
-        </div>
+        <Field label="Language-specific Voices">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {Object.entries(ra.languageVoices || {}).map(([langCode, voiceName]) => (
+              <div key={langCode} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{ color: '#e8e8f5', fontSize: 13, minWidth: 60, fontWeight: 'bold' }}>{langCode}</span>
+                <select
+                  style={{ ...styles.select, flex: 1 }}
+                  value={voiceName}
+                  onChange={e => {
+                    const newMap = { ...(ra.languageVoices || {}) }
+                    if (e.target.value) newMap[langCode] = e.target.value
+                    else delete newMap[langCode]
+                    set('readAloud', 'languageVoices', newMap)
+                  }}
+                >
+                  <option value="">Auto-detect</option>
+                  {voices.map(v => (
+                    <option key={v.voiceName} value={v.voiceName}>{v.voiceName} ({v.lang})</option>
+                  ))}
+                </select>
+                <button
+                  style={{ ...styles.testBtnSmall, ...(testingVoice === langCode ? styles.testBtnActive : {}) }}
+                  onClick={() => testVoice(langCode, voiceName)}
+                  title="Test voice"
+                >
+                  {testingVoice === langCode ? '⏹' : '▶'}
+                </button>
+                <button
+                  style={{ background: 'transparent', border: 'none', color: '#ff6b6b', cursor: 'pointer', fontSize: 16 }}
+                  onClick={() => {
+                    const newMap = { ...(ra.languageVoices || {}) }
+                    delete newMap[langCode]
+                    set('readAloud', 'languageVoices', newMap)
+                  }}
+                  title="Remove override"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <select
+                style={styles.select}
+                value=""
+                onChange={e => {
+                  const val = e.target.value
+                  if (val) {
+                    set('readAloud', 'languageVoices', { ...(ra.languageVoices || {}), [val]: '' })
+                  }
+                }}
+              >
+                <option value="">+ Add language override...</option>
+                <option value="en">English (en)</option>
+                <option value="zh-CN">Chinese (zh-CN)</option>
+                <option value="ja">Japanese (ja)</option>
+                <option value="vi">Vietnamese (vi)</option>
+                <option value="ko">Korean (ko)</option>
+                <option value="fr">French (fr)</option>
+                <option value="es">Spanish (es)</option>
+                <option value="de">German (de)</option>
+                <option value="it">Italian (it)</option>
+                <option value="ru">Russian (ru)</option>
+              </select>
+            </div>
+          </div>
+        </Field>
+
 
         <Field label={`Pitch: ${ra.pitch.toFixed(1)}`}>
           <input type="range" min={0.5} max={2} step={0.1} value={ra.pitch}
@@ -464,6 +552,26 @@ export default function SettingsPanel({ settings, onChange }: Props) {
 
       <section style={styles.section}>
         <h2 style={styles.sectionTitle}>OCR</h2>
+        <Field label="Language Model">
+          <select
+            style={styles.select}
+            value={settings.ocr?.language || 'eng'}
+            onChange={e => set('ocr', 'language', e.target.value)}
+          >
+            <option value="eng">English (eng)</option>
+            <option value="chi_sim">Chinese Simplified (chi_sim)</option>
+            <option value="chi_tra">Chinese Traditional (chi_tra)</option>
+            <option value="jpn">Japanese (jpn)</option>
+            <option value="kor">Korean (kor)</option>
+            <option value="vie">Vietnamese (vie)</option>
+            <option value="fra">French (fra)</option>
+            <option value="spa">Spanish (spa)</option>
+            <option value="deu">German (deu)</option>
+            <option value="ita">Italian (ita)</option>
+            <option value="rus">Russian (rus)</option>
+          </select>
+        </Field>
+
 
         <Field label="Auto-format to sentence case">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -525,13 +633,6 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             onChange={() => { }}
           />
         </Field>
-
-        {/* <button
-          style={{ ...styles.testBtn, marginTop: 8, alignSelf: 'flex-start' }}
-          onClick={() => chrome.runtime.sendMessage({ type: 'TEST_ROAST_NOTIFICATION' })}
-        >
-          🚨 Test Roast Notification
-        </button> */}
       </section>
     </div>
   )
@@ -813,22 +914,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sectionTitle: { fontSize: 15, fontWeight: 600, color: '#c0c0e0', marginBottom: 4 },
   range: { width: '100%', accentColor: '#4f6ef7' },
-  voiceTest: {
-    background: '#0f0f1a',
-    border: '1px solid #2a2a4a',
-    borderRadius: 8,
-    padding: '10px 14px',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-  },
-  testText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#6688aa',
-    fontStyle: 'italic',
-    lineHeight: 1.5,
-  },
   testBtn: {
     background: 'transparent',
     border: '1px solid #3a3a6a',
