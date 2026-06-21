@@ -205,10 +205,20 @@ async function evaluateSlackingState(testMode = false) {
   let slacking = false
   let level: RoastLevel = 1
   
+  const firstItemDate = Math.min(...items.map(i => i.createdAt))
+  const firstDateObj = new Date(firstItemDate)
+  firstDateObj.setHours(0, 0, 0, 0)
+
   let consecutiveMissedDays = 0
   for (let i = 0; i < 30; i++) {
     const date = new Date()
     date.setDate(date.getDate() - i)
+    date.setHours(0, 0, 0, 0)
+
+    if (date.getTime() < firstDateObj.getTime()) {
+      break // Don't penalize for days before they even started using the extension
+    }
+
     const year = date.getFullYear()
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const day = String(date.getDate()).padStart(2, '0')
