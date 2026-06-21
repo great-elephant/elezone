@@ -112,7 +112,7 @@ const DICTIONARY_CSS = `
 `
 
 export function initDictionary() {
-  document.addEventListener('mousedown', handleClickOutside)
+  document.addEventListener('mousedown', handleClickOutside, { capture: true })
 }
 
 function hidePopover() {

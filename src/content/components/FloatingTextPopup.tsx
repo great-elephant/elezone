@@ -140,8 +140,8 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
       onClose();
     };
 
-    window.addEventListener('mousedown', handleOutsideClick);
-    return () => window.removeEventListener('mousedown', handleOutsideClick);
+    window.addEventListener('mousedown', handleOutsideClick, { capture: true });
+    return () => window.removeEventListener('mousedown', handleOutsideClick, { capture: true });
   }, [onClose]);
 
   useEffect(() => {
@@ -209,15 +209,15 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
 
   useEffect(() => {
     if (isDragging) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('mousemove', handleMouseMove, { capture: true });
+      window.addEventListener('mouseup', handleMouseUp, { capture: true });
     } else {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousemove', handleMouseMove, { capture: true });
+      window.removeEventListener('mouseup', handleMouseUp, { capture: true });
     }
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousemove', handleMouseMove, { capture: true });
+      window.removeEventListener('mouseup', handleMouseUp, { capture: true });
     };
   }, [isDragging]);
 

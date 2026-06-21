@@ -126,6 +126,8 @@ function makeDraggable(el: HTMLElement) {
   el.style.bottom = `${origBottom}px`
 
   el.addEventListener('mousedown', (e: MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    e.preventDefault(); // Prevent native drag-and-drop
     startX = e.clientX
     startY = e.clientY
 
@@ -141,11 +143,11 @@ function makeDraggable(el: HTMLElement) {
     }
 
     const onUp = () => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
+      document.removeEventListener('mousemove', onMove, { capture: true })
+      document.removeEventListener('mouseup', onUp, { capture: true })
     }
 
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
+    document.addEventListener('mousemove', onMove, { capture: true })
+    document.addEventListener('mouseup', onUp, { capture: true })
   })
 }
