@@ -26,6 +26,10 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     ita: 'IT',
     rus: 'RU'
   };
+  const ocrToBcp47Map: Record<string, string> = {
+    'chi_sim': 'zh-CN', 'chi_tra': 'zh-TW', 'jpn': 'ja', 'kor': 'ko',
+    'vie': 'vi', 'fra': 'fr', 'spa': 'es', 'deu': 'de', 'ita': 'it', 'rus': 'ru', 'eng': 'en'
+  };
   const ocrFullNameMap: Record<string, string> = {
     eng: 'English',
     chi_sim: 'Chinese (Simplified)',
@@ -41,6 +45,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   };
   const displayLang = ocrLang ? (ocrLangMap[ocrLang] || ocrLang.toUpperCase()) : '';
   const fullNameLang = ocrLang ? (ocrFullNameMap[ocrLang] || ocrLang) : '';
+  const targetLang = (ocrLang && ocrToBcp47Map[ocrLang]) || 'en';
   const [position, setPosition] = useState({ x: 20, y: 20 });
   const [isDragging, setIsDragging] = useState(false);
   const [translatedText, setTranslatedText] = useState('');
@@ -109,13 +114,30 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     try {
       const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
       const utterance = new SpeechSynthesisUtterance(currentText);
+      utterance.lang = targetLang;
+
       if (settings?.readAloud) {
         utterance.rate = settings.readAloud.speed || 1;
         utterance.pitch = settings.readAloud.pitch || 1;
         utterance.volume = settings.readAloud.volume || 1;
-        if (settings.readAloud.voice) {
+        
+        let resolvedVoiceName = settings.readAloud.voice || undefined;
+        if (settings.readAloud.languageVoices) {
+          const exactMatch = settings.readAloud.languageVoices[targetLang];
+          if (exactMatch) {
+            resolvedVoiceName = exactMatch;
+          } else {
+            const shortLang = targetLang.split('-')[0];
+            const prefixMatch = Object.entries(settings.readAloud.languageVoices).find(([k]) => k.startsWith(shortLang) || shortLang.startsWith(k));
+            if (prefixMatch) {
+              resolvedVoiceName = prefixMatch[1];
+            }
+          }
+        }
+
+        if (resolvedVoiceName) {
           const voices = window.speechSynthesis.getVoices();
-          const voice = voices.find(v => v.name === settings.readAloud.voice);
+          const voice = voices.find(v => v.name === resolvedVoiceName);
           if (voice) utterance.voice = voice;
         }
       }
@@ -224,6 +246,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   return (
     <div
       ref={popupRef}
+      lang={targetLang}
       onMouseDown={handleMouseDown}
       style={{
         position: 'fixed',

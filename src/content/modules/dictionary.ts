@@ -152,7 +152,7 @@ async function showPopover(
   word: string,
   rect: DOMRect,
   color: BookmarkColor,
-  context: { prefix: string; suffix: string; occurrenceIndex: number } | null
+  context: { prefix: string; suffix: string; occurrenceIndex: number; sourceLang?: string } | null
 ) {
   hidePopover()
 
@@ -223,6 +223,7 @@ async function showPopover(
       type: 'TRANSLATE_IN_CONTEXT',
       payload: {
         word, sentence, targetLang,
+        sourceLang: context?.sourceLang,
         disableAI: settings?.translation?.disableAI ?? true,
         disableGoogleContext: settings?.translation?.disableGoogleContext ?? false,
         disableGoogleSenses: settings?.translation?.disableGoogleSenses ?? false,
@@ -316,7 +317,7 @@ async function showPopover(
       url: window.location.href,
       text: word,
       phonetics: wordResult?.phonetics || '',
-      sourceLang: wordResult?.sourceLang,
+      sourceLang: context?.sourceLang || wordResult?.sourceLang,
       prefix: context?.prefix || '',
       suffix: context?.suffix || '',
       occurrenceIndex: context?.occurrenceIndex || 0,

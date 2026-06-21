@@ -54,6 +54,7 @@ export function getSelectionContext(searchString?: string): {
   prefix: string
   suffix: string
   occurrenceIndex: number
+  sourceLang?: string
 } | null {
   const sel = window.getSelection()
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
@@ -85,6 +86,19 @@ export function getSelectionContext(searchString?: string): {
   // This guarantees we get the context for the exact occurrence the user highlighted,
   // bypassing innerText/indexOf drifting issues.
   
+  let sourceLang: string | undefined = undefined
+  let langNode: Node | null = currentRange.startContainer
+  while (langNode && langNode !== document.body) {
+    if (langNode.nodeType === Node.ELEMENT_NODE) {
+      const l = (langNode as Element).getAttribute('lang')
+      if (l) {
+        sourceLang = l
+        break
+      }
+    }
+    langNode = langNode.parentNode
+  }
+
   // Find the closest block container
   let block: HTMLElement = document.body
   let currNode: Node | null = currentRange.startContainer
@@ -181,7 +195,13 @@ export function getSelectionContext(searchString?: string): {
     }
   }
 
-  return { prefix, suffix, occurrenceIndex }
+  const match = prefix.match(/(?:^|[.!?。！？\n])\s*([^.!?。！？\n]*)$/)
+  const finalPrefix = match ? match[1] : prefix
+
+  const suffixMatch = suffix.match(/^([^.!?。！？\n]*)/)
+  const finalSuffix = suffixMatch ? suffixMatch[1] : suffix
+
+  return { prefix: finalPrefix, suffix: finalSuffix, occurrenceIndex, sourceLang }
 }
 
 // ── Bookmark highlights ───────────────────────────────────────────────────────

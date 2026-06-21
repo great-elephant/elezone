@@ -480,13 +480,27 @@ async function speakCurrentSentence(token: number) {
   session.state = 'playing'
   await broadcastReadAloudState(session.tabId, 'playing', session.currentIndex)
 
+  let resolvedVoice = session.settings.voice || undefined
+  if (session.lang && session.settings.languageVoices) {
+    const exactMatch = session.settings.languageVoices[session.lang]
+    if (exactMatch) {
+      resolvedVoice = exactMatch
+    } else {
+      const shortLang = session.lang.split('-')[0]
+      const prefixMatch = Object.entries(session.settings.languageVoices).find(([k]) => k.startsWith(shortLang) || shortLang.startsWith(k))
+      if (prefixMatch) {
+        resolvedVoice = prefixMatch[1]
+      }
+    }
+  }
+
   chrome.tts.speak(session.sentences[session.currentIndex], {
     enqueue: false,
     onEvent: event => handleTtsEvent(token, event),
     pitch: session.settings.pitch,
     rate: session.settings.speed,
     lang: session.lang,
-    voiceName: (session.lang && session.settings.languageVoices?.[session.lang]) || session.settings.voice || undefined,
+    voiceName: resolvedVoice,
     volume: session.settings.volume,
   }, async () => {
     if (chrome.runtime.lastError && activeSession?.token === token) {
@@ -517,13 +531,30 @@ async function startReadAloudSession(
     chrome.tts.stop()
   }
 
+  let detectedLang = lang
+  if (sentences.length > 0 && chrome.i18n?.detectLanguage) {
+    const textToDetect = sentences.slice(startIndex, startIndex + 3).join(' ')
+    if (textToDetect.trim()) {
+      try {
+        const result = await new Promise<chrome.i18n.LanguageDetectionResult>(resolve => {
+          chrome.i18n.detectLanguage(textToDetect, resolve)
+        })
+        if (result.isReliable && result.languages.length > 0) {
+          detectedLang = result.languages[0].language
+        }
+      } catch (err) {
+        console.warn('Failed to detect language', err)
+      }
+    }
+  }
+
   const token = ++sessionCounter
   activeSession = {
     currentIndex: Math.max(0, Math.min(startIndex, sentences.length - 1)),
     currentRep: 0,
     sentences,
     settings,
-    lang,
+    lang: detectedLang,
     state: 'playing',
     tabId,
     token,
@@ -601,7 +632,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const response = await chrome.tabs.sendMessage(tab.id, {
     type: 'GET_SELECTION_CONTEXT',
     payload: { searchString: text }
-  }).catch(() => null) as { prefix: string; suffix: string; occurrenceIndex: number } | null
+  }).catch(() => null) as { prefix: string; suffix: string; occurrenceIndex: number; sourceLang?: string } | null
 
   if (!response) return
 
@@ -609,6 +640,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     id: crypto.randomUUID(),
     url: info.pageUrl,
     text: info.selectionText,
+    sourceLang: response.sourceLang,
     prefix: response.prefix,
     suffix: response.suffix,
     occurrenceIndex: response.occurrenceIndex,
