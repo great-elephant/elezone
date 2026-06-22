@@ -75,6 +75,14 @@ export interface RoastSettings {
   noNewItemsDaysThreshold: number
 }
 
+export interface TodoTask {
+  id: string;
+  text: string;
+  createdAt: number;
+  timeSpentSeconds?: number;
+  completedAt?: number;
+}
+
 export interface PomodoroSettings {
   focusTime: number; // minutes
   shortBreakTime: number; // minutes
@@ -113,6 +121,9 @@ export interface Settings {
   }
   roast?: RoastSettings
   pomodoro?: PomodoroSettings
+  tasks?: TodoTask[]
+  doneTasks?: TodoTask[]
+  dailyTasks?: TodoTask[]
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -169,7 +180,10 @@ export const DEFAULT_SETTINGS: Settings = {
     volume: 1,
     autoStartPomodoro: false,
     autoStartBreak: false
-  }
+  },
+  tasks: [],
+  doneTasks: [],
+  dailyTasks: []
 }
 
 export const BOOKMARK_COLORS: Record<BookmarkColor, string> = {

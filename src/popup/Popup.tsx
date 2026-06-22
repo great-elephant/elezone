@@ -1,5 +1,15 @@
-import { useEffect, useState } from "react";
-import { ReadAloudState, Settings, DEFAULT_SETTINGS, PomodoroState, PomodoroSettings } from "../shared/types";
+import { useEffect, useState, useRef } from "react";
+import { ReadAloudState, Settings, DEFAULT_SETTINGS, PomodoroState, PomodoroSettings, TodoTask } from "../shared/types";
+import { PomodoroTodoList } from "./components/PomodoroTodoList";
+
+function formatTime(seconds?: number): string | null {
+  if (!seconds) return null;
+  if (seconds < 60) return '<1m';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
 
 export default function Popup() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -7,6 +17,33 @@ export default function Popup() {
   const [readable, setReadable] = useState<boolean | null>(null);
   const [readAloudState, setReadAloudState] = useState<ReadAloudState>("idle");
   const [pomodoroState, setPomodoroState] = useState<PomodoroState | null>(null);
+  const [showTodoList, setShowTodoList] = useState(false);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+  const [showReadAloudVolumeSlider, setShowReadAloudVolumeSlider] = useState(false);
+  const todoListRef = useRef<HTMLDivElement>(null);
+  const volumeControlRef = useRef<HTMLDivElement>(null);
+  const readAloudVolumeControlRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (volumeControlRef.current && !volumeControlRef.current.contains(event.target as Node)) {
+        setShowVolumeSlider(false);
+      }
+      if (readAloudVolumeControlRef.current && !readAloudVolumeControlRef.current.contains(event.target as Node)) {
+        setShowReadAloudVolumeSlider(false);
+      }
+    }
+    if (showVolumeSlider || showReadAloudVolumeSlider) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showVolumeSlider, showReadAloudVolumeSlider]);
+
+  useEffect(() => {
+    if (pomodoroState && pomodoroState.phase !== 'idle') {
+      setShowTodoList(false);
+    }
+  }, [pomodoroState?.phase]);
 
   useEffect(() => {
     let activeTabId: number | null = null;
@@ -40,7 +77,14 @@ export default function Popup() {
       );
     });
 
-    const listener = (
+    const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
+      if (areaName === 'local' && changes['settings']) {
+        setSettings(changes['settings'].newValue as Settings);
+      }
+    };
+    chrome.storage.onChanged.addListener(handleStorageChange);
+
+    const handleMessage = (
       msg: { type: string; payload?: unknown },
       _sender: chrome.runtime.MessageSender,
     ) => {
@@ -55,8 +99,11 @@ export default function Popup() {
         setPomodoroState(msg.payload as PomodoroState);
       }
     };
-    chrome.runtime.onMessage.addListener(listener);
-    return () => chrome.runtime.onMessage.removeListener(listener);
+    chrome.runtime.onMessage.addListener(handleMessage);
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage);
+      chrome.storage.onChanged.removeListener(handleStorageChange);
+    };
   }, []);
 
   async function toggleTranslation() {
@@ -136,6 +183,59 @@ export default function Popup() {
       type: "POMODORO_COMMAND",
       payload: { action: 'updateSettings', settings: next.pomodoro }
     });
+  }
+
+  function handleTasksChange(newTasks: TodoTask[]) {
+    const next: Settings = { ...settings, tasks: newTasks, updatedAt: Date.now() };
+    setSettings(next);
+    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
+  }
+
+  function handleDoneTasksChange(newDoneTasks: TodoTask[]) {
+    const next: Settings = { ...settings, doneTasks: newDoneTasks, updatedAt: Date.now() };
+    setSettings(next);
+    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
+  }
+
+  function handleDailyTasksChange(newDailyTasks: TodoTask[]) {
+    const next: Settings = { ...settings, dailyTasks: newDailyTasks, updatedAt: Date.now() };
+    setSettings(next);
+    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
+  }
+
+  function handleCompleteTask(taskId: string) {
+    if (!settings.tasks) return;
+    const taskToComplete = settings.tasks.find(t => t.id === taskId);
+    if (!taskToComplete) return;
+
+    const newTasks = settings.tasks.filter(t => t.id !== taskId);
+
+    // Add to top of done tasks
+    const completedTask = { ...taskToComplete, completedAt: Date.now() };
+    const newDoneTasks = [completedTask, ...(settings.doneTasks || [])];
+
+    const next: Settings = { ...settings, tasks: newTasks, doneTasks: newDoneTasks, updatedAt: Date.now() };
+    setSettings(next);
+    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
+  }
+
+  function handleCompleteActiveTask() {
+    if (settings.tasks && settings.tasks.length > 0) {
+      handleCompleteTask(settings.tasks[0].id);
+    }
+  }
+
+  function handleRevertTask(taskId: string) {
+    if (!settings.doneTasks) return;
+    const taskToRevert = settings.doneTasks.find(t => t.id === taskId);
+    if (!taskToRevert) return;
+
+    const newDoneTasks = settings.doneTasks.filter(t => t.id !== taskId);
+    const newTasks = [...(settings.tasks || []), taskToRevert];
+
+    const next: Settings = { ...settings, tasks: newTasks, doneTasks: newDoneTasks, updatedAt: Date.now() };
+    setSettings(next);
+    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
   }
 
   const startDisabled = readable === false;
@@ -252,7 +352,7 @@ export default function Popup() {
         {/* Pomodoro Section */}
         <div style={styles.pomodoroBox}>
           <div style={styles.pomodoroHeader}>
-            <span>Pomodoro</span>
+            <span>Focus Zone</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>Breathe</span>
               <button
@@ -276,14 +376,100 @@ export default function Popup() {
           </div>
 
           {pomodoroState && pomodoroState.phase !== 'idle' ? (
-            <div style={styles.pomodoroDisplay}>
+            <div style={{ ...styles.pomodoroDisplay, position: 'relative' }}>
               <div style={styles.pomodoroPhaseTitle}>
                 {pomodoroState.phase === 'focus' ? 'Focus Session' : pomodoroState.phase === 'shortBreak' ? 'Short Break' : 'Long Break'}
               </div>
-              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 120, height: 120, margin: '4px auto' }}>
+              {pomodoroState.phase === 'focus' && settings.tasks?.[0] && (
+                <div style={{ ...styles.activeTaskRow, alignItems: 'flex-start' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', overflow: 'hidden', flex: 1 }} title={settings.tasks[0].text}>
+                    <span style={{ ...styles.activeTaskName, lineHeight: '16px' }}>{settings.tasks[0].text}</span>
+                    {settings.tasks[0].timeSpentSeconds ? (
+                      <span style={{ fontSize: 10, color: '#4ade80', fontWeight: 'bold', flexShrink: 0, background: 'rgba(74, 222, 128, 0.15)', padding: '2px 6px', borderRadius: '4px' }}>
+                        {formatTime(settings.tasks[0].timeSpentSeconds)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <button
+                    onClick={handleCompleteActiveTask}
+                    style={{ background: 'none', border: 'none', color: '#8888aa', cursor: 'pointer', padding: '0', display: 'flex', alignItems: 'center', borderRadius: '4px', flexShrink: 0, height: '16px' }}
+                    title="Mark as Done"
+                    onMouseEnter={(e) => (e.currentTarget.style.color = '#4ade80')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = '#8888aa')}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                  </button>
+                </div>
+              )}
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: 120, margin: '4px auto' }}>
                 <BreathingRing state={pomodoroState} settings={settings.pomodoro || DEFAULT_SETTINGS.pomodoro!} />
                 <div style={{ ...styles.pomodoroTime, margin: 0 }}>
                   {Math.floor(pomodoroState.timeRemaining / 60).toString().padStart(2, '0')}:{(pomodoroState.timeRemaining % 60).toString().padStart(2, '0')}
+                </div>
+
+                {/* Volume Control */}
+                <div
+                  ref={volumeControlRef}
+                  style={{ position: 'absolute', top: 0, right: 0, zIndex: 10, display: 'flex', flexDirection: 'column', alignItems: 'center' }}
+                  onWheel={(e) => {
+                    if (!showVolumeSlider) return;
+                    e.preventDefault();
+                    const step = 0.05;
+                    const direction = e.deltaY < 0 ? 1 : -1;
+                    const vol = settings.pomodoro?.volume ?? 1;
+                    let newVol = vol + (direction * step);
+                    newVol = Math.max(0, Math.min(2, newVol));
+
+                    const newSettings = { ...settings, updatedAt: Date.now(), pomodoro: { ...settings.pomodoro!, volume: newVol } };
+                    setSettings(newSettings);
+                    chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
+                    chrome.runtime.sendMessage({ type: "POMODORO_COMMAND", payload: { action: 'updateSettings', settings: newSettings.pomodoro } });
+                  }}
+                >
+                  <button
+                    onClick={() => setShowVolumeSlider(!showVolumeSlider)}
+                    style={{ background: '#2a2a4a', border: '1px solid #3a3a5a', borderRadius: '50%', color: '#8888aa', cursor: 'pointer', padding: 6, display: 'flex', transition: 'color 0.2s', boxShadow: '0 2px 4px rgba(0,0,0,0.2)' }}
+                    onMouseEnter={e => e.currentTarget.style.color = '#fff'}
+                    onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
+                    title={`Volume: ${Math.round(((settings.pomodoro?.volume ?? 1) / 2) * 100)}%`}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                      {(settings.pomodoro?.volume ?? 1) === 0 ? (
+                        <>
+                          <line x1="23" y1="9" x2="17" y2="15"></line>
+                          <line x1="17" y1="9" x2="23" y2="15"></line>
+                        </>
+                      ) : (
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                      )}
+                    </svg>
+                  </button>
+                  {showVolumeSlider && (
+                    <div style={{ position: 'absolute', top: '100%', marginTop: 8, left: '50%', transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                      <input
+                        autoFocus
+                        type="range"
+                        min="0"
+                        max="2"
+                        step="0.05"
+                        value={settings.pomodoro?.volume ?? 1}
+                        onChange={(e) => {
+                          const vol = parseFloat(e.target.value);
+                          const newSettings = { ...settings, updatedAt: Date.now(), pomodoro: { ...settings.pomodoro!, volume: vol } };
+                          setSettings(newSettings);
+                          chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
+                          chrome.runtime.sendMessage({ type: "POMODORO_COMMAND", payload: { action: 'updateSettings', settings: newSettings.pomodoro } });
+                        }}
+                        style={{ accentColor: '#4ade80', height: 60, width: 8, margin: 0, WebkitAppearance: 'slider-vertical' }}
+                      />
+                      <span style={{ fontSize: 10, color: '#8888aa', fontWeight: 'bold', width: '28px', textAlign: 'center' }}>
+                        {Math.round(((settings.pomodoro?.volume ?? 1) / 2) * 100)}%
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
               <div style={styles.pomodoroControls}>
@@ -296,40 +482,55 @@ export default function Popup() {
               </div>
             </div>
           ) : (
-            <div style={styles.pomodoroControls}>
-              <button className="premium-start-btn" onClick={() => sendPomodoroCmd('startFocus')}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                Start Focus
-              </button>
-            </div>
+            <>
+              <div ref={todoListRef}>
+                <div style={styles.pomodoroControls}>
+                  <button
+                    style={{ ...styles.pomodoroBtnSecondary, flex: '0 0 40px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}
+                    onClick={() => setShowTodoList(!showTodoList)}
+                    title={settings.tasks && settings.tasks.length > 0 ? settings.tasks[0].text : "Todo List"}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="8" y1="6" x2="21" y2="6"></line>
+                      <line x1="8" y1="12" x2="21" y2="12"></line>
+                      <line x1="8" y1="18" x2="21" y2="18"></line>
+                      <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                      <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                      <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                    </svg>
+                    {settings.tasks && settings.tasks.length > 0 && (
+                      <span style={{ position: 'absolute', top: -5, right: -5, background: '#4ade80', color: '#1a1a2e', fontSize: 9, fontWeight: 'bold', padding: '2px 4px', borderRadius: 10 }}>{settings.tasks.length}</span>
+                    )}
+                  </button>
+                  <button className="premium-start-btn" onClick={() => sendPomodoroCmd('startFocus')}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    Start Focus
+                  </button>
+                </div>
+                {showTodoList && (
+                  <div style={{ position: 'relative', marginTop: 8 }}>
+                    <PomodoroTodoList
+                      tasks={settings.tasks || []}
+                      doneTasks={settings.doneTasks || []}
+                      dailyTasks={settings.dailyTasks || []}
+                      onTasksChange={handleTasksChange}
+                      onDoneTasksChange={handleDoneTasksChange}
+                      onDailyTasksChange={handleDailyTasksChange}
+                      onCompleteTask={handleCompleteTask}
+                      onRevertTask={handleRevertTask}
+                    />
+                  </div>
+                )}
+              </div>
+            </>
           )}
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
-            <span style={{ fontSize: 11, color: '#8888aa', width: 45 }}>Volume</span>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.05"
-              value={settings.pomodoro?.volume ?? 1}
-              onChange={(e) => {
-                const vol = parseFloat(e.target.value);
-                const newSettings = { ...settings, updatedAt: Date.now(), pomodoro: { ...settings.pomodoro!, volume: vol } };
-                setSettings(newSettings);
-                chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
-                chrome.runtime.sendMessage({ type: "POMODORO_COMMAND", payload: { action: 'updateSettings', settings: newSettings.pomodoro } });
-              }}
-              style={{ flex: 1, accentColor: '#4ade80', height: 4 }}
-            />
-            <span style={{ fontSize: 11, color: '#8888aa', width: 40, textAlign: 'right' }}>
-              {Math.round(((settings.pomodoro?.volume ?? 1) / 2) * 100)}%
-            </span>
-          </div>
+
         </div>
 
         <div style={styles.pomodoroBox}>
           <div style={styles.pomodoroHeader}>
-            <span>Page Read Aloud</span>
+            <span>Reading Assistant</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>Translate</span>
               <button
@@ -350,7 +551,7 @@ export default function Popup() {
             </div>
           </div>
           <div style={{ fontSize: 11, color: '#666688', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
-            Read aloud and translate text on the fly.
+            Read aloud and translate website text on the fly.
           </div>
 
           {readAloudState === 'idle' ? (
@@ -375,29 +576,68 @@ export default function Popup() {
                 <button style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }} onClick={() => controlReadAloud('resume')}>Resume</button>
               )}
               <button style={{ background: 'rgba(255,100,100,0.5)', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }} onClick={() => controlReadAloud('stop')}>Stop</button>
+
+              <div
+                ref={readAloudVolumeControlRef}
+                style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+                onWheel={(e) => {
+                  if (!showReadAloudVolumeSlider) return;
+                  e.preventDefault();
+                  const step = 0.05;
+                  const direction = e.deltaY < 0 ? 1 : -1;
+                  const vol = settings.readAloud?.volume ?? 1;
+                  let newVol = vol + (direction * step);
+                  newVol = Math.max(0, Math.min(1, newVol));
+
+                  const newSettings = { ...settings, updatedAt: Date.now(), readAloud: { ...settings.readAloud!, volume: newVol } };
+                  setSettings(newSettings);
+                  chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
+                }}
+              >
+                <button
+                  onClick={() => setShowReadAloudVolumeSlider(!showReadAloudVolumeSlider)}
+                  style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: 4, display: 'flex', transition: 'background 0.2s' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.3)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
+                  title={`Volume: ${Math.round((settings.readAloud?.volume ?? 1) * 100)}%`}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    {(settings.readAloud?.volume ?? 1) === 0 ? (
+                      <>
+                        <line x1="23" y1="9" x2="17" y2="15"></line>
+                        <line x1="17" y1="9" x2="23" y2="15"></line>
+                      </>
+                    ) : (
+                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    )}
+                  </svg>
+                </button>
+                {showReadAloudVolumeSlider && (
+                  <div style={{ position: 'absolute', bottom: '100%', marginBottom: 8, left: '50%', transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, zIndex: 10, background: '#1a1a2e', padding: '8px 4px', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', border: '1px solid #3a3a5a' }}>
+                    <span style={{ fontSize: 10, color: '#8888aa', fontWeight: 'bold', width: '28px', textAlign: 'center' }}>
+                      {Math.round((settings.readAloud?.volume ?? 1) * 100)}%
+                    </span>
+                    <input
+                      autoFocus
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={settings.readAloud?.volume ?? 1}
+                      onChange={(e) => {
+                        const vol = parseFloat(e.target.value);
+                        const newSettings = { ...settings, updatedAt: Date.now(), readAloud: { ...settings.readAloud!, volume: vol } };
+                        setSettings(newSettings);
+                        chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
+                      }}
+                      style={{ accentColor: '#4ade80', height: 60, width: 8, margin: 0, WebkitAppearance: 'slider-vertical' }}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
           )}
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
-            <span style={{ fontSize: 11, color: '#8888aa', width: 45 }}>Volume</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={settings.readAloud?.volume ?? 1}
-              onChange={(e) => {
-                const vol = parseFloat(e.target.value);
-                const newSettings = { ...settings, updatedAt: Date.now(), readAloud: { ...settings.readAloud, volume: vol } };
-                setSettings(newSettings);
-                chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
-              }}
-              style={{ flex: 1, accentColor: '#4ade80', height: 4 }}
-            />
-            <span style={{ fontSize: 11, color: '#8888aa', width: 32, textAlign: 'right' }}>
-              {Math.round((settings.readAloud?.volume ?? 1) * 100)}%
-            </span>
-          </div>
         </div>
 
         <button style={styles.dashboardBtn} onClick={openDashboard}>
@@ -455,21 +695,19 @@ function BreathingRing({ state, settings }: { state: PomodoroState, settings: Po
     return () => cancelAnimationFrame(frameId);
   }, [state.status, state.breathStartTime, settings]);
 
-  if (settings.breathingEnabled === false || state.status !== 'running' || !state.breathStartTime || progress.activePhases.length === 0) {
-    return null;
-  }
-
   const radius = 54;
   const strokeWidth = 6;
   const normalizedRadius = radius - strokeWidth / 2;
   const circumference = normalizedRadius * 2 * Math.PI;
-  const totalCycleDuration = progress.activePhases.reduce((acc, p) => acc + p.duration, 0);
+
+  const showBreathing = settings.breathingEnabled !== false && state.status === 'running' && !!state.breathStartTime && progress.activePhases.length > 0;
+  const totalCycleDuration = showBreathing ? progress.activePhases.reduce((acc, p) => acc + p.duration, 0) : 0;
 
   return (
     <svg width={112} height={112} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-90deg)', pointerEvents: 'none' }}>
       <circle cx="56" cy="56" r={normalizedRadius} fill="transparent" stroke="#2a2a4a" strokeWidth={strokeWidth} />
 
-      {progress.activePhases.map((phase, k) => {
+      {showBreathing && progress.activePhases.map((phase, k) => {
         if (k > progress.currentPhaseIdx) return null;
 
         let accumulatedDuration = 0;
@@ -609,6 +847,36 @@ const styles: Record<string, React.CSSProperties> = {
   pomodoroPhaseTitle: {
     fontSize: 12,
     color: "#8888aa"
+  },
+  activeTaskRow: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '8px',
+    width: '100%',
+    marginTop: '4px',
+    background: '#2a2a4a',
+    padding: '6px 12px',
+    borderRadius: '6px',
+    boxSizing: 'border-box',
+  },
+  activeTaskLabel: {
+    fontSize: '9px',
+    fontWeight: 'bold',
+    color: '#8888aa',
+    letterSpacing: '0.5px',
+    flexShrink: 0,
+  },
+  activeTaskName: {
+    fontSize: '13px',
+    color: '#4ade80',
+    fontWeight: 600,
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    wordBreak: 'break-word',
+    flex: 1,
   },
   pomodoroTime: {
     fontSize: 26,

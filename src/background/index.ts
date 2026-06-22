@@ -19,6 +19,9 @@ import {
   ReadAloudSettings,
   ReadAloudState,
   Settings,
+  PomodoroStatus,
+  PomodoroPhase,
+  PomodoroState,
 } from '../shared/types'
 import { translateInContext, ContextTranslateRequest } from './aiTranslate'
 import { getRandomRoast, RoastLevel } from '../shared/roasts'
@@ -61,6 +64,10 @@ let activeSession: ActiveReadAloudSession | null = null
 let sessionCounter = 0
 let ttsRestartTimeout: ReturnType<typeof setTimeout> | null = null
 let speakingWatchdog: ReturnType<typeof setInterval> | null = null
+
+let focusTimeAccumulator = 0;
+let lastPomodoroStatus: PomodoroStatus = 'stopped';
+let lastPomodoroPhase: PomodoroPhase = 'idle';
 
 const COLOR_EMOJI: Record<BookmarkColor, string> = {
   red: '🔴', yellow: '🟡', cyan: '🔵', green: '🟢', blue: '💙',
@@ -673,6 +680,19 @@ chrome.runtime.onMessage.addListener((msg: { type: string; payload?: unknown }, 
 
 // Deleted old srs imports
 
+async function flushFocusTimeAccumulator() {
+  if (focusTimeAccumulator <= 0) return;
+  const secs = focusTimeAccumulator;
+  focusTimeAccumulator = 0;
+  
+  const settings = await getSettings();
+  if (settings.tasks && settings.tasks.length > 0) {
+    const activeTask = settings.tasks[0];
+    activeTask.timeSpentSeconds = (activeTask.timeSpentSeconds || 0) + secs;
+    await saveSettings(settings);
+  }
+}
+
 async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome.runtime.MessageSender): Promise<unknown> {
   switch (msg.type) {
     case 'GET_ITEMS':
@@ -780,6 +800,23 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
           }
         )
       })
+    case 'POMODORO_STATE_UPDATE': {
+      const state = msg.payload as PomodoroState;
+      if (lastPomodoroStatus === 'running' && (state.status !== 'running' || state.phase !== 'focus') && lastPomodoroPhase === 'focus') {
+        if (focusTimeAccumulator > 0) {
+          await flushFocusTimeAccumulator();
+        }
+      }
+      if (state.phase === 'focus' && state.status === 'running') {
+        focusTimeAccumulator++;
+        if (focusTimeAccumulator >= 60) {
+          await flushFocusTimeAccumulator();
+        }
+      }
+      lastPomodoroStatus = state.status;
+      lastPomodoroPhase = state.phase;
+      return { ok: true };
+    }
     case 'POMODORO_COMMAND':
       await setupOffscreenDocument('src/offscreen/index.html');
       return chrome.runtime.sendMessage({ type: 'POMODORO_COMMAND', payload: msg.payload });

@@ -22,28 +22,28 @@ function playChime() {
   if (audioCtx.state === 'suspended') {
     audioCtx.resume();
   }
-  
+
   // A bright, exciting "success" arpeggio (C major: C5, E5, G5, C6)
   const notes = [523.25, 659.25, 783.99, 1046.50];
   const now = audioCtx.currentTime;
-  
+
   notes.forEach((freq, index) => {
     const osc = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
-    
+
     osc.type = 'triangle'; // Bell-like bright tone
-    osc.frequency.setValueAtTime(freq, now + index * 0.1);
-    
+    osc.frequency.setValueAtTime(freq, now + index * 0.15);
+
     const vol = Math.min(settings.volume ?? 1, 1.5); // Cap chime volume to prevent clipping
-    gainNode.gain.setValueAtTime(0, now + index * 0.1);
-    gainNode.gain.linearRampToValueAtTime(0.2 * vol, now + index * 0.1 + 0.05); // quick attack
-    gainNode.gain.exponentialRampToValueAtTime(0.01 * vol, now + index * 0.1 + 1.0); // smooth decay
-    
+    gainNode.gain.setValueAtTime(0, now + index * 0.15);
+    gainNode.gain.linearRampToValueAtTime(0.2 * vol, now + index * 0.15 + 0.05); // quick attack
+    gainNode.gain.setTargetAtTime(0, now + index * 0.15 + 0.05, 0.38); // natural exponential tail to silence
+
     osc.connect(gainNode);
     gainNode.connect(audioCtx.destination);
-    
-    osc.start(now + index * 0.1);
-    osc.stop(now + index * 0.1 + 1.5);
+
+    osc.start(now + index * 0.15);
+    osc.stop(now + index * 0.15 + 2.0);
   });
 }
 
@@ -51,7 +51,7 @@ function playBattleChime() {
   if (audioCtx.state === 'suspended') {
     audioCtx.resume();
   }
-  
+
   const now = audioCtx.currentTime;
   const vol = Math.min(settings.volume ?? 1, 1.5); // Cap chime volume to prevent clipping
   const bpm = 140; // fast
@@ -64,31 +64,31 @@ function playBattleChime() {
     { f: 783.99, start: 1.5 * beat, dur: 1.5 * beat }, // G5
     // Rest for 0.5 beat
     { f: 659.25, start: 3.5 * beat, dur: 0.5 * beat }, // E5
-    { f: 783.99, start: 4.0 * beat, dur: 2.0 * beat }, // G5
+    { f: 783.99, start: 4.0 * beat, dur: 2.4 * beat }, // G5
   ];
 
   notes.forEach(({ f, start, dur }) => {
     const osc = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
-    
+
     // Sawtooth wave gives it a brassy, bugle-like sound
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(f, now + start);
-    
+
     // A bit of lowpass filter to make the sawtooth less harsh
     const filter = audioCtx.createBiquadFilter();
     filter.type = 'lowpass';
     filter.frequency.setValueAtTime(2000, now + start);
-    
+
     gainNode.gain.setValueAtTime(0, now + start);
     gainNode.gain.linearRampToValueAtTime(0.15 * vol, now + start + 0.05); // attack
     gainNode.gain.setValueAtTime(0.15 * vol, now + start + dur - 0.1); // sustain
     gainNode.gain.linearRampToValueAtTime(0, now + start + dur); // release
-    
+
     osc.connect(filter);
     filter.connect(gainNode);
     gainNode.connect(audioCtx.destination);
-    
+
     osc.start(now + start);
     osc.stop(now + start + dur);
   });
@@ -109,13 +109,12 @@ function initBreathingSound() {
   const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
   const data = buffer.getChannelData(0);
 
-  const vol = settings.volume ?? 1;
   let lastOut = 0;
   for (let i = 0; i < bufferSize; i++) {
     const white = Math.random() * 2 - 1;
     data[i] = (lastOut + (0.02 * white)) / 1.02; // Brown noise approximation
     lastOut = data[i];
-    data[i] *= 3.5 * vol;
+    data[i] *= 3.5; // Base gain
   }
 
   noiseNode = audioCtx.createBufferSource();
@@ -240,7 +239,7 @@ function animateIcon() {
       // Draw the currently active segment (partial)
       const currentPhaseStartAngle = baseAngle + (startAccumulated / totalCycleDuration) * 2 * Math.PI;
       const currentPhaseAngle = (activePhases[currentPhaseIdx].duration / totalCycleDuration) * phaseProgress * 2 * Math.PI;
-      
+
       ctx.beginPath();
       ctx.arc(CENTER, CENTER, RADIUS, currentPhaseStartAngle, currentPhaseStartAngle + currentPhaseAngle);
       ctx.strokeStyle = activePhases[currentPhaseIdx].color;
@@ -319,7 +318,7 @@ function finishPomodoroSession() {
   } else {
     playChime();
   }
-  
+
   state.status = 'stopped';
 
   let nextPhase = state.phase;
@@ -346,12 +345,12 @@ function finishPomodoroSession() {
   updateBadge();
   broadcastState();
 
-  const autoStart = (nextPhase === 'focus' && settings.autoStartPomodoro) || 
-                    ((nextPhase === 'shortBreak' || nextPhase === 'longBreak') && settings.autoStartBreak);
+  const autoStart = (nextPhase === 'focus' && settings.autoStartPomodoro) ||
+    ((nextPhase === 'shortBreak' || nextPhase === 'longBreak') && settings.autoStartBreak);
 
   if (autoStart) {
     // Wait for the chime to finish before auto-starting
-    const delayMs = currentPhase === 'shortBreak' || currentPhase === 'longBreak' ? 2500 : 2000;
+    const delayMs = currentPhase === 'shortBreak' || currentPhase === 'longBreak' ? 3600 : 2800;
     setTimeout(() => {
       if (state.status === 'stopped' && state.phase === nextPhase) {
         state.status = 'running';
@@ -379,7 +378,7 @@ function tick() {
     const e = settings.exhale ?? 8;
     const h2 = settings.hold2 ?? 4;
     const totalCycle = i + h1 + e + h2;
-    
+
     if (settings.breathingEnabled === false || totalCycle === 0) {
       finishPomodoroSession();
     }
@@ -483,18 +482,18 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
       chrome.runtime.sendMessage({
         type: 'OCR_PROGRESS',
         payload: { status, progress, tabId }
-      }).catch(() => {});
+      }).catch(() => { });
     }).then(text => {
       chrome.runtime.sendMessage({
         type: 'OCR_COMPLETE',
         payload: { text, tabId }
-      }).catch(() => {});
+      }).catch(() => { });
     }).catch(err => {
       console.error('OCR Error:', err);
       chrome.runtime.sendMessage({
         type: 'OCR_COMPLETE',
         payload: { error: err ? (err.message || err.toString()) : 'Unknown error', tabId }
-      }).catch(() => {});
+      }).catch(() => { });
     });
     sendResponse({ ack: true }); // Respond immediately
     return true;
