@@ -245,7 +245,12 @@ export function PomodoroTodoList({ tasks, doneTasks, dailyTasks, onTasksChange, 
                 <div key={task.id} style={{ ...styles.doneItem, ...(index === doneTasks.length - 1 ? { marginBottom: 0 } : {}) }}>
                   <div style={styles.doneContent}>
                     <span style={styles.doneText}>{task.text}</span>
-                    <span style={styles.doneTime}>{formatTime(task.timeSpentSeconds || 0)}</span>
+                    <span 
+                      style={styles.doneTime}
+                      title={(task.actualStartTime || task.completedAt) ? `${task.actualStartTime ? new Date(task.actualStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'} - ${task.completedAt ? new Date(task.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}` : undefined}
+                    >
+                      {formatTime(task.timeSpentSeconds || 0)}
+                    </span>
                   </div>
                   <div style={styles.actionBtns}>
                     <button

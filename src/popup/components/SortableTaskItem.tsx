@@ -97,7 +97,10 @@ export function SortableTaskItem({ task, onDelete, onComplete, onEdit, isLast, v
               {task.text}
             </span>
             {task.timeSpentSeconds ? (
-              <span style={styles.timeSpent}>
+              <span 
+                style={styles.timeSpent}
+                title={task.actualStartTime ? `Started: ${new Date(task.actualStartTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : undefined}
+              >
                 {formatTime(task.timeSpentSeconds)}
               </span>
             ) : null}

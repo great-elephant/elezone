@@ -698,6 +698,9 @@ async function flushFocusTimeAccumulator() {
   const settings = await getSettings();
   if (settings.tasks && settings.tasks.length > 0) {
     const activeTask = settings.tasks[0];
+    if (!activeTask.actualStartTime) {
+      activeTask.actualStartTime = Date.now() - (secs * 1000);
+    }
     activeTask.timeSpentSeconds = (activeTask.timeSpentSeconds || 0) + secs;
     await saveSettings(settings);
   }

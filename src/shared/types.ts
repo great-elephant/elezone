@@ -82,6 +82,7 @@ export interface TodoTask {
   createdAt: number;
   timeSpentSeconds?: number;
   completedAt?: number;
+  actualStartTime?: number;
 }
 
 export interface PomodoroSettings {
