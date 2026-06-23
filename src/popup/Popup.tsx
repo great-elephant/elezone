@@ -231,7 +231,7 @@ export default function Popup() {
     if (!taskToRevert) return;
 
     const newDoneTasks = settings.doneTasks.filter(t => t.id !== taskId);
-    const newTasks = [...(settings.tasks || []), taskToRevert];
+    const newTasks = [taskToRevert, ...(settings.tasks || [])];
 
     const next: Settings = { ...settings, tasks: newTasks, doneTasks: newDoneTasks, updatedAt: Date.now() };
     setSettings(next);
