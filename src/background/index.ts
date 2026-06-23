@@ -50,6 +50,7 @@ async function setupOffscreenDocument(path: string) {
 type ActiveReadAloudSession = {
   currentIndex: number
   currentRep: number
+  currentPageRep?: number
   sentences: string[]
   settings: ReadAloudSettings
   lang?: string
@@ -462,6 +463,15 @@ function handleTtsEvent(token: number, event: chrome.tts.TtsEvent) {
     session.currentRep = 0
     session.currentIndex += 1
     if (session.currentIndex >= session.sentences.length) {
+      const pageRep = session.settings.pageRepetition || 1
+      session.currentPageRep = (session.currentPageRep || 1) + 1
+      
+      if (session.currentPageRep <= pageRep) {
+        session.currentIndex = 0
+        void speakCurrentSentence(token)
+        return
+      }
+
       void stopActiveSession()
       return
     }

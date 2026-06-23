@@ -40,6 +40,7 @@ export interface SavedItem {
 export interface ReadAloudSettings {
   speed: number
   repetition: number
+  pageRepetition?: number
   voice: string
   languageVoices?: Record<string, string> // Maps language code to voiceName
   pitch: number
@@ -132,6 +133,7 @@ export const DEFAULT_SETTINGS: Settings = {
   readAloud: {
     speed: 1,
     repetition: 1,
+    pageRepetition: 1,
     voice: '',
     pitch: 1,
     volume: 1,

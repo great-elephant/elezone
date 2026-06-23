@@ -285,11 +285,19 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             onChange={e => set('readAloud', 'speed', parseFloat(e.target.value))} />
         </Field>
 
-        <Field label={`Repeat each sentence: ${ra.repetition}×`}>
-          <input type="range" min={1} max={5} step={1} value={ra.repetition}
-            style={styles.range}
-            onChange={e => set('readAloud', 'repetition', parseInt(e.target.value))} />
-        </Field>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <Field label="Repeat each sentence">
+            <input type="number" min={1} max={99} value={ra.repetition}
+              style={styles.select}
+              onChange={e => set('readAloud', 'repetition', Math.max(1, parseInt(e.target.value) || 1))} />
+          </Field>
+
+          <Field label="Repeat whole page">
+            <input type="number" min={1} max={99} value={ra.pageRepetition ?? 1}
+              style={styles.select}
+              onChange={e => set('readAloud', 'pageRepetition', Math.max(1, parseInt(e.target.value) || 1))} />
+          </Field>
+        </div>
 
         <Field label="Default Voice (Fallback)">
           <div style={{ display: 'flex', gap: 8 }}>
