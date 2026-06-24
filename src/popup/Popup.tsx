@@ -673,7 +673,10 @@ function BreathingRing({ state, settings }: { state: PomodoroState, settings: Po
   const [progress, setProgress] = useState({ currentPhaseIdx: 0, phaseProgress: 0, activePhases: [] as any[] });
 
   useEffect(() => {
-    if (state.status !== 'running' || settings.breathingEnabled === false || !state.breathStartTime) return;
+    if (state.status !== 'running' || settings.breathingEnabled === false || !state.breathStartTime) {
+      setProgress({ currentPhaseIdx: 0, phaseProgress: 0, activePhases: [] });
+      return;
+    }
 
     let frameId: number;
     const i = settings.inhale ?? 8;

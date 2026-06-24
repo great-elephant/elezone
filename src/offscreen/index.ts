@@ -427,8 +427,14 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
       case 'updateSettings':
         if (settings.breathingEnabled === false) {
           stopBreathingSound();
+          breathStartTime = 0;
+          state.breathStartTime = 0;
         } else if (state.status === 'running') {
           initBreathingSound();
+          if (!breathStartTime) {
+            breathStartTime = Date.now();
+            state.breathStartTime = breathStartTime;
+          }
         }
         break;
       case 'startFocus':
