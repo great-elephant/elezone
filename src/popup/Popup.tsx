@@ -483,7 +483,7 @@ export default function Popup() {
                           chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
                           chrome.runtime.sendMessage({ type: "POMODORO_COMMAND", payload: { action: 'updateSettings', settings: newSettings.pomodoro } });
                         }}
-                        style={{ accentColor: '#4ade80', height: 60, width: 8, margin: 0, WebkitAppearance: 'slider-vertical' }}
+                        style={{ accentColor: '#4ade80', height: 60, width: 8, margin: 0, writingMode: 'vertical-lr', direction: 'rtl' }}
                       />
                       <span style={{ fontSize: 10, color: '#8888aa', fontWeight: 'bold', width: '28px', textAlign: 'center' }}>
                         {Math.round(((settings.pomodoro?.volume ?? 1) / 2) * 100)}%
@@ -652,7 +652,7 @@ export default function Popup() {
                         setSettings(newSettings);
                         chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
                       }}
-                      style={{ accentColor: '#4ade80', height: 60, width: 8, margin: 0, WebkitAppearance: 'slider-vertical' }}
+                      style={{ accentColor: '#4ade80', height: 60, width: 8, margin: 0, writingMode: 'vertical-lr', direction: 'rtl' }}
                     />
                   </div>
                 )}

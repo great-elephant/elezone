@@ -313,10 +313,22 @@ function restoreDefaultIcon() {
 
 function finishPomodoroSession() {
   const currentPhase = state.phase;
+
+  let willSkipBreak = false;
+  if (state.phase === 'focus') {
+    const isLongBreak = (state.completedFocusSessions + 1) % settings.longBreakInterval === 0;
+    if (isLongBreak && settings.longBreakTime === 0) willSkipBreak = true;
+    if (!isLongBreak && settings.shortBreakTime === 0) willSkipBreak = true;
+  }
+
   if (currentPhase === 'shortBreak' || currentPhase === 'longBreak') {
     playBattleChime();
   } else {
-    playChime();
+    if (willSkipBreak) {
+      playBattleChime();
+    } else {
+      playChime();
+    }
   }
 
   state.status = 'stopped';
@@ -326,12 +338,17 @@ function finishPomodoroSession() {
 
   if (state.phase === 'focus') {
     state.completedFocusSessions++;
-    if (state.completedFocusSessions % settings.longBreakInterval === 0) {
-      nextPhase = 'longBreak';
-      nextTime = settings.longBreakTime * 60;
+    if (willSkipBreak) {
+      nextPhase = 'focus';
+      nextTime = settings.focusTime * 60;
     } else {
-      nextPhase = 'shortBreak';
-      nextTime = settings.shortBreakTime * 60;
+      if (state.completedFocusSessions % settings.longBreakInterval === 0) {
+        nextPhase = 'longBreak';
+        nextTime = settings.longBreakTime * 60;
+      } else {
+        nextPhase = 'shortBreak';
+        nextTime = settings.shortBreakTime * 60;
+      }
     }
   } else {
     nextPhase = 'focus';

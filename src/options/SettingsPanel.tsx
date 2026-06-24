@@ -412,14 +412,14 @@ export default function SettingsPanel({ settings, onChange }: Props) {
               onChange={e => setPomodoro('focusTime', parseInt(e.target.value) || 25)} />
           </Field>
           <Field label="Short Break (min)">
-            <input type="number" min={1} max={60} value={pm.shortBreakTime}
+            <input type="number" min={0} max={60} value={pm.shortBreakTime}
               style={styles.select}
-              onChange={e => setPomodoro('shortBreakTime', parseInt(e.target.value) || 5)} />
+              onChange={e => { const v = parseInt(e.target.value); setPomodoro('shortBreakTime', isNaN(v) ? 5 : Math.max(0, v)); }} />
           </Field>
           <Field label="Long Break (min)">
-            <input type="number" min={1} max={120} value={pm.longBreakTime}
+            <input type="number" min={0} max={120} value={pm.longBreakTime}
               style={styles.select}
-              onChange={e => setPomodoro('longBreakTime', parseInt(e.target.value) || 15)} />
+              onChange={e => { const v = parseInt(e.target.value); setPomodoro('longBreakTime', isNaN(v) ? 15 : Math.max(0, v)); }} />
           </Field>
         </div>
 
