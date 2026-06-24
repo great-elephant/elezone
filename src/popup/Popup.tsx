@@ -238,6 +238,26 @@ export default function Popup() {
     chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
   }
 
+  function handleStartFocusTask(taskId: string) {
+    if (!settings.tasks) return;
+    const taskIndex = settings.tasks.findIndex(t => t.id === taskId);
+    if (taskIndex > -1) {
+      const taskToFocus = settings.tasks[taskIndex];
+      const newTasks = [...settings.tasks];
+      newTasks.splice(taskIndex, 1);
+      newTasks.unshift(taskToFocus);
+
+      const next: Settings = { ...settings, tasks: newTasks, updatedAt: Date.now() };
+      setSettings(next);
+      chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
+
+      if (!pomodoroState || pomodoroState.phase === 'idle') {
+        sendPomodoroCmd('startFocus');
+      }
+      setShowTodoList(false);
+    }
+  }
+
   const startDisabled = readable === false;
 
   const ocrLangMap: Record<string, string> = {
@@ -518,6 +538,7 @@ export default function Popup() {
                       onDailyTasksChange={handleDailyTasksChange}
                       onCompleteTask={handleCompleteTask}
                       onRevertTask={handleRevertTask}
+                      onStartFocus={handleStartFocusTask}
                     />
                   </div>
                 )}

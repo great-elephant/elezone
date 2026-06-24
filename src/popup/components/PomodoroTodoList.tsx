@@ -26,6 +26,7 @@ interface Props {
   onDailyTasksChange?: (tasks: TodoTask[]) => void;
   onCompleteTask?: (id: string) => void;
   onRevertTask?: (id: string) => void;
+  onStartFocus?: (id: string) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -36,7 +37,7 @@ function formatTime(seconds: number): string {
   return `${m}m`;
 }
 
-export function PomodoroTodoList({ tasks, doneTasks, dailyTasks, onTasksChange, onDoneTasksChange, onDailyTasksChange, onCompleteTask, onRevertTask }: Props) {
+export function PomodoroTodoList({ tasks, doneTasks, dailyTasks, onTasksChange, onDoneTasksChange, onDailyTasksChange, onCompleteTask, onRevertTask, onStartFocus }: Props) {
   const [activeTab, setActiveTab] = useState<'todo' | 'daily' | 'done'>('todo');
   const [inputValue, setInputValue] = useState('');
 
@@ -230,6 +231,7 @@ export function PomodoroTodoList({ tasks, doneTasks, dailyTasks, onTasksChange, 
                         }
                       }}
                       onEdit={handleEdit}
+                      onStartFocus={onStartFocus}
                       isLast={index === arr.length - 1}
                       variant={activeTab === 'todo' ? 'todo' : 'daily'}
                     />

@@ -8,6 +8,7 @@ interface Props {
   onDelete: (id: string) => void;
   onComplete: (id: string) => void;
   onEdit: (id: string, text: string) => void;
+  onStartFocus?: (id: string) => void;
   isLast?: boolean;
   variant?: 'todo' | 'daily';
 }
@@ -21,7 +22,7 @@ function formatTime(seconds?: number): string | null {
   return `${m}m`;
 }
 
-export function SortableTaskItem({ task, onDelete, onComplete, onEdit, isLast, variant = 'todo' }: Props) {
+export function SortableTaskItem({ task, onDelete, onComplete, onEdit, onStartFocus, isLast, variant = 'todo' }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(task.text);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -109,6 +110,19 @@ export function SortableTaskItem({ task, onDelete, onComplete, onEdit, isLast, v
       </div>
 
       <div style={styles.actions}>
+        {onStartFocus && variant === 'todo' && (
+          <button
+            onClick={() => onStartFocus(task.id)}
+            style={styles.actionBtn}
+            title="Start Focus"
+            onMouseEnter={(e) => (e.currentTarget.style.color = '#4f6ef7')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = '#8888aa')}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+          </button>
+        )}
         <button
           onClick={() => onComplete(task.id)}
           style={styles.actionBtn}
