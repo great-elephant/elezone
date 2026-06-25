@@ -253,7 +253,7 @@ async function evaluateSlackingState(testMode = false) {
   const today = getLocalYMD()
   const todayPoints = activityLog[today]?.points || 0
 
-  if (todayPoints >= dailyGoal && !testMode) {
+  if (todayPoints > 0 && !testMode) {
     slacking = false
   }
 
@@ -335,6 +335,7 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
     
     await saveItem(updated)
     await logActivity('review')
+    await evaluateSlackingState(false)
   }
 })
 
@@ -669,6 +670,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
   await saveItem(bookmark)
   await logActivity('save')
+  await evaluateSlackingState(false)
   chrome.tabs.sendMessage(tab.id, { type: 'HIGHLIGHT_BOOKMARK', payload: bookmark }).catch(() => { })
 })
 
@@ -734,6 +736,7 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return await syncToDrive((msg.payload as any)?.interactive)
     case 'LOG_ACTIVITY':
       await logActivity(msg.payload as 'save' | 'review')
+      await evaluateSlackingState(false)
       return { ok: true }
     case 'GET_ACTIVITY_LOG':
       return getActivityLog()
