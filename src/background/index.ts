@@ -69,6 +69,7 @@ let speakingWatchdog: ReturnType<typeof setInterval> | null = null
 let focusTimeAccumulator = 0;
 let lastPomodoroStatus: PomodoroStatus = 'stopped';
 let lastPomodoroPhase: PomodoroPhase = 'idle';
+let lastPomodoroTaskId: string | null | undefined = null;
 
 const COLOR_EMOJI: Record<BookmarkColor, string> = {
   red: '🔴', yellow: '🟡', cyan: '🔵', green: '🟢', blue: '💙',
@@ -691,18 +692,21 @@ chrome.runtime.onMessage.addListener((msg: { type: string; payload?: unknown }, 
 // Deleted old srs imports
 
 async function flushFocusTimeAccumulator() {
-  if (focusTimeAccumulator <= 0) return;
+  if (focusTimeAccumulator <= 0 || !lastPomodoroTaskId) return;
   const secs = focusTimeAccumulator;
   focusTimeAccumulator = 0;
   
   const settings = await getSettings();
   if (settings.tasks && settings.tasks.length > 0) {
-    const activeTask = settings.tasks[0];
-    if (!activeTask.actualStartTime) {
-      activeTask.actualStartTime = Date.now() - (secs * 1000);
+    const taskIndex = settings.tasks.findIndex(t => t.id === lastPomodoroTaskId);
+    if (taskIndex > -1) {
+      const activeTask = settings.tasks[taskIndex];
+      if (!activeTask.actualStartTime) {
+        activeTask.actualStartTime = Date.now() - (secs * 1000);
+      }
+      activeTask.timeSpentSeconds = (activeTask.timeSpentSeconds || 0) + secs;
+      await saveSettings(settings);
     }
-    activeTask.timeSpentSeconds = (activeTask.timeSpentSeconds || 0) + secs;
-    await saveSettings(settings);
   }
 }
 
@@ -828,6 +832,7 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       }
       lastPomodoroStatus = state.status;
       lastPomodoroPhase = state.phase;
+      lastPomodoroTaskId = state.activeTaskId;
       return { ok: true };
     }
     case 'POMODORO_COMMAND':

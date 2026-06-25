@@ -161,8 +161,8 @@ export default function Popup() {
     window.close();
   }
 
-  function sendPomodoroCmd(action: string) {
-    chrome.runtime.sendMessage({ type: "POMODORO_COMMAND", payload: { action, settings: settings.pomodoro || DEFAULT_SETTINGS.pomodoro } }, (res: PomodoroState) => {
+  function sendPomodoroCmd(action: string, taskId?: string) {
+    chrome.runtime.sendMessage({ type: "POMODORO_COMMAND", payload: { action, taskId, settings: settings.pomodoro || DEFAULT_SETTINGS.pomodoro } }, (res: PomodoroState) => {
       void chrome.runtime.lastError;
       if (res) setPomodoroState(res);
     });
@@ -220,8 +220,8 @@ export default function Popup() {
   }
 
   function handleCompleteActiveTask() {
-    if (settings.tasks && settings.tasks.length > 0) {
-      handleCompleteTask(settings.tasks[0].id);
+    if (pomodoroState?.activeTaskId) {
+      handleCompleteTask(pomodoroState.activeTaskId);
     }
   }
 
@@ -252,11 +252,13 @@ export default function Popup() {
       chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
 
       if (!pomodoroState || pomodoroState.phase === 'idle') {
-        sendPomodoroCmd('startFocus');
+        sendPomodoroCmd('startFocus', taskId);
       }
       setShowTodoList(false);
     }
   }
+
+  const activeTask = settings.tasks?.find(t => t.id === pomodoroState?.activeTaskId);
 
   const startDisabled = readable === false;
 
@@ -400,13 +402,13 @@ export default function Popup() {
               <div style={styles.pomodoroPhaseTitle}>
                 {pomodoroState.phase === 'focus' ? 'Focus Session' : pomodoroState.phase === 'shortBreak' ? 'Short Break' : 'Long Break'}
               </div>
-              {pomodoroState.phase === 'focus' && settings.tasks?.[0] && (
+              {pomodoroState.phase === 'focus' && activeTask && (
                 <div style={{ ...styles.activeTaskRow, alignItems: 'flex-start' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', overflow: 'hidden', flex: 1 }} title={settings.tasks[0].text}>
-                    <span style={{ ...styles.activeTaskName, lineHeight: '16px' }}>{settings.tasks[0].text}</span>
-                    {settings.tasks[0].timeSpentSeconds ? (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', overflow: 'hidden', flex: 1 }} title={activeTask.text}>
+                    <span style={{ ...styles.activeTaskName, lineHeight: '16px' }}>{activeTask.text}</span>
+                    {activeTask.timeSpentSeconds ? (
                       <span style={{ fontSize: 10, color: '#4ade80', fontWeight: 'bold', flexShrink: 0, background: 'rgba(74, 222, 128, 0.15)', padding: '2px 6px', borderRadius: '4px' }}>
-                        {formatTime(settings.tasks[0].timeSpentSeconds)}
+                        {formatTime(activeTask.timeSpentSeconds)}
                       </span>
                     ) : null}
                   </div>
@@ -805,9 +807,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   toggle: {
     position: "relative",
-    width: 38,
-    height: 22,
-    borderRadius: 11,
+    width: 32,
+    height: 18,
+    borderRadius: 9,
     background: "#3a3a5a",
     border: "none",
     cursor: "pointer",
@@ -818,15 +820,15 @@ const styles: Record<string, React.CSSProperties> = {
   toggleOn: { background: "#4f6ef7" },
   toggleThumb: {
     position: "absolute",
-    top: 3,
-    left: 3,
-    width: 16,
-    height: 16,
+    top: 2,
+    left: 2,
+    width: 14,
+    height: 14,
     borderRadius: "50%",
     background: "#fff",
     transition: "left 0.2s",
   },
-  toggleThumbOn: { left: 19 },
+  toggleThumbOn: { left: 16 },
   dashboardBtn: {
     background: "transparent",
     border: "1px solid #3a3a5a",

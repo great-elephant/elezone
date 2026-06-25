@@ -249,5 +249,6 @@ export interface PomodoroState {
   timeRemaining: number;
   completedFocusSessions: number;
   breathStartTime?: number;
+  activeTaskId?: string | null;
 }
 

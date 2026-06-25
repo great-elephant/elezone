@@ -435,7 +435,7 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
   }
 
   if (msg.type === 'POMODORO_COMMAND') {
-    const cmd = msg.payload as { action: string, settings?: PomodoroSettings };
+    const cmd = msg.payload as { action: string, taskId?: string, settings?: PomodoroSettings };
     if (cmd.settings) {
       settings = cmd.settings;
     }
@@ -458,6 +458,11 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         state.phase = 'focus';
         state.timeRemaining = settings.focusTime * 60;
         state.status = 'running';
+        if (cmd.taskId !== undefined) {
+          state.activeTaskId = cmd.taskId;
+        } else {
+          state.activeTaskId = null;
+        }
         startTimer();
         updateBadge();
         break;
