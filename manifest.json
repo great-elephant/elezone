@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "EleZone",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApqNct1jcXfHmgMwYOcmB73/PqGonmJrMbth3YmWgzgbppyrTp8BmVOUoBVZHYXoH4VVdAK+X8QYx5WNzpmoGsxV5qZGLQiQPictAG4iqvibuKqSSqCWHe6TS9Sm6hzjXbfJ4U+UC+HDdPJJzoul79Yx04ix1CP8cqA68RQIsVprRa3nxPKoLbVtsqkZL9M71io6rXCMY/jh5apmEj1RhlHqMNVjx3F6VVMMgPBQaO5TGMgJcv5x7EusKN9qo9FywVGB/qDLhtrSOdHQZcw5iSpz8Es2SrckJ5sNghOSf4rEGxHfy65f5U2sHKOpC8G3ntre/erKrmXe1uXrIbTE9AQIDAQAB",
   "description": "Bookmark words, read pages aloud, translate alongside, box breathing, pomodoro timer.",
   "action": {
