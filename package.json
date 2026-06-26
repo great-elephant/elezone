@@ -22,6 +22,7 @@
     "@commitlint/cli": "^21.1.0",
     "@commitlint/config-conventional": "^21.1.0",
     "@crxjs/vite-plugin": "^2.0.0-beta.28",
+    "@release-it/conventional-changelog": "^11.0.1",
     "@types/chrome": "^0.0.299",
     "@types/mozilla__readability": "^0.4.2",
     "@types/react": "^18.3.1",
