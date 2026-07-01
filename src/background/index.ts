@@ -70,6 +70,7 @@ let focusTimeAccumulator = 0;
 let lastPomodoroStatus: PomodoroStatus = 'stopped';
 let lastPomodoroPhase: PomodoroPhase = 'idle';
 let lastPomodoroTaskId: string | null | undefined = null;
+let lastFocusTickAt = 0;
 
 const COLOR_EMOJI: Record<BookmarkColor, string> = {
   red: '🔴', yellow: '🟡', cyan: '🔵', green: '🟢', blue: '💙',
@@ -694,10 +695,10 @@ chrome.runtime.onMessage.addListener((msg: { type: string; payload?: unknown }, 
 // Deleted old srs imports
 
 async function flushFocusTimeAccumulator() {
-  if (focusTimeAccumulator <= 0 || !lastPomodoroTaskId) return;
-  const secs = focusTimeAccumulator;
-  focusTimeAccumulator = 0;
-  
+  const secs = Math.floor(focusTimeAccumulator);
+  if (secs <= 0 || !lastPomodoroTaskId) return;
+  focusTimeAccumulator -= secs;
+
   const settings = await getSettings();
   if (settings.tasks && settings.tasks.length > 0) {
     const taskIndex = settings.tasks.findIndex(t => t.id === lastPomodoroTaskId);
@@ -822,13 +823,21 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       })
     case 'POMODORO_STATE_UPDATE': {
       const state = msg.payload as PomodoroState;
-      if (lastPomodoroStatus === 'running' && (state.status !== 'running' || state.phase !== 'focus') && lastPomodoroPhase === 'focus') {
-        if (focusTimeAccumulator > 0) {
-          await flushFocusTimeAccumulator();
-        }
+      const now = Date.now();
+      const wasRunningFocus = lastPomodoroStatus === 'running' && lastPomodoroPhase === 'focus';
+      const isRunningFocus = state.status === 'running' && state.phase === 'focus';
+
+      if (wasRunningFocus && !isRunningFocus && focusTimeAccumulator > 0) {
+        await flushFocusTimeAccumulator();
       }
-      if (state.phase === 'focus' && state.status === 'running') {
-        focusTimeAccumulator++;
+      if (isRunningFocus) {
+        // Only add real elapsed time since the last running/focus update, not per-message,
+        // since offscreen also broadcasts on commands like resume/startFocus (not just ticks).
+        if (wasRunningFocus) {
+          const elapsedSec = Math.max(0, Math.min(5, (now - lastFocusTickAt) / 1000));
+          focusTimeAccumulator += elapsedSec;
+        }
+        lastFocusTickAt = now;
         if (focusTimeAccumulator >= 60) {
           await flushFocusTimeAccumulator();
         }
