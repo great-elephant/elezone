@@ -24,7 +24,7 @@ import {
   PomodoroState,
 } from '../shared/types'
 import { translateInContext, ContextTranslateRequest } from './aiTranslate'
-import { getRandomRoast, RoastLevel } from '../shared/roasts'
+import { getRandomRoast, RoastLevel, RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
 
 let creatingOffscreen: Promise<void> | null = null;
 
@@ -180,20 +180,27 @@ chrome.commands.onCommand.addListener(async (command) => {
 
 async function evaluateSlackingState(testMode = false) {
   const settings = await getSettings()
-  if (!settings.roast?.enabled && !testMode) {
+  // Treat undefined as the default (not as 'off') for existing users.
+  const intensity: RoastIntensity = settings.gamification?.roastIntensity ?? DEFAULT_ROAST_INTENSITY
+
+  // 'off' fully suppresses the roast/slacking banner and notifications.
+  // Keep the legacy roast.enabled flag as an additional master switch.
+  if ((!settings.roast?.enabled || intensity === 'off') && !testMode) {
     await chrome.storage.local.remove('slacking_state')
     return
   }
 
   if (testMode) {
-    const roastMessage = getRandomRoast(3)
+    // For the test button, preview the current intensity (or the default if off).
+    const testIntensity = intensity === 'off' ? DEFAULT_ROAST_INTENSITY : intensity
+    const roastMessage = getRandomRoast(testIntensity)!
     const state = { isSlacking: true, level: 3, message: roastMessage }
     await chrome.storage.local.set({ slacking_state: state })
-    
+
     chrome.notifications.create(`roast-test-${Date.now()}`, {
       type: 'basic',
       iconUrl: 'icons/icon128.png',
-      title: 'EleZone Cảnh Báo 🚨 (Test)',
+      title: 'EleZone Alert 🚨 (Test)',
       message: roastMessage,
       requireInteraction: false
     })
@@ -259,7 +266,9 @@ async function evaluateSlackingState(testMode = false) {
   }
 
   if (slacking) {
-    const roastMessage = getRandomRoast(level)
+    // The user-selected intensity picks the pool; `level` is kept only as a
+    // severity hint in the stored state for backward compatibility.
+    const roastMessage = getRandomRoast(intensity)!
     const state = { isSlacking: true, level, message: roastMessage }
     await chrome.storage.local.set({ slacking_state: state })
     
@@ -276,7 +285,7 @@ async function evaluateSlackingState(testMode = false) {
       chrome.notifications.create(`roast-${now}`, {
         type: 'basic',
         iconUrl: 'icons/icon128.png',
-        title: 'EleZone Cảnh Báo 🚨',
+        title: 'EleZone Alert 🚨',
         message: roastMessage,
         requireInteraction: false
       })

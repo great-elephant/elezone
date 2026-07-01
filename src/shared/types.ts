@@ -1,3 +1,5 @@
+import type { RoastIntensity } from './roasts'
+
 export type BookmarkColor =
   | 'red' | 'yellow' | 'cyan' | 'green' | 'blue'
   | 'orange' | 'purple' | 'pink' | 'teal' | 'gray'
@@ -63,6 +65,10 @@ export interface GamificationSettings {
   dailyGoalPoints: number
   pointsPerSave: number
   pointsPerReview: number
+  // Controls the tone/harshness of the slacking "roast" messages.
+  // 'off' fully suppresses the roast banner and notifications.
+  // Undefined is treated as the default (see DEFAULT_SETTINGS), not as 'off'.
+  roastIntensity?: RoastIntensity
 }
 
 export interface OcrSettings {
@@ -155,7 +161,8 @@ export const DEFAULT_SETTINGS: Settings = {
   gamification: {
     dailyGoalPoints: 100,
     pointsPerSave: 1,
-    pointsPerReview: 2
+    pointsPerReview: 2,
+    roastIntensity: 'playful'
   },
   ocr: {
     sentenceCase: false,

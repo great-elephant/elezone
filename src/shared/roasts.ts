@@ -1,31 +1,50 @@
+// Roast intensity controls how harsh the "tough love" / slacking messages are.
+//   off     – no roasting at all (banner + notifications fully suppressed)
+//   gentle  – soft, encouraging nudges
+//   playful – cheeky teasing (friendly default)
+//   savage  – over-the-top, dramatic tough love
+export type RoastIntensity = 'off' | 'gentle' | 'playful' | 'savage'
+
+export const DEFAULT_ROAST_INTENSITY: RoastIntensity = 'playful'
+
+// Legacy severity level still used internally by the background to gauge how far
+// behind the user is. It now maps onto intensity pools rather than fixed strings.
 export type RoastLevel = 1 | 2 | 3
 
-export const ROASTS_LEVEL_1 = [
-  "🥺 Hello? Your vocabulary is crying, waiting for you to review.",
-  "⏰ It only takes 5 minutes. Go study before you forget everything.",
-  "🤨 Seems like you're being lazy, aren't you? Come back and review a bit.",
-  "🌱 Don't let your new words grow moss, go water your brain.",
-  "🙄 Some words are due. You're not going to ignore them, are you?"
-]
+// Each intensity has its own pool of messages (English only).
+const POOLS: Record<Exclude<RoastIntensity, 'off'>, string[]> = {
+  gentle: [
+    '🥺 Hello? Your vocabulary is waiting for a quick review.',
+    '⏰ It only takes 5 minutes. A little review keeps it fresh.',
+    '🌱 Give your new words a little water before they fade.',
+    '🙂 A few cards are due. Want to knock them out?',
+    '📗 Small daily reps beat cramming. Shall we do a set?',
+  ],
+  playful: [
+    '🫠 Your brain has quietly forgotten a few words. Time to jog its memory.',
+    '📉 At this pace, the subtitles are getting a little too comfortable.',
+    '🤔 Waiting for the words to review themselves? Bold strategy.',
+    '🤡 I bet a certain feed is winning against your flashcards today.',
+    '🪫 Hello? Anybody home? Your brain is on a snack break from new words.',
+  ],
+  savage: [
+    '🔥 Red alert: the slacking has reached legendary levels.',
+    '💣 Are we studying English, or should I make room on your disk?',
+    '💀 Fluent English is still a long way off at this discipline, buddy.',
+    '🤦 Honestly, I am starting to worry about the study plan here.',
+    '😱 The vocabulary is evaporating from your brain. Study, right now!',
+  ],
+}
 
-export const ROASTS_LEVEL_2 = [
-  "🫠 Your brain has already forgotten quite a few words, and it seems to have forgotten how to study too.",
-  "📉 With this level of laziness, when will you ever not need subtitles?",
-  "🗑️ Are you waiting for your vocabulary to completely vanish before studying?",
-  "🤡 I bet you're spending time scrolling TikTok instead of studying.",
-  "🪫 Hello? Anybody home? Your brain is on strike due to a lack of new words."
-]
+function normalizeIntensity(intensity: RoastIntensity | undefined): RoastIntensity {
+  return intensity ?? DEFAULT_ROAST_INTENSITY
+}
 
-export const ROASTS_LEVEL_3 = [
-  "🔥 Red alert: Your laziness has reached the supreme level.",
-  "💣 Are you going to study English or should I just delete this app to free up space?",
-  "💀 With discipline this poor, your dream of speaking fluent English is still far away, buddy.",
-  "🤦‍♂️ I'm seriously concerned about your academic career right now.",
-  "😱 Oh my goodness, the vocabulary is evaporating from your brain! Study right now!"
-]
-
-export function getRandomRoast(level: RoastLevel): string {
-  const roasts = level === 1 ? ROASTS_LEVEL_1 : level === 2 ? ROASTS_LEVEL_2 : ROASTS_LEVEL_3
-  const randomIndex = Math.floor(Math.random() * roasts.length)
-  return roasts[randomIndex]
+// Pick a random roast for the given intensity. Returns null when roasting is
+// off (or resolves to off), so callers can suppress the banner entirely.
+export function getRandomRoast(intensity: RoastIntensity | undefined): string | null {
+  const eff = normalizeIntensity(intensity)
+  if (eff === 'off') return null
+  const pool = POOLS[eff]
+  return pool[Math.floor(Math.random() * pool.length)]
 }

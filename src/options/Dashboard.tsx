@@ -210,7 +210,8 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (tab: 'dashboar
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '24px', width: '100%' }}>
 
-        {/* Roast Banner */}
+        {/* Roast Banner. Hidden entirely when roast intensity is 'off'
+            (the background removes slacking_state in that case). */}
         {slackingState && (
           <div className="roast-banner">
             <div style={{ flex: 1, color: '#e0e0e0', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -219,7 +220,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (tab: 'dashboar
             <button
               className="roast-btn"
               onClick={() => { if (onNavigate) onNavigate('library') }}>
-              Ôn tập ngay
+              Review now
             </button>
             <button
               onClick={() => chrome.storage.local.remove('slacking_state')}
@@ -235,7 +236,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (tab: 'dashboar
                 opacity: 0.7,
                 marginLeft: '4px'
               }}
-              title="Tạm ẩn cảnh báo"
+              title="Temporarily hide warning"
               onMouseOver={e => e.currentTarget.style.opacity = '1'}
               onMouseOut={e => e.currentTarget.style.opacity = '0.7'}
             >
