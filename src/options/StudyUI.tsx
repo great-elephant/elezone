@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { SavedItem, BOOKMARK_COLORS, Settings, StudyMode } from '../shared/types'
 
 interface StudyUIProps {
@@ -8,13 +8,26 @@ interface StudyUIProps {
   onClose: () => void
 }
 
-// Float-up + fade for the "+N Sparks" reward moment. Keyframes can't live in
-// inline styles, so they're injected via a <style> tag alongside the badge.
-const sparkKeyframes = `
+// Reward micro-interactions for the "+N Sparks" moment: a springy pop for the
+// text plus a short ember burst. Keyframes must live in a <style> tag.
+const rewardStyles = `
   @keyframes cxt-study-spark {
-    0%   { opacity: 0; transform: translate(-50%, 6px) scale(0.85); }
-    20%  { opacity: 1; transform: translate(-50%, 0) scale(1); }
-    100% { opacity: 0; transform: translate(-50%, -40px) scale(1); }
+    0%   { opacity: 0; transform: translate(-50%, 8px) scale(0.6); }
+    35%  { opacity: 1; transform: translate(-50%, -2px) scale(1.18); }
+    55%  { transform: translate(-50%, -6px) scale(0.95); }
+    72%  { transform: translate(-50%, -10px) scale(1.03); }
+    100% { opacity: 0; transform: translate(-50%, -48px) scale(1); }
+  }
+  @keyframes cxt-study-ember {
+    0%   { opacity: 1; transform: translate(-50%, -50%) translate(0, 0) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -50%) translate(var(--dx), var(--dy)) scale(0.3); }
+  }
+  @keyframes cxt-reward-fade { 0% { opacity: 0 } 20% { opacity: 1 } 100% { opacity: 0 } }
+  .cxt-reward-text { animation: cxt-study-spark 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+  .cxt-reward-ember { animation: cxt-study-ember 0.9s ease-out forwards; }
+  @media (prefers-reduced-motion: reduce) {
+    .cxt-reward-text { animation: cxt-reward-fade 1s ease-out forwards; }
+    .cxt-reward-ember { display: none; }
   }
 `
 
@@ -34,6 +47,24 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   const [sessionScore, setSessionScore] = useState({ correct: 0, giveUps: 0 })
   const [showSessionSummary, setShowSessionSummary] = useState(false)
   const [earnedSpark, setEarnedSpark] = useState(false)
+  // Consecutive correct answers drive the combo escalation; rewardNonce reseeds
+  // the ember burst so it regenerates only when a reward actually fires.
+  const [combo, setCombo] = useState(0)
+  const [rewardNonce, setRewardNonce] = useState(0)
+  const emberParticles = useMemo(() => {
+    const n = 10
+    const colors = ['#ffd93d', '#ffb36b', '#ff9d3d', '#ff6b3d', '#4ade80']
+    return Array.from({ length: n }, (_, i) => {
+      const angle = (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.6
+      const dist = 26 + Math.random() * 26
+      return {
+        dx: `${Math.cos(angle) * dist}px`,
+        dy: `${Math.sin(angle) * dist}px`,
+        color: colors[i % colors.length],
+        size: 4 + Math.round(Math.random() * 3),
+      }
+    })
+  }, [rewardNonce])
 
   useEffect(() => {
     if (items.length > 0) {
@@ -49,6 +80,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
       setSessionScore({ correct: 0, giveUps: 0 })
       setShowSessionSummary(false)
       setEarnedSpark(false)
+      setCombo(0)
       if (mode === 'multiple_choice') generateMcOptions(items[0], items)
       if (mode === 'listening') {
         setTimeout(() => speakText((items[0].prefix || '') + items[0].text + (items[0].suffix || ''), items[0].sourceLang), 300)
@@ -124,6 +156,10 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
       setShowAnswer(true)
       setSessionScore(prev => ({ ...prev, correct: prev.correct + 1 }))
       setEarnedSpark(true)
+      setRewardNonce(n => n + 1)
+      // Any correct answer extends the streak — a wrong attempt you later
+      // correct still counts; only giving up breaks it.
+      setCombo(c => c + 1)
       setVerifyError(false)
       speakText(activeItem.text, activeItem.sourceLang)
     } else {
@@ -138,6 +174,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   function handleGiveUp() {
     setVerificationPassed(true)
     setShowAnswer(true)
+    setCombo(0)
     setSessionScore(prev => ({ ...prev, giveUps: prev.giveUps + 1 }))
     if (activeItem) {
       speakText(activeItem.text, activeItem.sourceLang)
@@ -179,6 +216,10 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
 
   const isFlashcard = !!activeItem.translation
 
+  const rewardPoints = settings?.gamification?.pointsPerReview ?? 2
+  const rewardColor = combo >= 6 ? '#ff5a36' : combo >= 4 ? '#ff9d3d' : combo >= 2 ? '#facc15' : '#4ade80'
+  const rewardSize = 20 + Math.min(Math.max(combo - 1, 0), 6) * 3
+
   return (
     <div style={styles.reviewContainer}>
       <div style={styles.headerRow}>
@@ -205,8 +246,29 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
       <div key={activeItem.id} style={{ ...styles.card, borderColor: BOOKMARK_COLORS[activeItem.color], position: 'relative' }}>
         {earnedSpark && (
           <>
-            <style>{sparkKeyframes}</style>
-            <div style={styles.sparkReward}>+{settings?.gamification?.pointsPerReview ?? 2} Sparks 🔥</div>
+            <style>{rewardStyles}</style>
+            <div style={styles.rewardAnchor}>
+              {emberParticles.map((p, i) => (
+                <span
+                  key={i}
+                  className="cxt-reward-ember"
+                  style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    width: p.size,
+                    height: p.size,
+                    borderRadius: '50%',
+                    background: p.color,
+                    '--dx': p.dx,
+                    '--dy': p.dy,
+                  } as React.CSSProperties}
+                />
+              ))}
+            </div>
+            <div className="cxt-reward-text" style={{ ...styles.sparkReward, color: rewardColor, fontSize: rewardSize }}>
+              +{rewardPoints} Sparks 🔥{combo >= 2 ? ` · 🔥×${combo}` : ''}
+            </div>
           </>
         )}
         <div style={styles.cardFront}>
@@ -312,6 +374,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
                           style={{ ...styles.startBtn, marginTop: '8px', padding: '10px 24px', fontSize: '16px', width: 'auto' }}
                           onClick={() => {
                             setSessionScore(prev => ({ ...prev, giveUps: prev.giveUps + 1 }))
+                            setCombo(0)
                             handleNext()
                           }}
                         >
@@ -552,6 +615,14 @@ const styles: Record<string, React.CSSProperties> = {
     pointerEvents: 'none',
     textShadow: '0 1px 6px rgba(0,0,0,0.6)',
     zIndex: 2,
-    animation: 'cxt-study-spark 1.1s ease-out forwards'
+  },
+  rewardAnchor: {
+    position: 'absolute',
+    top: 30,
+    left: '50%',
+    width: 0,
+    height: 0,
+    zIndex: 2,
+    pointerEvents: 'none',
   }
 }

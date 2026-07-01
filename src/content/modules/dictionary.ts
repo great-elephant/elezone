@@ -1,5 +1,5 @@
 import { translate } from './translation'
-import { getSelectionContext, applyHighlight } from './anchor'
+import { getSelectionContext, applyHighlight, pulseHighlight } from './anchor'
 import { BookmarkColor, BOOKMARK_COLORS } from '../../shared/types'
 import type { ContextTranslateResult } from '../../background/aiTranslate'
 
@@ -152,12 +152,37 @@ const DICTIONARY_CSS = `
     font-size: 15px;
     pointer-events: none;
     text-shadow: 0 1px 4px rgba(0,0,0,0.6);
-    animation: cxt-spark-float 1s ease-out forwards;
+    animation: cxt-spark-float 1.1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   }
   @keyframes cxt-spark-float {
-    0%   { opacity: 0; transform: translateY(4px) scale(0.8); }
-    20%  { opacity: 1; transform: translateY(0) scale(1); }
-    100% { opacity: 0; transform: translateY(-28px) scale(1); }
+    0%   { opacity: 0; transform: translateY(6px) scale(0.5); }
+    35%  { opacity: 1; transform: translateY(-2px) scale(1.25); }
+    55%  { transform: translateY(-4px) scale(0.95); }
+    100% { opacity: 0; transform: translateY(-30px) scale(1); }
+  }
+  .spark-burst {
+    position: absolute;
+    right: 20px;
+    bottom: 16px;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+  }
+  .spark-ember {
+    position: absolute;
+    left: 0;
+    top: 0;
+    border-radius: 50%;
+    animation: cxt-ember-fly 0.85s ease-out forwards;
+  }
+  @keyframes cxt-ember-fly {
+    0%   { opacity: 1; transform: translate(-50%, -50%) translate(0, 0) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -50%) translate(var(--dx), var(--dy)) scale(0.3); }
+  }
+  @keyframes cxt-spark-fade { 0% { opacity: 0 } 20% { opacity: 1 } 100% { opacity: 0 } }
+  @media (prefers-reduced-motion: reduce) {
+    .spark-reward { animation: cxt-spark-fade 1s ease-out forwards; }
+    .spark-ember { display: none; }
   }
 `
 
@@ -507,19 +532,40 @@ async function showPopover(
     await chrome.runtime.sendMessage({ type: 'SAVE_ITEM', payload: item }).catch(() => { })
     await chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'save' }).catch(() => { })
     applyHighlight(item)
+    // Pulse the just-saved word on the page to tie the reward to it.
+    pulseHighlight(item.id, BOOKMARK_COLORS[selectedColor])
 
     saveBtn.textContent = 'Saved!'
 
-    // Brief "+N 🔥" reward that floats up and fades — auto-removes after the
-    // animation and never blocks the hidePopover timer below.
+    // "+N 🔥" reward with a springy pop and a small ember burst — auto-removes
+    // after the animation and never blocks the hidePopover timer below.
     const points = settings?.gamification?.pointsPerSave ?? 1
     const spark = document.createElement('div')
     spark.className = 'spark-reward'
     spark.textContent = `+${points} 🔥`
     popover.append(spark)
-    setTimeout(() => spark.remove(), 1000)
 
-    setTimeout(hidePopover, 1000)
+    const burst = document.createElement('div')
+    burst.className = 'spark-burst'
+    const EMBER_COLORS = ['#ffd93d', '#ffb36b', '#ff9d3d', '#ff6b3d', '#4ade80']
+    const EMBER_COUNT = 10
+    for (let i = 0; i < EMBER_COUNT; i++) {
+      const ember = document.createElement('span')
+      ember.className = 'spark-ember'
+      const angle = (i / EMBER_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.6
+      const dist = 20 + Math.random() * 20
+      const size = 4 + Math.round(Math.random() * 3)
+      ember.style.width = `${size}px`
+      ember.style.height = `${size}px`
+      ember.style.background = EMBER_COLORS[i % EMBER_COLORS.length]
+      ember.style.setProperty('--dx', `${Math.cos(angle) * dist}px`)
+      ember.style.setProperty('--dy', `${Math.sin(angle) * dist}px`)
+      burst.append(ember)
+    }
+    popover.append(burst)
+
+    setTimeout(() => { spark.remove(); burst.remove() }, 1100)
+    setTimeout(hidePopover, 1100)
   }
 
   actions.append(cancelBtn, saveBtn)

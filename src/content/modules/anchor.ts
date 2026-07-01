@@ -231,6 +231,55 @@ export function removeHighlight(bookmarkId: string) {
   CSS.highlights.forEach(hl => hl.delete(range))
 }
 
+let pulseStyleInjected = false
+function ensurePulseStyle() {
+  if (pulseStyleInjected) return
+  pulseStyleInjected = true
+  const style = document.createElement('style')
+  style.textContent = `
+    @keyframes cxt-save-pulse {
+      0%   { opacity: 0; transform: scale(1); }
+      25%  { opacity: 0.5; transform: scale(1.08); }
+      100% { opacity: 0; transform: scale(1.16); }
+    }
+    @keyframes cxt-save-fade { 0% { opacity: 0.5 } 100% { opacity: 0 } }
+    @media (prefers-reduced-motion: reduce) {
+      .cxt-save-pulse { animation-name: cxt-save-fade !important; }
+    }
+  `
+  document.head.appendChild(style)
+}
+
+// Brief pulse over a just-saved highlight, tying the reward to the actual word.
+// Draws short-lived overlay boxes on the word's client rects (the highlight
+// itself is painted via the CSS Custom Highlight API, so there's no element).
+export function pulseHighlight(bookmarkId: string, color: string) {
+  const range = bookmarkRanges.get(bookmarkId)
+  if (!range) return
+  ensurePulseStyle()
+  for (const rect of range.getClientRects()) {
+    if (rect.width === 0 || rect.height === 0) continue
+    const el = document.createElement('div')
+    el.className = 'cxt-save-pulse'
+    el.style.cssText = `
+      position: fixed;
+      left: ${rect.left - 2}px;
+      top: ${rect.top - 2}px;
+      width: ${rect.width + 4}px;
+      height: ${rect.height + 4}px;
+      border-radius: 4px;
+      background: ${color};
+      box-shadow: 0 0 10px ${color};
+      opacity: 0;
+      pointer-events: none;
+      z-index: 2147483646;
+      animation: cxt-save-pulse 0.7s ease-out forwards;
+    `
+    document.body.appendChild(el)
+    setTimeout(() => el.remove(), 750)
+  }
+}
+
 // bufferY extends the hit zone upward and downward so the cursor can travel from the
 // highlighted text to the tooltip across the gap without triggering the hide timer.
 export function getBookmarkAtPoint(x: number, y: number, bufferY = 0): { id: string; range: Range } | null {
