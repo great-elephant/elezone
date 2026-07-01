@@ -504,10 +504,11 @@ const styles: Record<string, React.CSSProperties> = {
   reviewContainer: {
     maxWidth: 600,
     margin: '0 auto',
+    height: 'calc(100vh - 116px)',
     display: 'flex',
     flexDirection: 'column',
-    gap: 24,
-    padding: '20px 0'
+    gap: 14,
+    padding: '8px 0'
   },
   cardInfo: {
     textAlign: 'center',
@@ -525,14 +526,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: 2,
     borderStyle: 'solid',
     borderRadius: 16,
-    minHeight: 300,
+    flex: 1,
+    minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden'
   },
   cardFront: {
-    padding: 32,
+    padding: '18px 24px',
     flex: 1,
+    minHeight: 0,
+    overflow: 'auto',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center'
@@ -555,7 +559,7 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center'
   },
   cardBack: {
-    padding: 32,
+    padding: '14px 24px',
     borderTop: '1px solid #2a2a4a',
     background: '#111122',
     textAlign: 'center'
@@ -693,13 +697,13 @@ function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose,
     return () => clearTimeout(t)
   }, [])
 
-  const R = 70
-  const SW = 14
+  const R = 58
+  const SW = 12
   const CIRC = 2 * Math.PI * R
   const dashoffset = CIRC - (ringPct / 100) * CIRC
 
   return (
-    <div style={{ position: 'relative', maxWidth: 600, margin: '0 auto', padding: '20px 0', overflow: 'hidden' }}>
+    <div style={{ position: 'relative', maxWidth: 600, margin: '0 auto', padding: '8px 0', overflow: 'hidden', minHeight: 'calc(100vh - 116px)', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
       <style>{sessionSummaryStyles}</style>
 
       <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 3 }}>
@@ -728,38 +732,38 @@ function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose,
         background: 'linear-gradient(135deg, #1e1e32 0%, #111122 100%)',
         border: '1px solid #3a3a6a',
         borderRadius: 20,
-        padding: '36px 28px',
+        padding: '24px 24px',
         boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
         textAlign: 'center',
         position: 'relative',
         zIndex: 2,
       }}>
-        <div className="cxt-rank-pop" style={{ fontSize: 56, filter: `drop-shadow(0 0 16px ${rank.color}66)` }}>
+        <div className="cxt-rank-pop" style={{ fontSize: 46, filter: `drop-shadow(0 0 14px ${rank.color}66)` }}>
           {rank.emoji}
         </div>
-        <div style={{ fontSize: 26, fontWeight: 'bold', color: rank.color, marginTop: 4 }}>{rank.title}</div>
+        <div style={{ fontSize: 23, fontWeight: 'bold', color: rank.color, marginTop: 4 }}>{rank.title}</div>
         <div style={{ color: '#8888aa', marginTop: 6, fontSize: 14 }}>
           {isPassive ? `Reviewed ${total} cards` : `You completed ${total} cards`}
         </div>
 
         {!isPassive && (
-          <div style={{ position: 'relative', width: 180, height: 180, margin: '24px auto 8px' }}>
-            <svg width="180" height="180" style={{ transform: 'rotate(-90deg)' }}>
-              <circle cx="90" cy="90" r={R} stroke="#161b22" strokeWidth={SW} fill="none" />
+          <div style={{ position: 'relative', width: 148, height: 148, margin: '14px auto 4px' }}>
+            <svg width="148" height="148" style={{ transform: 'rotate(-90deg)' }}>
+              <circle cx="74" cy="74" r={R} stroke="#161b22" strokeWidth={SW} fill="none" />
               <circle
-                cx="90" cy="90" r={R} stroke={rank.color} strokeWidth={SW} fill="none"
+                cx="74" cy="74" r={R} stroke={rank.color} strokeWidth={SW} fill="none"
                 strokeDasharray={CIRC} strokeDashoffset={dashoffset} strokeLinecap="round"
                 style={{ transition: 'stroke-dashoffset 1s cubic-bezier(0.22, 1, 0.36, 1)' }}
               />
             </svg>
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ fontSize: 40, fontWeight: 'bold', color: '#fff' }}>{accuracy}%</div>
-              <div style={{ fontSize: 13, color: '#8888aa' }}>{correct}/{total}</div>
+              <div style={{ fontSize: 34, fontWeight: 'bold', color: '#fff' }}>{accuracy}%</div>
+              <div style={{ fontSize: 12, color: '#8888aa' }}>{correct}/{total}</div>
             </div>
           </div>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap', marginTop: isPassive ? 24 : 8, marginBottom: 28 }}>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap', marginTop: isPassive ? 20 : 6, marginBottom: 18 }}>
           {!isPassive && <Pill value={`${correct}`} label="Correct" color="#6bff9e" />}
           {!isPassive && <Pill value={`🔥×${maxCombo}`} label="Best streak" color="#ffb36b" />}
           <Pill value={`+${sparksEarned} 🔥`} label="Sparks earned" color="#ffd93d" />
