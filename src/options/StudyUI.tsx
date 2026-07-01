@@ -8,6 +8,16 @@ interface StudyUIProps {
   onClose: () => void
 }
 
+// Float-up + fade for the "+N Sparks" reward moment. Keyframes can't live in
+// inline styles, so they're injected via a <style> tag alongside the badge.
+const sparkKeyframes = `
+  @keyframes cxt-study-spark {
+    0%   { opacity: 0; transform: translate(-50%, 6px) scale(0.85); }
+    20%  { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -40px) scale(1); }
+  }
+`
+
 export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps) {
   const [sessionQueue, setSessionQueue] = useState<SavedItem[]>([])
   const [sessionTotal, setSessionTotal] = useState(0)
@@ -192,7 +202,13 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         />
       </div>
 
-      <div key={activeItem.id} style={{ ...styles.card, borderColor: BOOKMARK_COLORS[activeItem.color] }}>
+      <div key={activeItem.id} style={{ ...styles.card, borderColor: BOOKMARK_COLORS[activeItem.color], position: 'relative' }}>
+        {earnedSpark && (
+          <>
+            <style>{sparkKeyframes}</style>
+            <div style={styles.sparkReward}>+{settings?.gamification?.pointsPerReview ?? 2} Sparks 🔥</div>
+          </>
+        )}
         <div style={styles.cardFront}>
           {isFlashcard ? (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', width: '100%' }}>
@@ -524,5 +540,18 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     transition: 'transform 0.1s'
+  },
+  sparkReward: {
+    position: 'absolute',
+    top: 16,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    color: '#4ade80',
+    fontWeight: 'bold',
+    fontSize: 20,
+    pointerEvents: 'none',
+    textShadow: '0 1px 6px rgba(0,0,0,0.6)',
+    zIndex: 2,
+    animation: 'cxt-study-spark 1.1s ease-out forwards'
   }
 }

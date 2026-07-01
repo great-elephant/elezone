@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { translate } from '../modules/translation';
 import { Settings } from '../../shared/types';
 
@@ -55,27 +55,43 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   const dragStart = useRef({ x: 0, y: 0 });
   const translateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Shared translate call used by the initial effect, the debounced input
+  // handler, and the Retry affordance — so a failed attempt can be re-run.
+  const runTranslation = useCallback((rawText: string) => {
+    const currentText = rawText.trim();
+    if (!currentText) {
+      setTranslatedText('');
+      return;
+    }
+    setTranslatedText('⏳ Translating...');
+    chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+      .then((settings: Settings) => {
+        const tgtLang = settings?.translation?.defaultTargetLanguage || 'en';
+        return translate(currentText, tgtLang);
+      })
+      .then(res => setTranslatedText(res.text))
+      .catch(err => {
+        console.error('Translation error:', err);
+        setTranslatedText('⚠ Translation failed');
+      });
+  }, []);
+
+  const retryTranslation = useCallback(() => {
+    const currentText = textRef.current?.innerText || textRef.current?.textContent || text;
+    runTranslation(currentText);
+  }, [runTranslation, text]);
+
   useEffect(() => {
     if (textRef.current && !isLoading) {
       if (text) {
         textRef.current.textContent = text;
-        setTranslatedText('⏳ Translating...');
-        chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
-          .then((settings: Settings) => {
-            const tgtLang = settings?.translation?.defaultTargetLanguage || 'en';
-            return translate(text, tgtLang);
-          })
-          .then(res => setTranslatedText(res.text))
-          .catch(err => {
-            console.error('Translation error:', err);
-            setTranslatedText('⚠ Translation failed');
-          });
+        runTranslation(text);
       } else {
         textRef.current.innerHTML = '<span style="color:#888" contenteditable="false">No text recognized.</span>';
         setTranslatedText('');
       }
     }
-  }, [text, isLoading]);
+  }, [text, isLoading, runTranslation]);
 
   const handleInput = () => {
     if (translateTimerRef.current) {
@@ -83,21 +99,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     }
     translateTimerRef.current = setTimeout(() => {
       const currentText = textRef.current?.innerText || textRef.current?.textContent || '';
-      if (!currentText.trim()) {
-        setTranslatedText('');
-        return;
-      }
-      setTranslatedText('⏳ Translating...');
-      chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
-        .then((settings: Settings) => {
-          const tgtLang = settings?.translation?.defaultTargetLanguage || 'en';
-          return translate(currentText, tgtLang);
-        })
-        .then(res => setTranslatedText(res.text))
-        .catch(err => {
-          console.error('Translation error:', err);
-          setTranslatedText('⚠ Translation failed');
-        });
+      runTranslation(currentText);
     }, 1000);
   };
 
@@ -352,6 +354,23 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
                 lineHeight: 1.6
               }}>
                 {translatedText}
+                {translatedText.startsWith('⚠') && (
+                  <button
+                    onClick={retryTranslation}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#6bcfff',
+                      cursor: 'pointer',
+                      fontSize: '1em',
+                      padding: 0,
+                      marginLeft: 8,
+                      textDecoration: 'underline'
+                    }}
+                  >
+                    Retry
+                  </button>
+                )}
               </div>
             )}
           </div>

@@ -28,6 +28,26 @@ export async function isTranslatorAvailable(): Promise<boolean> {
   }
 }
 
+// Coarse status for surfacing which engine will handle translation in the UI.
+// 'available'    → on-device model ready (🔒)
+// 'downloading'  → on-device model downloadable/downloading (⏳)
+// 'unavailable'  → no on-device support, will fall back to Google (🌐)
+export type TranslatorStatus = 'available' | 'downloading' | 'unavailable'
+
+export async function getTranslatorStatus(): Promise<TranslatorStatus> {
+  const api = globalThis.Translator
+  if (!api) return 'unavailable'
+  try {
+    const src = document.documentElement.lang?.split('-')[0] || 'en'
+    const status = await api.availability({ sourceLanguage: src, targetLanguage: targetLang })
+    if (status === 'available') return 'available'
+    if (status === 'downloadable' || status === 'downloading') return 'downloading'
+    return 'unavailable'
+  } catch {
+    return 'unavailable'
+  }
+}
+
 async function initOnDevice(src: string, tgt: string): Promise<TranslatorInstance | null> {
   const api = globalThis.Translator
   if (!api) return null

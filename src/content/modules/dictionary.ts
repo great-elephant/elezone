@@ -109,6 +109,22 @@ const DICTIONARY_CSS = `
   button.primary:hover {
     background: #5a6aaa;
   }
+  .spark-reward {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    color: #4ade80;
+    font-weight: 700;
+    font-size: 15px;
+    pointer-events: none;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    animation: cxt-spark-float 1s ease-out forwards;
+  }
+  @keyframes cxt-spark-float {
+    0%   { opacity: 0; transform: translateY(4px) scale(0.8); }
+    20%  { opacity: 1; transform: translateY(0) scale(1); }
+    100% { opacity: 0; transform: translateY(-28px) scale(1); }
+  }
 `
 
 export function initDictionary() {
@@ -119,6 +135,76 @@ function hidePopover() {
   host?.remove()
   host = null
   shadow = null
+}
+
+// Brief, dismissible on-page hint (its own shadow-DOM host so page CSS can't
+// bleed in) for cases where the popover can't open — e.g. selection too long.
+const TOAST_CSS = `
+  :host { all: initial; }
+  .cxt-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2147483647;
+    background: #1a1a2e;
+    border: 1px solid #3a3a6a;
+    border-radius: 10px;
+    padding: 10px 14px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    font-family: system-ui, sans-serif;
+    font-size: 13px;
+    color: #c0c0e0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 90vw;
+  }
+  .cxt-toast-close {
+    background: transparent;
+    border: none;
+    color: #8888aa;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+  }
+  .cxt-toast-close:hover { color: #ffffff; }
+`
+
+function showToast(message: string) {
+  const toastHost = document.createElement('div')
+  toastHost.className = 'cxt-toast-host'
+  const toastShadow = toastHost.attachShadow({ mode: 'open' })
+
+  const style = document.createElement('style')
+  style.textContent = TOAST_CSS
+
+  const toast = document.createElement('div')
+  toast.className = 'cxt-toast'
+
+  const msg = document.createElement('span')
+  msg.textContent = message
+
+  const close = document.createElement('button')
+  close.className = 'cxt-toast-close'
+  close.textContent = '✕'
+  close.title = 'Dismiss'
+
+  let dismissed = false
+  const dismiss = () => {
+    if (dismissed) return
+    dismissed = true
+    clearTimeout(timer)
+    toastHost.remove()
+  }
+  close.addEventListener('click', dismiss)
+
+  toast.append(msg, close)
+  toastShadow.append(style, toast)
+  document.body.appendChild(toastHost)
+
+  const timer = setTimeout(dismiss, 4000)
 }
 
 function handleClickOutside(e: MouseEvent) {
@@ -139,7 +225,13 @@ export async function showPopoverFromSelection(selectedText?: string, color: Boo
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
 
   const word = selectedText ? selectedText.trim() : sel.toString().trim()
-  if (!word || word.split(/\s+/).length > 10) return
+  if (!word) return
+  if (word.split(/\s+/).length > 10) {
+    // Right-click "Save" can still reach here with a long selection (the chip
+    // guards this earlier). Show a brief hint instead of failing silently.
+    showToast('Selection too long — pick a shorter phrase.')
+    return
+  }
 
   const range = sel.getRangeAt(0)
   const rect = range.getBoundingClientRect()
@@ -336,6 +428,16 @@ async function showPopover(
     applyHighlight(item)
 
     saveBtn.textContent = 'Saved!'
+
+    // Brief "+N 🔥" reward that floats up and fades — auto-removes after the
+    // animation and never blocks the hidePopover timer below.
+    const points = settings?.gamification?.pointsPerSave ?? 1
+    const spark = document.createElement('div')
+    spark.className = 'spark-reward'
+    spark.textContent = `+${points} 🔥`
+    popover.append(spark)
+    setTimeout(() => spark.remove(), 1000)
+
     setTimeout(hidePopover, 1000)
   }
 

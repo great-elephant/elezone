@@ -105,6 +105,8 @@ export interface Settings {
   updatedAt?: number
   defaultStudyMode?: StudyMode
   showHintInitially?: boolean
+  // Show a floating "Save" chip near the selection to save a word (default enabled).
+  selectionChipEnabled?: boolean
   readAloud: ReadAloudSettings
   translation: TranslationSettings
   sync: { enabled: boolean; debounceSeconds: number }
@@ -131,6 +133,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   defaultStudyMode: 'listening',
   showHintInitially: false,
+  selectionChipEnabled: true,
   readAloud: {
     speed: 1,
     repetition: 1,
@@ -222,6 +225,7 @@ export type MessageType =
   | 'TOGGLE_TRANSLATION'
   | 'TRANSLATE_IN_CONTEXT'
   | 'GET_TRANSLATION_API_AVAILABLE'
+  | 'GET_TRANSLATOR_STATUS'
   | 'SHOW_DICTIONARY_POPOVER'
   | 'GET_SELECTION_CONTEXT'
   | 'START_READ_ALOUD_FROM'

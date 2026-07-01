@@ -15,6 +15,11 @@ export default function Popup() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
   const [readable, setReadable] = useState<boolean | null>(null);
+  // Coarse on-device AI translation status for the active tab.
+  // null → not on a page where the content script runs (show nothing / neutral).
+  const [translatorStatus, setTranslatorStatus] = useState<
+    "available" | "downloading" | "unavailable" | null
+  >(null);
   const [readAloudState, setReadAloudState] = useState<ReadAloudState>("idle");
   const [pomodoroState, setPomodoroState] = useState<PomodoroState | null>(null);
   const [showTodoList, setShowTodoList] = useState(false);
@@ -73,6 +78,17 @@ export default function Popup() {
         (res: { readable: boolean } | null) => {
           void chrome.runtime.lastError; // suppress "no receiving end" errors
           setReadable(res?.readable ?? true); // if unreachable, assume readable and let user try
+        },
+      );
+
+      chrome.tabs.sendMessage(
+        tab.id,
+        { type: "GET_TRANSLATOR_STATUS" },
+        (res: { status: "available" | "downloading" | "unavailable" } | null) => {
+          void chrome.runtime.lastError; // suppress "no receiving end" errors
+          // On chrome://, extension, or non-injected pages there is no receiver:
+          // leave status null so the badge shows a neutral "unavailable on this page".
+          setTranslatorStatus(res?.status ?? null);
         },
       );
     });
@@ -576,6 +592,22 @@ export default function Popup() {
           <div style={{ fontSize: 11, color: '#666688', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
             Read aloud and translate website text on the fly.
           </div>
+
+          {settings.translation.enabled && (() => {
+            const badges = {
+              available: { text: '🔒 On-device AI ready', color: '#4ade80' },
+              downloading: { text: '⏳ Downloading language model…', color: '#facc15' },
+              unavailable: { text: '🌐 Using Google translation', color: '#8888aa' },
+            };
+            const badge = translatorStatus
+              ? badges[translatorStatus]
+              : { text: '🌐 Translation unavailable on this page', color: '#666688' };
+            return (
+              <div style={{ fontSize: 11, color: badge.color, marginTop: -4, marginBottom: 8, lineHeight: 1.4 }}>
+                {badge.text}
+              </div>
+            );
+          })()}
 
           {readAloudState === 'idle' ? (
             <button

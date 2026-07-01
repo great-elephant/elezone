@@ -1,9 +1,10 @@
 import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint } from './modules/anchor'
 import { start, startFrom, setOnStateChange, getState, syncRemoteState } from './modules/readAloud'
 import { showWidget, hideWidget, updateWidgetState, showWarning } from './modules/floatingWidget'
-import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable } from './modules/translation'
+import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
 import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor } from '../shared/types'
 import { initDictionary } from './modules/dictionary'
+import { initSelectionChip, maybeShowSelectionTip } from './modules/selectionChip'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { OcrManager } from './components/OcrManager'
@@ -305,6 +306,8 @@ function protectFromSiteEvents(container: HTMLElement) {
 
 async function init() {
   initDictionary()
+  initSelectionChip()
+  void maybeShowSelectionTip()
   await reanchor(window.location.href)
   checkScrollTarget()
 
@@ -396,6 +399,9 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
 
     case 'CHECK_TRANSLATOR_AVAILABLE':
       return isTranslatorAvailable()
+
+    case 'GET_TRANSLATOR_STATUS':
+      return { status: await getTranslatorStatus() }
 
     case 'CHECK_READABLE': {
       const { extractSentences } = await import('./modules/readAloud')
