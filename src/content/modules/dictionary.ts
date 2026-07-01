@@ -1,6 +1,6 @@
 import { translate } from './translation'
 import { getSelectionContext, applyHighlight } from './anchor'
-import { BookmarkColor } from '../../shared/types'
+import { BookmarkColor, BOOKMARK_COLORS } from '../../shared/types'
 import type { ContextTranslateResult } from '../../background/aiTranslate'
 
 let host: HTMLElement | null = null
@@ -90,6 +90,35 @@ const DICTIONARY_CSS = `
     justify-content: flex-end;
     gap: 6px;
     margin-top: 4px;
+  }
+  .deck-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+  }
+  .deck-label {
+    font-size: 0.75em;
+    color: #8a8ab0;
+    flex-shrink: 0;
+  }
+  .deck-dots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .deck-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    padding: 0;
+    box-sizing: border-box;
+    cursor: pointer;
+  }
+  .deck-dot.selected {
+    border-color: #ffffff;
+    box-shadow: 0 0 3px rgba(255,255,255,0.5);
   }
   button {
     background: #2a2a4a;
@@ -398,6 +427,47 @@ async function showPopover(
   }
   sourceBadge.textContent = SOURCE_LABELS[wordResult?.source ?? ''] ?? '🌐 Google translate'
 
+  // Deck (color) picker — routes this save to any named deck. Pre-selected to the
+  // incoming color (default 'red' from the quick-save chip, or the color chosen
+  // from the right-click menu).
+  const COLOR_KEYS = Object.keys(BOOKMARK_COLORS) as BookmarkColor[]
+  const deckOrder: BookmarkColor[] = settings?.deckOrder?.length === COLOR_KEYS.length
+    ? settings.deckOrder
+    : COLOR_KEYS
+  const deckLabels: Partial<Record<BookmarkColor, string>> = settings?.deckLabels || {}
+  let selectedColor: BookmarkColor = color
+
+  const deckRow = document.createElement('div')
+  deckRow.className = 'deck-row'
+  const deckLabelEl = document.createElement('span')
+  deckLabelEl.className = 'deck-label'
+  deckLabelEl.textContent = 'Deck'
+  const deckDots = document.createElement('div')
+  deckDots.className = 'deck-dots'
+  const dotEls: Partial<Record<BookmarkColor, HTMLButtonElement>> = {}
+  for (const c of deckOrder) {
+    const dot = document.createElement('button')
+    dot.type = 'button'
+    dot.className = 'deck-dot' + (c === selectedColor ? ' selected' : '')
+    dot.style.background = BOOKMARK_COLORS[c]
+    const name = deckLabels[c] || (c.charAt(0).toUpperCase() + c.slice(1))
+    dot.title = name
+    dot.setAttribute('aria-label', `Save to ${name} deck`)
+    dot.setAttribute('aria-pressed', String(c === selectedColor))
+    dot.onclick = () => {
+      selectedColor = c
+      for (const key of Object.keys(dotEls) as BookmarkColor[]) {
+        const on = key === c
+        dotEls[key]!.classList.toggle('selected', on)
+        dotEls[key]!.setAttribute('aria-pressed', String(on))
+      }
+      input.focus()
+    }
+    dotEls[c] = dot
+    deckDots.append(dot)
+  }
+  deckRow.append(deckLabelEl, deckDots)
+
   const actions = document.createElement('div')
   actions.className = 'actions'
 
@@ -424,7 +494,7 @@ async function showPopover(
       prefix: context?.prefix || '',
       suffix: context?.suffix || '',
       occurrenceIndex: context?.occurrenceIndex || 0,
-      color,
+      color: selectedColor,
       createdAt: Date.now(),
       orphaned: false,
       translation: input.value.trim(),
@@ -455,7 +525,7 @@ async function showPopover(
   actions.append(cancelBtn, saveBtn)
   popover.append(input)
   if (sensesRow) popover.append(sensesRow)
-  popover.append(sourceBadge, actions)
+  popover.append(sourceBadge, deckRow, actions)
   
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
