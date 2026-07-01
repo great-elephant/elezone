@@ -322,14 +322,33 @@ export default function Popup() {
         }
       `}</style>
       <header style={styles.header}>
-        <span style={styles.logo}>
-          <img
-            src="/icons/icon32.png"
-            alt="logo"
-            style={{ width: "20px", height: "20px", display: "block" }}
-          />
-        </span>
-        <span style={styles.title}>EleZone</span>
+        <button
+          onClick={openDashboard}
+          title="Open Dashboard"
+          aria-label="Open Dashboard"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: "none",
+            border: "none",
+            padding: 0,
+            margin: 0,
+            color: "inherit",
+            cursor: "pointer",
+          }}
+          onMouseEnter={e => (e.currentTarget.style.opacity = "0.8")}
+          onMouseLeave={e => (e.currentTarget.style.opacity = "1")}
+        >
+          <span style={styles.logo}>
+            <img
+              src="/icons/icon32.png"
+              alt="logo"
+              style={{ width: "20px", height: "20px", display: "block" }}
+            />
+          </span>
+          <span style={styles.title}>EleZone</span>
+        </button>
         <div style={{
           display: "flex",
           alignItems: "center",
@@ -713,10 +732,6 @@ export default function Popup() {
             </div>
           )}
         </div>
-
-        <button style={styles.dashboardBtn} onClick={openDashboard}>
-          Open Dashboard ↗
-        </button>
       </div>
     </div>
   );
@@ -825,8 +840,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "12px 16px 10px",
     borderBottom: "1px solid #2a2a4a",
   },
-  logo: { fontSize: 20 },
-  title: { fontSize: 15, fontWeight: 600, letterSpacing: 0.3 },
+  logo: { fontSize: 20, display: "flex", alignItems: "center" },
+  title: { fontSize: 15, fontWeight: 600, letterSpacing: 0.3, lineHeight: 1, transform: "translateY(1px)" },
   body: {
     display: "flex",
     flexDirection: "column",
