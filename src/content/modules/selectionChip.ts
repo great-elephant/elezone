@@ -99,6 +99,9 @@ function isInEditableOrOwn(node: Node | null): boolean {
     node?.nodeType === Node.ELEMENT_NODE
       ? (node as HTMLElement)
       : node?.parentElement ?? null
+  // The OCR result popup's text is contentEditable, but we still want the
+  // quick-save chip to work there — allow selections inside it.
+  if (el?.closest('.cxt-ocr-popup')) return false
   while (el) {
     const tag = el.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA') return true
@@ -219,7 +222,9 @@ export function initSelectionChip() {
     }
   })
 
-  document.addEventListener('mouseup', handleMouseUp)
+  // Capture phase so the OCR popup's event guard (which stops mouseup bubbling)
+  // doesn't prevent the chip from appearing for selections inside it.
+  document.addEventListener('mouseup', handleMouseUp, { capture: true })
   document.addEventListener('mousedown', handleMouseDown, { capture: true })
   document.addEventListener('selectionchange', handleSelectionChange)
   window.addEventListener('scroll', removeChip, { passive: true, capture: true })

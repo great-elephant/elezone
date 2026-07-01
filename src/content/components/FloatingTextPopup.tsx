@@ -158,8 +158,8 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
       const target = e.target as Element;
       // Ignore if clicking inside the popup
       if (popupRef.current && popupRef.current.contains(target)) return;
-      // Ignore if clicking inside dictionary popover or tooltip
-      if (target.closest('.cxt-dict-host') || target.closest('.cxt-delete-tooltip')) return;
+      // Ignore clicks inside the dictionary popover, tooltip, or the save chip
+      if (target.closest('.cxt-dict-host') || target.closest('.cxt-delete-tooltip') || target.closest('.cxt-selchip-host')) return;
 
       onClose();
     };
