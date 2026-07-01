@@ -52,6 +52,9 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   const [combo, setCombo] = useState(0)
   const [maxCombo, setMaxCombo] = useState(0)
   const [rewardNonce, setRewardNonce] = useState(0)
+  // A card answered wrong at least once does not extend the streak, even if the
+  // user retries and gets it right.
+  const [cardFailed, setCardFailed] = useState(false)
   const emberParticles = useMemo(() => {
     const n = 10
     const colors = ['#ffd93d', '#ffb36b', '#ff9d3d', '#ff6b3d', '#4ade80']
@@ -87,6 +90,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     setEarnedSpark(false)
     setCombo(0)
     setMaxCombo(0)
+    setCardFailed(false)
     if (mode === 'multiple_choice') generateMcOptions(items[0], items)
     if (mode === 'listening') {
       setTimeout(() => speakText((items[0].prefix || '') + items[0].text + (items[0].suffix || ''), items[0].sourceLang), 300)
@@ -147,6 +151,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         setVerificationPassed(mode === 'passive')
         setUserAnswer('')
         setVerifyError(false)
+        setCardFailed(false)
         setWrongOptions(new Set())
         if (mode === 'multiple_choice') generateMcOptions(nextQueue[0], items)
         if (mode === 'listening') {
@@ -168,13 +173,14 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
       setSessionScore(prev => ({ ...prev, correct: prev.correct + 1 }))
       setEarnedSpark(true)
       setRewardNonce(n => n + 1)
-      // Any correct answer extends the streak — a wrong attempt you later
-      // correct still counts; only giving up breaks it.
-      setCombo(c => c + 1)
+      // Only a card answered right with no wrong attempt extends the streak.
+      if (!cardFailed) setCombo(c => c + 1)
       setVerifyError(false)
       speakText(activeItem.text, activeItem.sourceLang)
     } else {
       setVerifyError(true)
+      setCombo(0)
+      setCardFailed(true)
       if (mode === 'multiple_choice') {
         setWrongOptions(prev => new Set(prev).add(value))
         speakText(activeItem.text, activeItem.sourceLang)
@@ -370,7 +376,6 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
                           style={{ ...styles.startBtn, marginTop: '8px', padding: '10px 24px', fontSize: '16px', width: 'auto' }}
                           onClick={() => {
                             setSessionScore(prev => ({ ...prev, giveUps: prev.giveUps + 1 }))
-                            setCombo(0)
                             handleNext()
                           }}
                         >
