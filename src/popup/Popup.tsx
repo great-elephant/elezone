@@ -18,7 +18,7 @@ export default function Popup() {
   // Coarse on-device AI translation status for the active tab.
   // null → not on a page where the content script runs (show nothing / neutral).
   const [translatorStatus, setTranslatorStatus] = useState<
-    "available" | "downloading" | "unavailable" | null
+    "available" | "downloadable" | "downloading" | "unavailable" | null
   >(null);
   const [readAloudState, setReadAloudState] = useState<ReadAloudState>("idle");
   const [pomodoroState, setPomodoroState] = useState<PomodoroState | null>(null);
@@ -84,7 +84,7 @@ export default function Popup() {
       chrome.tabs.sendMessage(
         tab.id,
         { type: "GET_TRANSLATOR_STATUS" },
-        (res: { status: "available" | "downloading" | "unavailable" } | null) => {
+        (res: { status: "available" | "downloadable" | "downloading" | "unavailable" } | null) => {
           void chrome.runtime.lastError; // suppress "no receiving end" errors
           // On chrome://, extension, or non-injected pages there is no receiver:
           // leave status null so the badge shows a neutral "unavailable on this page".
@@ -613,7 +613,8 @@ export default function Popup() {
           {settings.translation.enabled && (() => {
             const badges = {
               available: { text: '🔒 On-device AI ready', color: '#4ade80' },
-              downloading: { text: '⏳ Downloading language model…', color: '#facc15' },
+              downloadable: { text: '🌐 Using Google (on-device AI not downloaded)', color: '#8888aa' },
+              downloading: { text: '⏳ Downloading on-device model…', color: '#facc15' },
               unavailable: { text: '🌐 Using Google translation', color: '#8888aa' },
             };
             const badge = translatorStatus

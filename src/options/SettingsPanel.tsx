@@ -543,7 +543,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <label style={{ fontSize: 13, color: '#8888aa' }}>Word translation sources (tried in order, first hit wins)</label>
           {([
-            ['disableAI', '🔒 On-device AI (Gemini Nano)'],
+            ['disableAI', '🔒 On-device AI (Gemini Nano) · experimental'],
             ['disableGoogleContext', '🌐 Google · sentence context'],
             ['disableGoogleSenses', '🌐 Google · dictionary senses'],
           ] as const).map(([key, label]) => {
@@ -572,6 +572,10 @@ export default function SettingsPanel({ settings, onChange }: Props) {
           })}
           <span style={{ fontSize: 12, color: '#8a8ab0' }}>
             🌐 Google · plain translate is always the last resort
+          </span>
+          <span style={{ fontSize: 12, color: '#c9a06b' }}>
+            ⚠️ On-device AI (Gemini Nano) is experimental and can be slow; for Vietnamese
+            it is often less accurate than Google — leave it off unless you want to experiment.
           </span>
         </div>
 
