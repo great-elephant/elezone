@@ -121,7 +121,7 @@ async function injectOverlay(el: HTMLElement) {
 
   const badge = document.createElement('span')
   badge.style.cssText = `
-    font-size: 0.72em; font-style: normal; color: #556; background: #111820;
+    font-size: 0.72em; font-style: normal; color: #8888aa; background: #111820;
     border-radius: 3px; padding: 2px 5px; flex-shrink: 0; margin-top: 3px;
   `
   badge.textContent = '…'
@@ -182,7 +182,7 @@ async function injectSentenceOverlay(el: HTMLElement) {
         margin-left:8px;
         font-size: 0.72em;
         font-style: normal;
-        color: #556;
+        color: #8888aa;
         background: #111820;
         border-radius: 3px;
         padding: 2px 5px;

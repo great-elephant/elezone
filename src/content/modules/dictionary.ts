@@ -50,7 +50,7 @@ const DICTIONARY_CSS = `
   }
   .senses-label {
     font-size: 0.75em;
-    color: #556688;
+    color: #8a8ab0;
     margin-bottom: 2px;
   }
   .senses {
@@ -73,7 +73,7 @@ const DICTIONARY_CSS = `
   }
   .source-badge {
     font-size: 0.72em;
-    color: #556;
+    color: #8888aa;
     background: #111820;
     border-radius: 3px;
     padding: 2px 6px;
@@ -108,6 +108,11 @@ const DICTIONARY_CSS = `
   }
   button.primary:hover {
     background: #5a6aaa;
+  }
+  button:focus-visible,
+  .translation-input:focus-visible {
+    outline: 2px solid #6b8aff;
+    outline-offset: 2px;
   }
   .spark-reward {
     position: absolute;
@@ -170,6 +175,10 @@ const TOAST_CSS = `
     line-height: 1;
   }
   .cxt-toast-close:hover { color: #ffffff; }
+  .cxt-toast-close:focus-visible {
+    outline: 2px solid #6b8aff;
+    outline-offset: 2px;
+  }
 `
 
 function showToast(message: string) {
@@ -190,6 +199,7 @@ function showToast(message: string) {
   close.className = 'cxt-toast-close'
   close.textContent = '✕'
   close.title = 'Dismiss'
+  close.setAttribute('aria-label', 'Dismiss')
 
   let dismissed = false
   const dismiss = () => {
@@ -366,6 +376,7 @@ async function showPopover(
       chip.type = 'button'
       chip.className = 'sense-chip'
       chip.textContent = sense
+      chip.setAttribute('aria-label', `Use translation: ${sense}`)
       chip.onclick = () => {
         input.value = sense
         input.focus()

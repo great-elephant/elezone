@@ -35,6 +35,10 @@ const CHIP_CSS = `
     border-color: #4ade80;
     background: #222244;
   }
+  .chip:focus-visible {
+    outline: 2px solid #4ade80;
+    outline-offset: 2px;
+  }
 `
 
 const TIP_CSS = `
@@ -68,6 +72,10 @@ const TIP_CSS = `
     line-height: 1;
   }
   .tip-close:hover { color: #ffffff; }
+  .tip-close:focus-visible {
+    outline: 2px solid #6b8aff;
+    outline-offset: 2px;
+  }
 `
 
 const CHIP_WIDTH = 80 // approximate width for clamping
@@ -114,6 +122,9 @@ function showChip(rect: DOMRect) {
   const chip = document.createElement('div')
   chip.className = 'chip'
   chip.innerHTML = '<span>＋</span><span>Save</span>'
+  chip.setAttribute('role', 'button')
+  chip.title = 'Save selection'
+  chip.setAttribute('aria-label', 'Save selection')
 
   // Horizontal: anchor to the selection start, clamped to the viewport.
   let left = rect.left
@@ -255,6 +266,7 @@ export async function maybeShowSelectionTip() {
   close.className = 'tip-close'
   close.textContent = '✕'
   close.title = 'Dismiss'
+  close.setAttribute('aria-label', 'Dismiss')
 
   let dismissed = false
   const dismiss = () => {

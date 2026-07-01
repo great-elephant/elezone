@@ -35,6 +35,10 @@ const WIDGET_CSS = `
     line-height: 1;
   }
   button:hover { background: #2a2a4a; }
+  button:focus-visible {
+    outline: 2px solid #6b8aff;
+    outline-offset: 2px;
+  }
   .warning {
     position: fixed;
     bottom: 80px;
@@ -66,11 +70,13 @@ export function showWidget() {
   pauseBtn = document.createElement('button')
   pauseBtn.textContent = '⏸'
   pauseBtn.title = 'Pause'
+  pauseBtn.setAttribute('aria-label', 'Pause')
   pauseBtn.onclick = togglePause
 
   const stopBtn = document.createElement('button')
   stopBtn.textContent = '⏹'
   stopBtn.title = 'Stop'
+  stopBtn.setAttribute('aria-label', 'Stop')
   stopBtn.onclick = () => { stop(); hideWidget() }
 
   widget.append(pauseBtn, stopBtn)
@@ -85,9 +91,11 @@ export function updateWidgetState(state: 'playing' | 'paused' | 'idle') {
   if (state === 'playing') {
     pauseBtn.textContent = '⏸'
     pauseBtn.title = 'Pause'
+    pauseBtn.setAttribute('aria-label', 'Pause')
   } else if (state === 'paused') {
     pauseBtn.textContent = '▶'
     pauseBtn.title = 'Resume'
+    pauseBtn.setAttribute('aria-label', 'Resume')
   }
 }
 

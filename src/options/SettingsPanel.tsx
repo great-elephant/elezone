@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { Settings, BookmarkColor, BOOKMARK_COLORS, DEFAULT_SETTINGS } from '../shared/types'
+import { RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
 import {
   DndContext,
   closestCenter,
@@ -89,6 +90,13 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     chrome.runtime.sendMessage({ type: 'POMODORO_COMMAND', payload: { action: 'updateSettings', settings: next.pomodoro } })
   }
 
+  function setGamification(key: keyof NonNullable<Settings['gamification']>, value: unknown) {
+    const current = settings.gamification || DEFAULT_SETTINGS.gamification
+    const next = { ...settings, gamification: { ...current, [key]: value } } as Settings
+    next.updatedAt = Date.now()
+    onChange(next)
+  }
+
   function testVoice(langCode?: string, voiceName?: string) {
     chrome.tts.stop()
     const testId = langCode || 'default'
@@ -137,12 +145,13 @@ export default function SettingsPanel({ settings, onChange }: Props) {
   const ra = settings.readAloud
   const tr = settings.translation
   const pm = settings.pomodoro || DEFAULT_SETTINGS.pomodoro!
+  // Undefined intensity (existing users) falls back to the friendly default.
+  const roastIntensity: RoastIntensity = settings.gamification?.roastIntensity ?? DEFAULT_ROAST_INTENSITY
 
   return (
     <div style={styles.root}>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Cloud Sync</h2>
+      <CollapsibleSection title="Cloud Sync" defaultOpen>
 
         <Field label="Auto-sync to Google Drive">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -168,10 +177,9 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             />
           </Field>
         )}
-      </section>
+      </CollapsibleSection>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Study Session</h2>
+      <CollapsibleSection title="Study Session">
 
         <Field label="Always show hint initially">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -186,10 +194,23 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             </span>
           </div>
         </Field>
-      </section>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Notifications</h2>
+        <Field label="Selection save chip">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input
+              type="checkbox"
+              checked={settings.selectionChipEnabled ?? true}
+              onChange={e => onChange({ ...settings, selectionChipEnabled: e.target.checked, updatedAt: Date.now() })}
+              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+            />
+            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
+              Show a floating "Save" chip when you highlight text on a page
+            </span>
+          </div>
+        </Field>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Notifications">
 
         <Field label="Flashcard Notifications">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -252,10 +273,9 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         >
           🔔 Test Notification
         </button>
-      </section>
+      </CollapsibleSection>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Decks</h2>
+      <CollapsibleSection title="Decks">
         <p style={{ fontSize: 13, color: '#8888aa', margin: '0 0 4px' }}>
           Give each color a name to turn it into a deck. Drag to reorder — the order applies
           to the Library filter chips and the right-click save menu.
@@ -274,10 +294,9 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             </div>
           </SortableContext>
         </DndContext>
-      </section>
+      </CollapsibleSection>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Read Aloud</h2>
+      <CollapsibleSection title="Read Aloud">
 
         <Field label={`Speed: ${ra.speed.toFixed(1)}×`}>
           <input type="range" min={0.5} max={3} step={0.1} value={ra.speed}
@@ -315,6 +334,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
               style={{ ...styles.testBtnSmall, ...(testingVoice === 'default' ? styles.testBtnActive : {}) }}
               onClick={() => testVoice()}
               title="Test default voice"
+              aria-label={testingVoice === 'default' ? 'Stop testing default voice' : 'Test default voice'}
             >
               {testingVoice === 'default' ? '⏹' : '▶'}
             </button>
@@ -345,6 +365,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
                   style={{ ...styles.testBtnSmall, ...(testingVoice === langCode ? styles.testBtnActive : {}) }}
                   onClick={() => testVoice(langCode, voiceName)}
                   title="Test voice"
+                  aria-label={testingVoice === langCode ? `Stop testing ${langCode} voice` : `Test ${langCode} voice`}
                 >
                   {testingVoice === langCode ? '⏹' : '▶'}
                 </button>
@@ -356,6 +377,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
                     set('readAloud', 'languageVoices', newMap)
                   }}
                   title="Remove override"
+                  aria-label={`Remove ${langCode} voice override`}
                 >
                   ✕
                 </button>
@@ -400,10 +422,9 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             style={styles.range}
             onChange={e => set('readAloud', 'volume', parseFloat(e.target.value))} />
         </Field>
-      </section>
+      </CollapsibleSection>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Focus & Breathe</h2>
+      <CollapsibleSection title="Focus & Breathe">
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
           <Field label="Focus (min)">
@@ -478,10 +499,9 @@ export default function SettingsPanel({ settings, onChange }: Props) {
                 : "Only inhaling? Are you trying to inflate yourself and float away? 🐡"}
           </div>
         )}
-      </section>
+      </CollapsibleSection>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Translation</h2>
+      <CollapsibleSection title="Translation">
 
         <Field label="Default target language">
           <select
@@ -550,16 +570,15 @@ export default function SettingsPanel({ settings, onChange }: Props) {
               </div>
             )
           })}
-          <span style={{ fontSize: 12, color: '#556688' }}>
+          <span style={{ fontSize: 12, color: '#8a8ab0' }}>
             🌐 Google · plain translate is always the last resort
           </span>
         </div>
 
         <OnDeviceAi targetLang={tr.defaultTargetLanguage} onStatusChange={setAiStatus} onModelDownloaded={() => set('translation', 'disableAI', false)} />
-      </section>
+      </CollapsibleSection>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>OCR</h2>
+      <CollapsibleSection title="OCR">
         <Field label="Language Model">
           <select
             style={styles.select}
@@ -608,40 +627,57 @@ export default function SettingsPanel({ settings, onChange }: Props) {
             </span>
           </div>
         </Field>
-      </section>
+      </CollapsibleSection>
 
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Tough Love</h2>
-        <p style={{ fontSize: 13, color: '#ff6b6b', margin: '0 0 12px' }}>
-          * This feature is mandatory and cannot be disabled. We warned you😈!!!
+      <CollapsibleSection title="Tough Love">
+        <p style={{ fontSize: 13, color: '#8888aa', margin: '0 0 12px' }}>
+          When you fall behind on your daily goal, EleZone can nudge you back with
+          a little tough love. Pick the tone — or turn it off completely.
         </p>
 
-        <Field label="Enable Roasting">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <input
-              type="checkbox"
-              checked={true}
-              disabled={true}
-              onChange={() => { }}
-              style={{ width: 18, height: 18, accentColor: '#ff4444', opacity: 0.6, cursor: 'not-allowed' }}
-            />
-            <span style={{ fontSize: 13, color: '#aaaaaa' }}>
-              Scold me if I start slacking off on my learning
-            </span>
+        <Field label="Roast intensity">
+          <div style={{ display: 'flex', gap: 6 }}>
+            {ROAST_INTENSITIES.map(({ value, label }) => {
+              const active = roastIntensity === value
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setGamification('roastIntensity', value)}
+                  style={{
+                    flex: 1,
+                    padding: '7px 8px',
+                    borderRadius: 6,
+                    fontSize: 13,
+                    cursor: 'pointer',
+                    border: active ? '1px solid #4f6ef7' : '1px solid #2a2a4a',
+                    background: active ? '#2a2a4a' : '#0f0f1a',
+                    color: active ? '#e0e0ff' : '#8888aa',
+                    fontWeight: active ? 600 : 400,
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {label}
+                </button>
+              )
+            })}
           </div>
         </Field>
+        <p style={{ fontSize: 12, color: '#8a8ab0', margin: '-8px 0 0' }}>
+          {ROAST_INTENSITY_HINT[roastIntensity]}
+        </p>
 
-        <Field label={`Days without reaching goal: ${settings.roast?.noNewItemsDaysThreshold ?? 3} days`}>
+        <Field label={`Days behind goal before roasting: ${settings.roast?.noNewItemsDaysThreshold ?? 3} days`}>
           <input
             type="range" min={1} max={30} step={1}
             value={settings.roast?.noNewItemsDaysThreshold ?? 3}
-            disabled={true}
-            style={{ ...styles.range, opacity: 0.6, cursor: 'not-allowed' }}
-            onChange={() => { }}
+            disabled={roastIntensity === 'off'}
+            style={{ ...styles.range, opacity: roastIntensity === 'off' ? 0.5 : 1, cursor: roastIntensity === 'off' ? 'not-allowed' : 'pointer' }}
+            onChange={e => set('roast', 'noNewItemsDaysThreshold', parseInt(e.target.value))}
           />
         </Field>
-      </section>
+      </CollapsibleSection>
     </div>
   )
 }
@@ -837,6 +873,7 @@ function SortableDeckItem({
         {...listeners}
         style={itemStyles.handle}
         title="Drag to reorder"
+        aria-label={`Drag to reorder ${color} deck`}
       >
         ⠿
       </span>
@@ -880,6 +917,75 @@ const itemStyles: Record<string, React.CSSProperties> = {
   },
 }
 
+function CollapsibleSection({
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  title: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const contentId = useId()
+
+  return (
+    <section style={styles.section}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
+        aria-controls={contentId}
+        style={collapsibleStyles.header}
+      >
+        <span style={styles.sectionTitle}>{title}</span>
+        <span
+          aria-hidden="true"
+          style={{
+            ...collapsibleStyles.chevron,
+            transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+          }}
+        >
+          ▶
+        </span>
+      </button>
+      {open && (
+        <div id={contentId} style={collapsibleStyles.content}>
+          {children}
+        </div>
+      )}
+    </section>
+  )
+}
+
+const collapsibleStyles: Record<string, React.CSSProperties> = {
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    width: '100%',
+    background: 'transparent',
+    border: 'none',
+    padding: 0,
+    margin: 0,
+    cursor: 'pointer',
+    textAlign: 'left',
+  },
+  chevron: {
+    color: '#8a8ab0',
+    fontSize: 12,
+    flexShrink: 0,
+    transition: 'transform 0.2s ease',
+    marginBottom: 4,
+  },
+  content: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 16,
+  },
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={fieldStyles.row}>
@@ -887,6 +993,20 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div style={fieldStyles.control}>{children}</div>
     </div>
   )
+}
+
+const ROAST_INTENSITIES: { value: RoastIntensity; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'gentle', label: 'Gentle' },
+  { value: 'playful', label: 'Playful' },
+  { value: 'savage', label: 'Savage' },
+]
+
+const ROAST_INTENSITY_HINT: Record<RoastIntensity, string> = {
+  off: 'No roasting — the slacking banner and reminders stay hidden.',
+  gentle: 'Soft, encouraging nudges to get you back on track.',
+  playful: 'Cheeky teasing when you slack off (the friendly default).',
+  savage: 'Over-the-top, dramatic tough love. You asked for it.',
 }
 
 const LANGUAGES: [string, string][] = [

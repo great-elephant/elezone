@@ -311,8 +311,14 @@ export default function Popup() {
         }
         .premium-start-btn:disabled {
           background: #2a2a4a;
-          color: #666688;
+          color: #8a8ab0;
           cursor: not-allowed;
+        }
+        button:focus-visible,
+        input:focus-visible,
+        [role="switch"]:focus-visible {
+          outline: 2px solid #4f6ef7;
+          outline-offset: 2px;
         }
       `}</style>
       <header style={styles.header}>
@@ -353,6 +359,7 @@ export default function Popup() {
             onMouseEnter={e => e.currentTarget.style.color = '#4ade80'}
             onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
             title={`Image to Text (OCR) [${displayLang}] - Alt+O`}
+            aria-label={`Image to Text (OCR) [${displayLang}] - Alt+O`}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
@@ -376,6 +383,7 @@ export default function Popup() {
             onMouseEnter={e => e.currentTarget.style.color = '#c0c0e0'}
             onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
             title="View Feature Guide"
+            aria-label="View Feature Guide"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
@@ -399,6 +407,9 @@ export default function Popup() {
                   ...(settings.pomodoro?.breathingEnabled !== false ? styles.toggleOn : {}),
                 }}
                 onClick={toggleBreathing}
+                role="switch"
+                aria-label="Box breathing animation"
+                aria-pressed={settings.pomodoro?.breathingEnabled !== false}
               >
                 <span
                   style={{
@@ -409,7 +420,7 @@ export default function Popup() {
               </button>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: '#666688', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
+          <div style={{ fontSize: 11, color: '#8a8ab0', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
             Stay focused with Pomodoro timer & Box Breathing.
           </div>
 
@@ -432,6 +443,7 @@ export default function Popup() {
                     onClick={handleCompleteActiveTask}
                     style={{ background: 'none', border: 'none', color: '#8888aa', cursor: 'pointer', padding: '0', display: 'flex', alignItems: 'center', borderRadius: '4px', flexShrink: 0, height: '16px' }}
                     title="Mark as Done"
+                    aria-label="Mark task as done"
                     onMouseEnter={(e) => (e.currentTarget.style.color = '#4ade80')}
                     onMouseLeave={(e) => (e.currentTarget.style.color = '#8888aa')}
                   >
@@ -472,6 +484,7 @@ export default function Popup() {
                     onMouseEnter={e => e.currentTarget.style.color = '#fff'}
                     onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
                     title={`Volume: ${Math.round(((settings.pomodoro?.volume ?? 1) / 2) * 100)}%`}
+                    aria-label={`Timer sound volume: ${Math.round(((settings.pomodoro?.volume ?? 1) / 2) * 100)}%`}
                   >
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
@@ -527,6 +540,8 @@ export default function Popup() {
                     style={{ ...styles.pomodoroBtnSecondary, flex: '0 0 40px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}
                     onClick={() => setShowTodoList(!showTodoList)}
                     title={settings.tasks && settings.tasks.length > 0 ? settings.tasks[0].text : "Todo List"}
+                    aria-label="Toggle todo list"
+                    aria-expanded={showTodoList}
                   >
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <line x1="8" y1="6" x2="21" y2="6"></line>
@@ -578,6 +593,8 @@ export default function Popup() {
                   ...(settings.translation.enabled ? styles.toggleOn : {}),
                 }}
                 onClick={toggleTranslation}
+                role="switch"
+                aria-label="Translate website text"
                 aria-pressed={settings.translation.enabled}
               >
                 <span
@@ -589,7 +606,7 @@ export default function Popup() {
               </button>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: '#666688', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
+          <div style={{ fontSize: 11, color: '#8a8ab0', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
             Read aloud and translate website text on the fly.
           </div>
 
@@ -601,7 +618,7 @@ export default function Popup() {
             };
             const badge = translatorStatus
               ? badges[translatorStatus]
-              : { text: '🌐 Translation unavailable on this page', color: '#666688' };
+              : { text: '🌐 Translation unavailable on this page', color: '#8a8ab0' };
             return (
               <div style={{ fontSize: 11, color: badge.color, marginTop: -4, marginBottom: 8, lineHeight: 1.4 }}>
                 {badge.text}
@@ -655,6 +672,7 @@ export default function Popup() {
                   onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.3)'}
                   onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
                   title={`Volume: ${Math.round((settings.readAloud?.volume ?? 1) * 100)}%`}
+                  aria-label={`Read aloud volume: ${Math.round((settings.readAloud?.volume ?? 1) * 100)}%`}
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>

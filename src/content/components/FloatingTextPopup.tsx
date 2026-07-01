@@ -248,6 +248,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   return (
     <div
       ref={popupRef}
+      className="cxt-ocr-popup"
       lang={targetLang}
       onMouseDown={handleMouseDown}
       style={{
@@ -267,6 +268,13 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
         overflow: 'hidden'
       }}
     >
+      <style>{`
+        .cxt-ocr-popup button:focus-visible,
+        .cxt-ocr-popup [contenteditable]:focus-visible {
+          outline: 2px solid #6bcfff;
+          outline-offset: 2px;
+        }
+      `}</style>
       <div
         className="drag-handle"
         style={{
@@ -295,6 +303,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
           <button
             onClick={handleReadAloud}
             title="Read Aloud"
+            aria-label={isPlaying ? 'Stop reading aloud' : 'Read aloud'}
             style={{
               background: 'none',
               border: 'none',
@@ -311,6 +320,8 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
           </button>
           <button
             onClick={onClose}
+            title="Close"
+            aria-label="Close OCR result"
             style={{
               background: 'none',
               border: 'none',
