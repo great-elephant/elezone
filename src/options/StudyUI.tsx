@@ -50,6 +50,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   // Consecutive correct answers drive the combo escalation; rewardNonce reseeds
   // the ember burst so it regenerates only when a reward actually fires.
   const [combo, setCombo] = useState(0)
+  const [maxCombo, setMaxCombo] = useState(0)
   const [rewardNonce, setRewardNonce] = useState(0)
   const emberParticles = useMemo(() => {
     const n = 10
@@ -66,25 +67,35 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     })
   }, [rewardNonce])
 
+  // Track the highest combo reached this session for the summary "Best streak".
+  useEffect(() => {
+    setMaxCombo(m => (combo > m ? combo : m))
+  }, [combo])
+
+  function initSession() {
+    setSessionQueue(items)
+    setSessionTotal(items.length)
+    setActiveItem(items[0])
+    setShowAnswer(false)
+    setShowHint(!!settings?.showHintInitially)
+    setVerificationPassed(mode === 'passive')
+    setUserAnswer('')
+    setVerifyError(false)
+    setWrongOptions(new Set())
+    setSessionScore({ correct: 0, giveUps: 0 })
+    setShowSessionSummary(false)
+    setEarnedSpark(false)
+    setCombo(0)
+    setMaxCombo(0)
+    if (mode === 'multiple_choice') generateMcOptions(items[0], items)
+    if (mode === 'listening') {
+      setTimeout(() => speakText((items[0].prefix || '') + items[0].text + (items[0].suffix || ''), items[0].sourceLang), 300)
+    }
+  }
+
   useEffect(() => {
     if (items.length > 0) {
-      setSessionQueue(items)
-      setSessionTotal(items.length)
-      setActiveItem(items[0])
-      setShowAnswer(false)
-      setShowHint(!!settings?.showHintInitially)
-      setVerificationPassed(mode === 'passive')
-      setUserAnswer('')
-      setVerifyError(false)
-      setWrongOptions(new Set())
-      setSessionScore({ correct: 0, giveUps: 0 })
-      setShowSessionSummary(false)
-      setEarnedSpark(false)
-      setCombo(0)
-      if (mode === 'multiple_choice') generateMcOptions(items[0], items)
-      if (mode === 'listening') {
-        setTimeout(() => speakText((items[0].prefix || '') + items[0].text + (items[0].suffix || ''), items[0].sourceLang), 300)
-      }
+      initSession()
     } else {
       setActiveItem(null)
       setShowSessionSummary(true)
@@ -182,33 +193,18 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   }
 
   if (showSessionSummary) {
+    const pointsPerReview = settings?.gamification?.pointsPerReview ?? 2
+    const sparksEarned = (mode === 'passive' ? sessionTotal : sessionScore.correct) * pointsPerReview
     return (
-      <div style={styles.dashboard}>
-        <div style={styles.headerRow}>
-          <h2>Session Complete!</h2>
-          <button style={styles.syncBtn} onClick={onClose}>Back to Library</button>
-        </div>
-        <div style={styles.allDone}>
-          <div style={{ fontSize: 40, marginBottom: 16 }}>🏆</div>
-          <h3 style={{ margin: '0 0 12px 0', color: '#ffffff' }}>Great job!</h3>
-          <p style={{ margin: '0 0 24px 0' }}>You completed {sessionTotal} cards.</p>
-          {mode !== 'passive' && (
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '24px', marginBottom: '32px' }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 32, color: '#6bff9e', fontWeight: 'bold' }}>{sessionScore.correct}</div>
-                <div style={{ color: '#8888aa', fontSize: 14 }}>Correct</div>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 32, color: '#ffb36b', fontWeight: 'bold' }}>{sessionScore.giveUps}</div>
-                <div style={{ color: '#8888aa', fontSize: 14 }}>Given Up</div>
-              </div>
-            </div>
-          )}
-          <button ref={nextBtnRef} style={{ ...styles.startBtn, width: 'auto', padding: '12px 32px' }} onClick={onClose}>
-            Back to Library
-          </button>
-        </div>
-      </div>
+      <SessionSummary
+        correct={sessionScore.correct}
+        total={sessionTotal}
+        maxCombo={maxCombo}
+        sparksEarned={sparksEarned}
+        mode={mode}
+        onClose={onClose}
+        onRestart={() => { if (items.length > 0) initSession() }}
+      />
     )
   }
 
@@ -625,4 +621,166 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 2,
     pointerEvents: 'none',
   }
+}
+
+const sessionSummaryStyles = `
+  @keyframes cxt-confetti-fall {
+    0%   { opacity: 1; transform: translate(0, 0) rotate(0deg); }
+    100% { opacity: 0; transform: translate(var(--drift), 460px) rotate(var(--rot)); }
+  }
+  @keyframes cxt-rank-pop {
+    0%   { transform: scale(0.3); opacity: 0; }
+    60%  { transform: scale(1.15); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .cxt-confetti { animation: cxt-confetti-fall var(--dur) ease-in var(--delay) forwards; }
+  .cxt-rank-pop { display: inline-block; animation: cxt-rank-pop 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+  @media (prefers-reduced-motion: reduce) {
+    .cxt-confetti { display: none; }
+    .cxt-rank-pop { animation: none; }
+  }
+`
+
+function Pill({ value, label, color }: { value: string; label: string; color: string }) {
+  return (
+    <div style={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 12, padding: '10px 16px', minWidth: 88 }}>
+      <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{value}</div>
+      <div style={{ fontSize: 12, color: '#8888aa', marginTop: 2 }}>{label}</div>
+    </div>
+  )
+}
+
+function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose, onRestart }: {
+  correct: number
+  total: number
+  maxCombo: number
+  sparksEarned: number
+  mode: StudyMode
+  onClose: () => void
+  onRestart: () => void
+}) {
+  const isPassive = mode === 'passive'
+  const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0
+  const rank = isPassive
+    ? { emoji: '🎉', title: 'Session complete!', color: '#6bcfff' }
+    : accuracy >= 100 ? { emoji: '🏆', title: 'Perfect!', color: '#ffd93d' }
+      : accuracy >= 80 ? { emoji: '🎉', title: 'Great job!', color: '#4ade80' }
+        : accuracy >= 50 ? { emoji: '💪', title: 'Nice work!', color: '#6bcfff' }
+          : { emoji: '🌱', title: 'Keep practicing!', color: '#ffb36b' }
+
+  const [ringPct, setRingPct] = useState(0)
+  useEffect(() => {
+    const id = setTimeout(() => setRingPct(accuracy), 120)
+    return () => clearTimeout(id)
+  }, [accuracy])
+
+  const confetti = useMemo(() => {
+    const colors = ['#ffd93d', '#ff6bc0', '#6bcfff', '#4ade80', '#ffb36b', '#c06bff']
+    return Array.from({ length: 40 }, (_, i) => ({
+      left: Math.random() * 100,
+      delay: Math.random() * 0.4,
+      dur: 1.6 + Math.random() * 1.4,
+      color: colors[i % colors.length],
+      size: 5 + Math.round(Math.random() * 5),
+      rot: Math.round(Math.random() * 540),
+      drift: `${(Math.random() - 0.5) * 140}px`,
+    }))
+  }, [])
+
+  const closeBtnRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    const t = setTimeout(() => closeBtnRef.current?.focus(), 150)
+    return () => clearTimeout(t)
+  }, [])
+
+  const R = 70
+  const SW = 14
+  const CIRC = 2 * Math.PI * R
+  const dashoffset = CIRC - (ringPct / 100) * CIRC
+
+  return (
+    <div style={{ position: 'relative', maxWidth: 600, margin: '0 auto', padding: '20px 0', overflow: 'hidden' }}>
+      <style>{sessionSummaryStyles}</style>
+
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 3 }}>
+        {confetti.map((c, i) => (
+          <span
+            key={i}
+            className="cxt-confetti"
+            style={{
+              position: 'absolute',
+              top: -14,
+              left: `${c.left}%`,
+              width: c.size,
+              height: c.size * 0.5,
+              background: c.color,
+              borderRadius: 1,
+              '--dur': `${c.dur}s`,
+              '--delay': `${c.delay}s`,
+              '--rot': `${c.rot}deg`,
+              '--drift': c.drift,
+            } as React.CSSProperties}
+          />
+        ))}
+      </div>
+
+      <div style={{
+        background: 'linear-gradient(135deg, #1e1e32 0%, #111122 100%)',
+        border: '1px solid #3a3a6a',
+        borderRadius: 20,
+        padding: '36px 28px',
+        boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
+        textAlign: 'center',
+        position: 'relative',
+        zIndex: 2,
+      }}>
+        <div className="cxt-rank-pop" style={{ fontSize: 56, filter: `drop-shadow(0 0 16px ${rank.color}66)` }}>
+          {rank.emoji}
+        </div>
+        <div style={{ fontSize: 26, fontWeight: 'bold', color: rank.color, marginTop: 4 }}>{rank.title}</div>
+        <div style={{ color: '#8888aa', marginTop: 6, fontSize: 14 }}>
+          {isPassive ? `Reviewed ${total} cards` : `You completed ${total} cards`}
+        </div>
+
+        {!isPassive && (
+          <div style={{ position: 'relative', width: 180, height: 180, margin: '24px auto 8px' }}>
+            <svg width="180" height="180" style={{ transform: 'rotate(-90deg)' }}>
+              <circle cx="90" cy="90" r={R} stroke="#161b22" strokeWidth={SW} fill="none" />
+              <circle
+                cx="90" cy="90" r={R} stroke={rank.color} strokeWidth={SW} fill="none"
+                strokeDasharray={CIRC} strokeDashoffset={dashoffset} strokeLinecap="round"
+                style={{ transition: 'stroke-dashoffset 1s cubic-bezier(0.22, 1, 0.36, 1)' }}
+              />
+            </svg>
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ fontSize: 40, fontWeight: 'bold', color: '#fff' }}>{accuracy}%</div>
+              <div style={{ fontSize: 13, color: '#8888aa' }}>{correct}/{total}</div>
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap', marginTop: isPassive ? 24 : 8, marginBottom: 28 }}>
+          {!isPassive && <Pill value={`${correct}`} label="Correct" color="#6bff9e" />}
+          {!isPassive && <Pill value={`🔥×${maxCombo}`} label="Best streak" color="#ffb36b" />}
+          <Pill value={`+${sparksEarned} 🔥`} label="Sparks earned" color="#ffd93d" />
+        </div>
+
+        <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+          <button
+            onClick={onRestart}
+            style={{ background: 'transparent', color: '#8888cc', border: '1px solid #3a3a5a', borderRadius: 10, padding: '12px 24px', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}
+          >
+            Study again
+          </button>
+          <button
+            ref={closeBtnRef}
+            onClick={onClose}
+            style={{ background: '#4a5a9a', color: '#fff', border: 'none', borderRadius: 10, padding: '12px 24px', fontSize: 15, fontWeight: 'bold', cursor: 'pointer' }}
+          >
+            Back to Library
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
