@@ -1,8 +1,10 @@
 import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, getWordRangeAtPoint } from './modules/anchor'
-import { start, startFrom, startFromElement, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent } from './modules/readAloud'
-import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice } from './modules/floatingWidget'
+import { start, startFrom, startFromElement, startFromIndex, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally } from './modules/readAloud'
+import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
-import { initReadAloudAffordances, setEnabled as setAffordancesEnabled, setAffordanceSpeed } from './modules/readAloudAffordances'
+import { initReadAloudAffordances, setEnabled as setAffordancesEnabled, setAffordanceSpeed, refreshResumeState, clearResumeState } from './modules/readAloudAffordances'
+import { installSpaNavigationGuard } from './modules/readAloudSpaGuard'
+import { savePosition } from './modules/readAloudPosition'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
 import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor } from '../shared/types'
 import { initDictionary } from './modules/dictionary'
@@ -78,12 +80,25 @@ function checkScrollTarget() {
 setOnStateChange(newState => {
   updateWidgetState(newState)
   if (newState === 'idle') {
+    const finished = didFinishNaturally()
     hideWidget()
     // Tear down the reading marker + focus spotlight hosts when reading stops.
     destroyReadingOverlays()
+    // A natural finish shows the "Finished" card (F22); a user stop just hides.
     // Reading finished/stopped — bring the idle "Listen" chip + ▶ handle back.
     setAffordancesEnabled(true)
+    if (finished) {
+      showFinishedCard()
+      // Position was cleared on finish — force the chip to plain "Listen" now
+      // rather than reading storage (which could race the clear).
+      clearResumeState()
+    } else {
+      // A user stop saved a position — offer Resume (F24).
+      void refreshResumeState()
+    }
   } else {
+    // A new session started — dismiss any leftover Finished card.
+    hideFinishedCard()
     // Reading is active — hide the idle affordances so they don't overlap the
     // mini-player or the click-to-define flow.
     setAffordancesEnabled(false)
@@ -93,6 +108,9 @@ setOnStateChange(newState => {
     updateWidgetVoice(voice, lang)
   }
 })
+
+// F22 Replay: restart from the top exactly like the popup's Start path.
+setOnReplay(() => { void startReadingFromTop() })
 
 // Refresh the mini-player voice chip whenever the background reports a new
 // resolved/auto-picked voice or language (D14/D16).
@@ -126,6 +144,18 @@ async function startReadingFromElement(el: HTMLElement) {
     await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
   }
   await startFromElement(settings.readAloud, el)
+}
+
+// Resume reading at a saved sentence index (F24). Mirrors the Start path.
+async function startReadingFromIndex(index: number) {
+  if (getState() !== 'idle') return
+  const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+  if (!settings?.readAloud) return
+  showWidget()
+  if (settings.translation?.enabled) {
+    await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
+  }
+  await startFromIndex(settings.readAloud, index)
 }
 
 // Keep the chip's "~N min" estimate in sync with the configured speed.
@@ -424,10 +454,29 @@ async function init() {
   initSelectionChip()
   // Idle discoverability: "🎧 Listen" chip near the title + per-paragraph ▶.
   // Only active while read-aloud is idle (toggled via the state-change handler).
+  // The chip becomes a "▶ Resume" when a saved position exists for this URL.
   initReadAloudAffordances(
     () => { void startReadingFromTop() },
     (el) => { void startReadingFromElement(el) },
+    (index) => { void startReadingFromIndex(index) },
   )
+
+  // F25: on a soft (SPA) navigation the sentence ranges go stale — stop reading
+  // cleanly and save the position so Resume works when the user returns. We do
+  // NOT try to auto-continue on the new page.
+  installSpaNavigationGuard(() => {
+    if (getState() === 'idle') return
+    // Capture the position now, before the DOM/URL context is fully gone.
+    const { index, total } = getProgress()
+    void savePosition(index, total)
+    // Tell the background to stop this tab's session; then stop locally too in
+    // case the async idle broadcast doesn't round-trip before more nav churn.
+    // syncRemoteState('idle') tears down the mini-player + overlays and (since
+    // this isn't a natural finish) also persists the position.
+    chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'stop' } }).catch(() => {})
+    syncRemoteState('idle')
+  })
+
   void maybeShowSelectionTip()
   await reanchor(window.location.href)
   checkScrollTarget()
@@ -498,8 +547,8 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
       return { ok: true }
 
     case 'READ_ALOUD_UPDATE': {
-      const { state, index, total, speed, voice, lang } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number; total?: number; speed?: number; voice?: string; lang?: string }
-      syncRemoteState(state, index, speed, voice, lang)
+      const { state, index, total, speed, voice, lang, finished } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number; total?: number; speed?: number; voice?: string; lang?: string; finished?: boolean }
+      syncRemoteState(state, index, speed, voice, lang, finished)
       if (state !== 'idle') {
         const progress = getProgress()
         // Prefer content-side counts; fall back to the background's authoritative total.

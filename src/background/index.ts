@@ -468,7 +468,16 @@ function startSpeakingWatchdog(token: number) {
   }, 1000)
 }
 
-async function broadcastReadAloudState(tabId: number, state: ReadAloudState, index?: number) {
+// `finished` is set on the *terminal* broadcast when reading ended naturally
+// (reached the end + page repetitions exhausted), so the content script can show
+// a "Finished" card instead of silently hiding the mini-player (F22). A plain
+// user stop broadcasts idle WITHOUT this flag.
+async function broadcastReadAloudState(
+  tabId: number,
+  state: ReadAloudState,
+  index?: number,
+  finished?: boolean,
+) {
   if (state === 'idle') readAloudStateByTab.delete(tabId)
   else readAloudStateByTab.set(tabId, state)
 
@@ -480,7 +489,7 @@ async function broadcastReadAloudState(tabId: number, state: ReadAloudState, ind
 
   await chrome.tabs.sendMessage(tabId, {
     type: 'READ_ALOUD_UPDATE',
-    payload: { state, index, total, speed, voice, lang },
+    payload: { state, index, total, speed, voice, lang, finished },
   }).catch(() => { })
 
   await chrome.runtime.sendMessage({
@@ -511,6 +520,18 @@ async function stopActiveSession() {
   chrome.tts.stop()
   if (session) {
     await broadcastReadAloudState(session.tabId, 'idle')
+  }
+}
+
+// Like stopActiveSession, but tags the terminal broadcast as a *natural* finish
+// so the content script surfaces the "Finished" card + Replay (F22).
+async function finishActiveSession() {
+  const session = activeSession
+  clearSpeakingWatchdog()
+  activeSession = null
+  chrome.tts.stop()
+  if (session) {
+    await broadcastReadAloudState(session.tabId, 'idle', session.currentIndex, true)
   }
 }
 
@@ -570,7 +591,9 @@ function handleTtsEvent(token: number, event: chrome.tts.TtsEvent) {
         return
       }
 
-      void stopActiveSession()
+      // Natural end of the article (all page repetitions done) — surface the
+      // Finished card rather than a silent teardown (F22).
+      void finishActiveSession()
       return
     }
 

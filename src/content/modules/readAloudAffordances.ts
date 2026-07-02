@@ -21,6 +21,7 @@
 
 import { extractSentences } from './readAloud'
 import { extractReadableArticle, getPrimaryTitleElement, getContentParagraphs } from './contentDiscovery'
+import { getSavedPosition } from './readAloudPosition'
 
 // Assumed average speech rate at 1x. Duration scales inversely with the
 // configured speed multiplier.
@@ -28,28 +29,55 @@ const WORDS_PER_MINUTE = 180
 
 type StartTop = () => void
 type StartFromElement = (el: HTMLElement) => void
+type Resume = (index: number) => void
 
 let startTop: StartTop = () => {}
 let startFromElement: StartFromElement = () => {}
+let resumeAt: Resume = () => {}
 
 let enabled = false
 let currentSpeed = 1
 
+// F24 — when a saved position exists for this URL, the Listen chip becomes a
+// Resume chip. Cached here so click handlers don't need to re-read storage.
+let resumeIndex = 0
+let resumeTotal = 0
+
 // ── Listen chip ─────────────────────────────────────────────────────────────
 
 let chipHost: HTMLElement | null = null
+let chipWrap: HTMLElement | null = null
 let chipButton: HTMLButtonElement | null = null
 let chipLabel: HTMLElement | null = null
+let chipEmoji: HTMLElement | null = null
+let chipText: HTMLElement | null = null
+let startOverButton: HTMLButtonElement | null = null
 
 const CHIP_CSS = `
   :host { all: initial; }
-  .chip {
+  .wrap {
     all: initial;
     box-sizing: border-box;
     display: inline-flex;
     align-items: center;
     gap: 6px;
     margin: 8px 0;
+    vertical-align: middle;
+    font-family: system-ui, sans-serif;
+  }
+  .wrap.floating {
+    position: fixed;
+    left: 16px;
+    bottom: 16px;
+    z-index: 2147483646;
+    margin: 0;
+  }
+  .chip {
+    all: initial;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     padding: 6px 12px;
     background: #1a1a2e;
     color: #e6e6ff;
@@ -70,15 +98,32 @@ const CHIP_CSS = `
   .chip .emoji { font-size: 14px; line-height: 1; }
   .chip .sep { opacity: 0.5; }
   .chip .est { color: #9fb0ff; font-weight: 600; }
-  /* Floating fallback when no title anchor is found. */
-  .chip.floating {
-    position: fixed;
-    left: 16px;
-    bottom: 16px;
-    z-index: 2147483646;
-    margin: 0;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+  /* Resume variant: a subtle accent so it reads as "continue". */
+  .chip.resume { border-color: #4f6ef7; }
+  .chip.resume .emoji { color: #9fb0ff; }
+  .wrap.floating .chip { box-shadow: 0 4px 16px rgba(0,0,0,0.45); }
+  /* Secondary "start over" pill, only shown in Resume mode. */
+  .startover {
+    all: initial;
+    box-sizing: border-box;
+    display: none;
+    align-items: center;
+    padding: 5px 10px;
+    background: transparent;
+    color: #9a9ac0;
+    border: 1px solid #33335a;
+    border-radius: 999px;
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.28);
+    transition: background 0.12s ease, color 0.12s ease;
   }
+  .wrap.resume .startover { display: inline-flex; }
+  .startover:hover { background: #24244a; color: #c8d0f0; }
+  .startover:focus-visible { outline: 2px solid #6b8aff; outline-offset: 2px; }
 `
 
 function estimatedMinutes(): number {
@@ -99,17 +144,20 @@ function buildChip() {
   const style = document.createElement('style')
   style.textContent = CHIP_CSS
 
+  chipWrap = document.createElement('div')
+  chipWrap.className = 'wrap'
+
   chipButton = document.createElement('button')
   chipButton.className = 'chip'
   chipButton.type = 'button'
   chipButton.setAttribute('aria-label', 'Listen to this article')
 
-  const emoji = document.createElement('span')
-  emoji.className = 'emoji'
-  emoji.textContent = '🎧'
+  chipEmoji = document.createElement('span')
+  chipEmoji.className = 'emoji'
+  chipEmoji.textContent = '🎧'
 
-  const text = document.createElement('span')
-  text.textContent = 'Listen'
+  chipText = document.createElement('span')
+  chipText.textContent = 'Listen'
 
   const sep = document.createElement('span')
   sep.className = 'sep'
@@ -118,37 +166,79 @@ function buildChip() {
   chipLabel = document.createElement('span')
   chipLabel.className = 'est'
 
-  chipButton.append(emoji, text, sep, chipLabel)
+  chipButton.append(chipEmoji, chipText, sep, chipLabel)
+
+  // Secondary "start over" pill — hidden unless we're in Resume mode.
+  startOverButton = document.createElement('button')
+  startOverButton.className = 'startover'
+  startOverButton.type = 'button'
+  startOverButton.textContent = '↺ Start over'
+  startOverButton.title = 'Start reading from the beginning'
+  startOverButton.setAttribute('aria-label', 'Start reading from the beginning')
 
   // Start on mousedown (before focus/selection side effects) but prevent the
   // default so we don't steal focus or begin a text selection on the page.
-  chipButton.addEventListener('mousedown', (e) => {
+  const swallow = (e: Event) => { e.preventDefault(); e.stopPropagation() }
+  chipButton.addEventListener('mousedown', swallow)
+  startOverButton.addEventListener('mousedown', swallow)
+
+  chipButton.addEventListener('click', (e) => {
     e.preventDefault()
     e.stopPropagation()
+    // In Resume mode the primary action continues from the saved index.
+    if (resumeIndex > 0) resumeAt(resumeIndex)
+    else startTop()
   })
-  chipButton.addEventListener('click', (e) => {
+  startOverButton.addEventListener('click', (e) => {
     e.preventDefault()
     e.stopPropagation()
     startTop()
   })
 
-  shadow.append(style, chipButton)
+  chipWrap.append(chipButton, startOverButton)
+  shadow.append(style, chipWrap)
+}
+
+// Minutes remaining from a given sentence index (proportional to the whole).
+function estimatedMinutesFromIndex(index: number, total: number): number {
+  if (total <= 0) return estimatedMinutes()
+  const full = estimatedMinutes()
+  const remainingFrac = Math.max(0, (total - index) / total)
+  return Math.max(1, Math.round(full * remainingFrac))
 }
 
 function refreshChipLabel() {
-  if (chipLabel) chipLabel.textContent = `~${estimatedMinutes()} min`
+  if (!chipButton || !chipWrap || !chipEmoji || !chipText || !chipLabel) return
+
+  if (resumeIndex > 0 && resumeTotal > 0) {
+    // Resume mode: "▶ Resume · ~N left", with a "Start over" secondary pill.
+    chipWrap.classList.add('resume')
+    chipButton.classList.add('resume')
+    chipEmoji.textContent = '▶'
+    chipText.textContent = 'Resume'
+    chipLabel.textContent = `~${estimatedMinutesFromIndex(resumeIndex, resumeTotal)} min left`
+    chipButton.setAttribute('aria-label', 'Resume reading where you left off')
+  } else {
+    // Default mode: "🎧 Listen · ~N min".
+    chipWrap.classList.remove('resume')
+    chipButton.classList.remove('resume')
+    chipEmoji.textContent = '🎧'
+    chipText.textContent = 'Listen'
+    chipLabel.textContent = `~${estimatedMinutes()} min`
+    chipButton.setAttribute('aria-label', 'Listen to this article')
+  }
 }
 
 function placeChip() {
-  if (!chipHost || !chipButton) return
+  if (!chipHost || !chipWrap) return
   const title = getPrimaryTitleElement()
   if (title && title.parentElement && document.contains(title)) {
     // Insert right after the title so it reads as part of the article header.
-    chipButton.classList.remove('floating')
+    chipWrap.classList.remove('floating')
     title.insertAdjacentElement('afterend', chipHost)
   } else {
     // No title anchor — fall back to a small fixed chip in the corner.
-    chipButton.classList.add('floating')
+    chipWrap.classList.add('floating')
     if (chipHost.parentElement !== document.body) {
       document.body.appendChild(chipHost)
     }
@@ -169,8 +259,40 @@ function showChip() {
 function removeChip() {
   chipHost?.remove()
   chipHost = null
+  chipWrap = null
   chipButton = null
   chipLabel = null
+  chipEmoji = null
+  chipText = null
+  startOverButton = null
+}
+
+/**
+ * Re-read the saved position for this URL (F24) and update the Listen/Resume
+ * chip accordingly. Called on idle (after a stop) and once on init.
+ */
+export async function refreshResumeState() {
+  let saved: { index: number; total: number } | undefined
+  try {
+    saved = await getSavedPosition()
+  } catch {
+    saved = undefined
+  }
+  resumeIndex = saved?.index ?? 0
+  resumeTotal = saved?.total ?? 0
+  // Only re-render if the chip is currently shown (idle).
+  if (enabled && chipHost) refreshChipLabel()
+}
+
+/**
+ * Force the chip back to plain "Listen" without touching storage. Used right
+ * after a natural finish, where the saved position is being cleared and reading
+ * storage could race that write and briefly show a stale Resume (F22/F24).
+ */
+export function clearResumeState() {
+  resumeIndex = 0
+  resumeTotal = 0
+  if (enabled && chipHost) refreshChipLabel()
 }
 
 // ── Paragraph "▶ Read from here" handle ───────────────────────────────────────
@@ -346,15 +468,18 @@ function refreshContentSet() {
 
 /**
  * Wire up the idle affordances. `onStartTop` starts reading from the article
- * top; `onStartFromElement` starts from a specific paragraph. Both should mirror
- * the popup's Start path (show mini-player, enable translation, warnings).
+ * top; `onStartFromElement` starts from a specific paragraph; `onResume`
+ * continues from a saved sentence index (F24). All should mirror the popup's
+ * Start path (show mini-player, enable translation, warnings).
  */
 export function initReadAloudAffordances(
   onStartTop: StartTop,
   onStartFromElement: StartFromElement,
+  onResume: Resume,
 ) {
   startTop = onStartTop
   startFromElement = onStartFromElement
+  resumeAt = onResume
 
   document.addEventListener('mouseover', onDocMouseOver, { passive: true })
   document.addEventListener('mouseout', onDocMouseOut, { passive: true })
@@ -363,6 +488,8 @@ export function initReadAloudAffordances(
 
   // Read-aloud is idle on load, so show the affordances right away.
   setEnabled(true)
+  // Then check for a saved position and switch the chip to Resume if present.
+  void refreshResumeState()
 }
 
 /** Enable (idle) or disable (reading) the affordances. */

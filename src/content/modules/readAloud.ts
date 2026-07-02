@@ -9,6 +9,7 @@ import {
 } from './anchor'
 import { extractReadableArticle, getContentElements } from './contentDiscovery'
 import { prefetchAhead } from './translation'
+import { savePosition, clearPosition, setSessionUrl, clearSessionUrl } from './readAloudPosition'
 
 let state: ReadAloudState = 'idle'
 let sentences: string[] = []
@@ -23,6 +24,10 @@ let currentVoice = ''
 let currentLang = ''
 let onStateChange: ((s: ReadAloudState) => void) | null = null
 let onVoiceInfoChange: (() => void) | null = null
+// True only for the single idle transition that represents a *natural* finish
+// (reached the end, page repetitions exhausted — not a user stop). Read by the
+// state-change handler to decide between the Finished card and a plain hide (F22).
+let lastFinishedNaturally = false
 
 export function setOnStateChange(cb: (s: ReadAloudState) => void) {
   onStateChange = cb
@@ -36,6 +41,12 @@ export function setOnVoiceInfoChange(cb: () => void) {
 
 export function getVoiceInfo(): { voice: string; lang: string } {
   return { voice: currentVoice, lang: currentLang }
+}
+
+// Whether the most recent idle transition was a natural finish (F22). Only
+// meaningful when read from within the `onStateChange('idle')` callback.
+export function didFinishNaturally(): boolean {
+  return lastFinishedNaturally
 }
 
 function notifyState(nextState: ReadAloudState) {
@@ -82,6 +93,9 @@ function applySentenceIndex(index: number) {
     clearWordHighlight()
     prepareWordIndex(range, sentences[index] ?? '')
     wordIndexSentence = index
+    // Periodically persist progress as we advance so an unexpected teardown
+    // (tab close, crash, SPA nav) still leaves a resumable position (F24).
+    if (changed) void savePosition(index, sentences.length)
   }
   prefetchAhead(index, sentences, 3)
 }
@@ -100,6 +114,9 @@ async function beginSession(
   startIndex: number,
   lang: string,
 ) {
+  // Pin the position key to the URL we're starting on, so a later SPA nav (which
+  // mutates location.href before our save runs) still saves to this article (F24/F25).
+  setSessionUrl(location.href)
   // No scary language-mismatch banner here anymore: the background auto-picks a
   // matching voice (D14) and reports it back for the calm voice chip (D16).
   currentSpeed = settings.speed
@@ -139,6 +156,22 @@ export async function start(settings: ReadAloudSettings) {
 
   currentIndex = 0
   await beginSession(settings, 0, lang)
+}
+
+/**
+ * Resume reading at a saved sentence index (F24). Mirrors start() but begins at
+ * `index`, clamped to the freshly-built plan (which may differ slightly if the
+ * page changed). Falls back to the top when the index is out of range.
+ */
+export async function startFromIndex(settings: ReadAloudSettings, index: number) {
+  if (state !== 'idle') return
+
+  const lang = loadArticlePlan()
+  if (sentences.length === 0) return
+
+  const clamped = Math.max(0, Math.min(Math.round(index), sentences.length - 1))
+  currentIndex = clamped
+  await beginSession(settings, clamped, lang)
 }
 
 function normTextFallback(s: string): string {
@@ -241,6 +274,8 @@ export async function startFromElement(
 
 export function pause() {
   if (state !== 'playing') return
+  // Persist where we paused so the user can resume later (F24).
+  void savePosition(currentIndex, sentences.length)
   notifyState('paused')
   chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'pause' } }).catch(() => {})
 }
@@ -252,6 +287,12 @@ export function resume() {
 }
 
 export function stop() {
+  // An explicit user stop is never a "natural finish".
+  lastFinishedNaturally = false
+  // Save the position on an explicit user stop/teardown so Resume works (F24).
+  // Capture before clearLocalSession() resets currentIndex; clear the session
+  // URL only after the save promise has captured its key.
+  void savePosition(currentIndex, sentences.length).finally(() => clearSessionUrl())
   clearLocalSession()
   notifyState('idle')
   chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'stop' } }).catch(() => {})
@@ -321,7 +362,12 @@ export function syncRemoteState(
   speed?: number,
   voice?: string,
   lang?: string,
+  finished?: boolean,
 ) {
+  // Only meaningful on an idle transition; reset otherwise so a later plain stop
+  // can't inherit a stale "finished" flag.
+  lastFinishedNaturally = nextState === 'idle' ? finished === true : false
+
   if (typeof index === 'number') {
     applySentenceIndex(index)
   }
@@ -343,6 +389,18 @@ export function syncRemoteState(
   }
 
   if (nextState === 'idle') {
+    if (lastFinishedNaturally) {
+      // Completed article — drop any saved position so it doesn't offer a stale
+      // resume next visit (F24). clearPosition() reads the session URL, so clear
+      // it only after the promise has captured the key.
+      void clearPosition().finally(() => clearSessionUrl())
+    } else if (sentences.length > 0) {
+      // Background-initiated stop (e.g. another tab took over, the keyboard
+      // toggle, or an SPA nav) — persist where we were so Resume still works.
+      void savePosition(currentIndex, sentences.length).finally(() => clearSessionUrl())
+    } else {
+      clearSessionUrl()
+    }
     clearLocalSession()
   }
 

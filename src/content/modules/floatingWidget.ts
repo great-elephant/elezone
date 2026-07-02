@@ -7,6 +7,8 @@ let shadow: ShadowRoot | null = null
 let pauseBtn: HTMLButtonElement | null = null
 let focusBtn: HTMLButtonElement | null = null
 let speedBtn: HTMLButtonElement | null = null
+let sleepBtn: HTMLButtonElement | null = null
+let sleepMenu: HTMLElement | null = null
 let voiceChip: HTMLButtonElement | null = null
 let voiceMenu: HTMLElement | null = null
 let progressLabel: HTMLElement | null = null
@@ -14,10 +16,42 @@ let progressFill: HTMLElement | null = null
 let progressTrack: HTMLElement | null = null
 let warningBanner: HTMLElement | null = null
 
+// Finished card (F22) — a separate lightweight host so it doesn't entangle the
+// player refs; shown when reading ends naturally.
+let finishedHost: HTMLElement | null = null
+
 let curIndex = 0
 let curTotal = 0
 let curVoice = ''
 let curLang = ''
+
+// Restart-from-top callback (F22 Replay). Set by the content entry so Replay
+// mirrors the popup's Start path (settings + translation), not just start().
+let onReplayFromTop: (() => void) | null = null
+
+export function setOnReplay(cb: () => void) {
+  onReplayFromTop = cb
+}
+
+// ── Sleep timer (F23) ─────────────────────────────────────────────────────────
+// Content-side auto-stop. `sleepTimer` fires stop() after the chosen duration;
+// cleared on stop/pause/finish. "End of article" is the natural finish, so it
+// arms no timer (0) and just relies on the normal end.
+const SLEEP_OPTIONS: { label: string; minutes: number }[] = [
+  { label: 'Off', minutes: 0 },
+  { label: '5 min', minutes: 5 },
+  { label: '10 min', minutes: 10 },
+  { label: '15 min', minutes: 15 },
+  { label: '30 min', minutes: 30 },
+  { label: 'End of article', minutes: -1 },
+]
+let sleepTimer: ReturnType<typeof setTimeout> | null = null
+// Selected option in minutes: 0 = off, -1 = end of article, >0 = countdown.
+let sleepMinutes = 0
+let sleepDeadline = 0
+// Remaining ms captured when the countdown is paused, so resume continues from
+// where it left off rather than restarting the full duration.
+let sleepRemainingMs = 0
 
 const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 2]
 
@@ -238,6 +272,142 @@ const WIDGET_CSS = `
     font-variant-numeric: tabular-nums;
   }
   .voice-option .vo-check { flex: 0 0 auto; color: #4ade80; font-size: 11px; width: 12px; }
+
+  /* Sleep timer (F23) */
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .sleep-wrap {
+    position: relative;
+    display: inline-flex;
+  }
+  button.sleep {
+    font-size: 14px;
+    position: relative;
+  }
+  button.sleep.active {
+    color: #ffd93d;
+    background: #2a2a4a;
+  }
+  button.sleep.active:hover { background: #32325a; }
+  button.sleep .sleep-badge {
+    position: absolute;
+    bottom: 1px;
+    right: 1px;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1;
+    color: #ffd93d;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+  }
+  .sleep-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    right: 0;
+    z-index: 2;
+    box-sizing: border-box;
+    width: 150px;
+    background: #16162a;
+    border: 1px solid #3a3a6a;
+    border-radius: 10px;
+    padding: 4px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+  }
+  .sleep-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    border-radius: 7px;
+    font-size: 12px;
+    color: #c0c0e0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    height: auto;
+    min-width: 0;
+  }
+  .sleep-option:hover { background: #2a2a4a; }
+  .sleep-option[aria-selected="true"] { color: #ffd93d; }
+  .sleep-option .so-check { flex: 0 0 auto; color: #ffd93d; font-size: 11px; width: 12px; }
+`
+
+// The Finished card (F22) is its own tiny host with self-contained styles.
+const FINISHED_CSS = `
+  :host { all: initial; }
+  .card {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 2147483647;
+    box-sizing: border-box;
+    width: 260px;
+    background: #1a1a2e;
+    border: 1px solid #3a3a6a;
+    border-radius: 12px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    font-family: system-ui, sans-serif;
+    color: #c0c0e0;
+    user-select: none;
+  }
+  .card * { box-sizing: border-box; }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .done {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #c0c0e0;
+  }
+  .done .check { color: #4ade80; font-size: 15px; line-height: 1; }
+  .actions { display: flex; gap: 8px; }
+  button {
+    font-family: system-ui, sans-serif;
+    cursor: pointer;
+    border-radius: 8px;
+    line-height: 1;
+  }
+  button.replay {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 34px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffffff;
+    background: #4f6ef7;
+    border: none;
+  }
+  button.replay:hover { background: #6b8aff; }
+  button.replay:focus-visible { outline: 2px solid #ffffff; outline-offset: 2px; }
+  button.dismiss {
+    width: 34px;
+    height: 34px;
+    font-size: 15px;
+    color: #9a9ac0;
+    background: transparent;
+    border: 1px solid #33335a;
+  }
+  button.dismiss:hover { color: #ff8888; background: #2a1a1a; }
+  button.dismiss:focus-visible { outline: 2px solid #6b8aff; outline-offset: 2px; }
 `
 
 function makeButton(cls: string, label: string, aria: string, onClick: () => void): HTMLButtonElement {
@@ -292,6 +462,141 @@ function refreshFocusButton() {
 function toggleFocusMode() {
   setFocusMode(!isFocusMode())
   refreshFocusButton()
+}
+
+// ── Sleep timer (F23) ─────────────────────────────────────────────────────────
+
+// Clear any pending auto-stop. Called on stop/pause/finish and when re-arming.
+function clearSleepTimer() {
+  if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null }
+  sleepDeadline = 0
+}
+
+// Reset the sleep timer entirely (selection back to Off). Used when a session ends.
+function resetSleepTimer() {
+  clearSleepTimer()
+  sleepMinutes = 0
+  sleepRemainingMs = 0
+  refreshSleepButton()
+}
+
+// Start (or restart) the countdown for `ms` and fire the auto-stop when it
+// elapses. Shared by initial arm and resume-after-pause.
+function startSleepCountdown(ms: number) {
+  if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null }
+  sleepDeadline = Date.now() + ms
+  sleepTimer = setTimeout(() => {
+    sleepTimer = null
+    sleepDeadline = 0
+    sleepRemainingMs = 0
+    sleepMinutes = 0
+    refreshSleepButton()
+    stop()
+    hideWidget()
+  }, ms)
+}
+
+// Halt the countdown on pause, remembering how much time was left.
+function pauseSleepTimer() {
+  if (!sleepTimer || sleepDeadline <= 0) return
+  sleepRemainingMs = Math.max(0, sleepDeadline - Date.now())
+  clearTimeout(sleepTimer)
+  sleepTimer = null
+  sleepDeadline = 0
+}
+
+// Continue a paused countdown from the remembered remaining time.
+function resumeSleepTimer() {
+  if (sleepMinutes <= 0) return
+  const ms = sleepRemainingMs > 0 ? sleepRemainingMs : sleepMinutes * 60 * 1000
+  startSleepCountdown(ms)
+}
+
+function refreshSleepButton() {
+  if (!sleepBtn) return
+  const active = sleepMinutes !== 0
+  sleepBtn.classList.toggle('active', active)
+  sleepBtn.replaceChildren(document.createTextNode('⏱'))
+  if (sleepMinutes > 0) {
+    const badge = document.createElement('span')
+    badge.className = 'sleep-badge'
+    badge.textContent = String(sleepMinutes)
+    sleepBtn.appendChild(badge)
+  } else if (sleepMinutes === -1) {
+    const badge = document.createElement('span')
+    badge.className = 'sleep-badge'
+    badge.textContent = '∞'
+    sleepBtn.appendChild(badge)
+  }
+  const label = sleepMinutes === 0
+    ? 'Sleep timer: off'
+    : sleepMinutes === -1
+      ? 'Sleep timer: end of article'
+      : `Sleep timer: ${sleepMinutes} min`
+  sleepBtn.title = label
+  sleepBtn.setAttribute('aria-label', label)
+  sleepBtn.setAttribute('aria-pressed', String(active))
+}
+
+function armSleepTimer(minutes: number) {
+  clearSleepTimer()
+  sleepMinutes = minutes
+  sleepRemainingMs = 0
+  // minutes <= 0 means Off (0) or "end of article" (-1): no countdown timer, we
+  // just rely on the natural finish. Only positive durations arm a stop.
+  if (minutes > 0) startSleepCountdown(minutes * 60 * 1000)
+  refreshSleepButton()
+}
+
+function toggleSleepMenu() {
+  if (sleepMenu) closeSleepMenu()
+  else openSleepMenu()
+}
+
+function closeSleepMenu() {
+  sleepMenu?.remove()
+  sleepMenu = null
+  sleepBtn?.setAttribute('aria-expanded', 'false')
+  document.removeEventListener('mousedown', onDocMouseDownForSleep, { capture: true })
+}
+
+function onDocMouseDownForSleep(e: MouseEvent) {
+  if (host && e.composedPath().includes(host)) return
+  closeSleepMenu()
+}
+
+function openSleepMenu() {
+  if (!sleepBtn || !sleepBtn.parentElement) return
+  sleepMenu = document.createElement('div')
+  sleepMenu.className = 'sleep-menu'
+  sleepMenu.setAttribute('role', 'listbox')
+  sleepMenu.setAttribute('aria-label', 'Sleep timer')
+
+  for (const opt of SLEEP_OPTIONS) {
+    const el = document.createElement('button')
+    el.className = 'sleep-option'
+    el.type = 'button'
+    el.setAttribute('role', 'option')
+    const selected = opt.minutes === sleepMinutes
+    el.setAttribute('aria-selected', String(selected))
+
+    const name = document.createElement('span')
+    name.textContent = opt.label
+    const check = document.createElement('span')
+    check.className = 'so-check'
+    check.textContent = selected ? '✓' : ''
+    el.append(name, check)
+
+    el.onclick = () => {
+      armSleepTimer(opt.minutes)
+      closeSleepMenu()
+    }
+    sleepMenu.appendChild(el)
+  }
+
+  sleepBtn.parentElement.appendChild(sleepMenu)
+  sleepBtn.setAttribute('aria-expanded', 'true')
+  document.addEventListener('mousedown', onDocMouseDownForSleep, { capture: true })
 }
 
 function renderProgress() {
@@ -560,9 +865,22 @@ export function showWidget() {
   titleText.textContent = 'Read Aloud'
   title.append(dot, titleText)
 
+  // Sleep timer control lives in the header (right side) inside a positioned
+  // wrapper so its dropdown anchors to the button.
+  const sleepWrap = document.createElement('div')
+  sleepWrap.className = 'sleep-wrap'
+  sleepBtn = makeButton('sleep', '⏱', 'Sleep timer: off', toggleSleepMenu)
+  sleepBtn.setAttribute('aria-haspopup', 'listbox')
+  sleepBtn.setAttribute('aria-expanded', 'false')
+  sleepWrap.appendChild(sleepBtn)
+
   const closeBtn = makeButton('close', '⏹', 'Stop', () => { stop(); hideWidget() })
 
-  header.append(title, closeBtn)
+  const headerRight = document.createElement('div')
+  headerRight.className = 'header-right'
+  headerRight.append(sleepWrap, closeBtn)
+
+  header.append(title, headerRight)
 
   // ── Progress ──────────────────────────────────────────────────────────
   const progressRow = document.createElement('div')
@@ -619,6 +937,7 @@ export function showWidget() {
   renderVoiceChip()
   refreshSpeedLabel()
   refreshFocusButton()
+  refreshSleepButton()
   makeDraggable(player, header)
 }
 
@@ -628,10 +947,16 @@ export function updateWidgetState(state: 'playing' | 'paused' | 'idle') {
     pauseBtn.textContent = '⏸'
     pauseBtn.title = 'Pause'
     pauseBtn.setAttribute('aria-label', 'Pause')
+    // Resuming re-arms the sleep countdown from the remaining duration if a
+    // positive timer was selected but is not currently ticking (F23).
+    if (sleepMinutes > 0 && !sleepTimer) resumeSleepTimer()
   } else if (state === 'paused') {
     pauseBtn.textContent = '▶'
     pauseBtn.title = 'Resume'
     pauseBtn.setAttribute('aria-label', 'Resume')
+    // Pause halts the countdown (task: clear on pause) but keeps the selection
+    // so resume can continue from the time that was left.
+    pauseSleepTimer()
   }
   refreshSpeedLabel()
 }
@@ -646,12 +971,17 @@ export function hideWidget() {
   // Reset focus mode so the next session starts with the spotlight off (default).
   setFocusMode(false)
   closeVoiceMenu()
+  closeSleepMenu()
+  // Drop any armed sleep timer + selection so the next session starts clean.
+  resetSleepTimer()
   host?.remove()
   host = null
   shadow = null
   pauseBtn = null
   focusBtn = null
   speedBtn = null
+  sleepBtn = null
+  sleepMenu = null
   voiceChip = null
   voiceMenu = null
   progressLabel = null
@@ -662,6 +992,79 @@ export function hideWidget() {
   curVoice = ''
   curLang = ''
   hideWarning()
+}
+
+// ── Finished card (F22) ───────────────────────────────────────────────────────
+
+/**
+ * Replace the mini-player with a "✓ Finished" card offering Replay (restart
+ * from the top) and a dismiss. Shown only when reading ends *naturally*; a plain
+ * user stop just hides the widget. Tears down the live player first so we never
+ * show both at once.
+ */
+export function showFinishedCard() {
+  // The player and the finished card are mutually exclusive.
+  hideWidget()
+  hideFinishedCard()
+
+  finishedHost = document.createElement('div')
+  finishedHost.className = 'cxt-player-host'
+  const fShadow = finishedHost.attachShadow({ mode: 'open' })
+
+  const style = document.createElement('style')
+  style.textContent = FINISHED_CSS
+
+  const card = document.createElement('div')
+  card.className = 'card'
+
+  const row = document.createElement('div')
+  row.className = 'row'
+
+  const done = document.createElement('div')
+  done.className = 'done'
+  const check = document.createElement('span')
+  check.className = 'check'
+  check.textContent = '✓'
+  const doneText = document.createElement('span')
+  doneText.textContent = 'Finished'
+  done.append(check, doneText)
+  row.appendChild(done)
+
+  const actions = document.createElement('div')
+  actions.className = 'actions'
+
+  const replayBtn = document.createElement('button')
+  replayBtn.className = 'replay'
+  replayBtn.type = 'button'
+  replayBtn.textContent = '↺ Replay'
+  replayBtn.title = 'Replay from the top'
+  replayBtn.setAttribute('aria-label', 'Replay from the top')
+  replayBtn.onclick = () => {
+    hideFinishedCard()
+    // Restart from the top via the popup-equivalent Start path (settings +
+    // translation), falling back to nothing if not wired.
+    onReplayFromTop?.()
+  }
+
+  const dismissBtn = document.createElement('button')
+  dismissBtn.className = 'dismiss'
+  dismissBtn.type = 'button'
+  dismissBtn.textContent = '✕'
+  dismissBtn.title = 'Dismiss'
+  dismissBtn.setAttribute('aria-label', 'Dismiss')
+  dismissBtn.onclick = () => hideFinishedCard()
+
+  actions.append(replayBtn, dismissBtn)
+
+  card.append(row, actions)
+  fShadow.append(style, card)
+  document.body.appendChild(finishedHost)
+  replayBtn.focus()
+}
+
+export function hideFinishedCard() {
+  finishedHost?.remove()
+  finishedHost = null
 }
 
 export function showWarning(msg: string) {
