@@ -84,7 +84,8 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "tesseract/*"
+        "tesseract/*",
+        "icons/logo.png"
       ],
       "matches": [
         "<all_urls>"

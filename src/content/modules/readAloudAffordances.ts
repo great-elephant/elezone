@@ -1,7 +1,7 @@
 /**
  * Read Aloud discoverability affordances (idle-only):
  *
- *  C12 — a "🎧 Listen · ~N min" chip anchored near the article title. Advertises
+ *  C12 — a logo "Listen · ~N min" chip anchored near the article title. Advertises
  *        that the page is readable and previews the estimated duration. Clicking
  *        it starts read-aloud from the top (same as the popup's Start Reading).
  *
@@ -95,12 +95,15 @@ const CHIP_CSS = `
   .chip:hover { background: #24244a; transform: translateY(-1px); }
   .chip:active { transform: translateY(0); }
   .chip:focus-visible { outline: 2px solid #6b8aff; outline-offset: 2px; }
-  .chip .emoji { font-size: 14px; line-height: 1; }
+  .chip .logo { width: 16px; height: 16px; object-fit: contain; display: block; }
+  .chip .emoji { display: none; font-size: 14px; line-height: 1; }
   .chip .sep { opacity: 0.5; }
   .chip .est { color: #9fb0ff; font-weight: 600; }
-  /* Resume variant: a subtle accent so it reads as "continue". */
+  /* Resume variant: a subtle accent so it reads as "continue" — swap the brand
+     logo for a plain play glyph, since "resume" isn't a branding moment. */
   .chip.resume { border-color: #4f6ef7; }
-  .chip.resume .emoji { color: #9fb0ff; }
+  .chip.resume .logo { display: none; }
+  .chip.resume .emoji { display: inline; color: #9fb0ff; }
   .wrap.floating .chip { box-shadow: 0 4px 16px rgba(0,0,0,0.45); }
   /* Secondary "start over" pill, only shown in Resume mode. */
   .startover {
@@ -158,9 +161,14 @@ function buildChip() {
   chipButton.type = 'button'
   chipButton.setAttribute('aria-label', 'Listen to this article')
 
+  const chipLogo = document.createElement('img')
+  chipLogo.className = 'logo'
+  chipLogo.src = chrome.runtime.getURL('icons/logo.png')
+  chipLogo.alt = ''
+
   chipEmoji = document.createElement('span')
   chipEmoji.className = 'emoji'
-  chipEmoji.textContent = '🎧'
+  chipEmoji.textContent = '▶'
 
   chipText = document.createElement('span')
   chipText.textContent = 'Listen'
@@ -172,7 +180,7 @@ function buildChip() {
   chipLabel = document.createElement('span')
   chipLabel.className = 'est'
 
-  chipButton.append(chipEmoji, chipText, sep, chipLabel)
+  chipButton.append(chipLogo, chipEmoji, chipText, sep, chipLabel)
 
   // Secondary "start over" pill — hidden unless we're in Resume mode.
   startOverButton = document.createElement('button')
@@ -225,10 +233,9 @@ function refreshChipLabel() {
     chipLabel.textContent = `~${estimatedMinutesFromIndex(resumeIndex, resumeTotal)} min left`
     chipButton.setAttribute('aria-label', 'Resume reading where you left off')
   } else {
-    // Default mode: "🎧 Listen · ~N min".
+    // Default mode: logo + "Listen · ~N min".
     chipWrap.classList.remove('resume')
     chipButton.classList.remove('resume')
-    chipEmoji.textContent = '🎧'
     chipText.textContent = 'Listen'
     chipLabel.textContent = `~${estimatedMinutes()} min`
     chipButton.setAttribute('aria-label', 'Listen to this article')
@@ -252,8 +259,11 @@ function placeChip() {
 }
 
 function showChip() {
-  // Only inject when there's genuinely readable content.
-  if (extractSentences().length === 0) {
+  // Only inject on genuinely article-like pages: readable content AND a real
+  // title element (h1 by default — see siteProfiles' titleSelectors). Without
+  // this, Readability's loose heuristics let the chip appear (as a floating
+  // corner pill, see placeChip) on non-article pages that merely have enough text.
+  if (extractSentences().length === 0 || !getPrimaryTitleElement()) {
     removeChip()
     return
   }
