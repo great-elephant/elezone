@@ -1,6 +1,6 @@
-import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, getWordRangeAtPoint, pulseHighlight } from './modules/anchor'
-import { start, startFrom, startFromElement, startFromIndex, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo, getCurrentSentence } from './modules/readAloud'
-import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, showFinishedCard, hideFinishedCard, setOnReplay, setOnSaveSentence } from './modules/floatingWidget'
+import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint } from './modules/anchor'
+import { start, startFrom, startFromElement, startFromIndex, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo } from './modules/readAloud'
+import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
 import { initReadAloudAffordances, setEnabled as setAffordancesEnabled, setAffordanceSpeed, refreshResumeState, clearResumeState } from './modules/readAloudAffordances'
 import { installSpaNavigationGuard } from './modules/readAloudSpaGuard'
@@ -127,62 +127,6 @@ setOnShadowInfoChange(() => {
   const { shadowing, repetition, inGap } = getShadowInfo()
   updateWidgetShadowInfo(shadowing, repetition, inGap)
 })
-
-// H30 — save the current sentence to the library from the mini-player without
-// interrupting playback. Builds a SavedItem from the current sentence + its DOM
-// range, mirrors the dictionary save (SAVE_ITEM + LOG_ACTIVITY), highlights it
-// on the page, and reports success/failure back so the button can flip to
-// "Saved ✓". Never sends any read-aloud control message.
-setOnSaveSentence(async () => {
-  const cur = getCurrentSentence()
-  if (!cur) return false
-  const text = cur.text.trim()
-  if (!text) return false
-
-  // Try to derive the source language from the sentence's DOM range (nearest
-  // [lang] ancestor); otherwise fall back to the document language. We store the
-  // sentence with empty prefix/suffix + occurrenceIndex 0: a full sentence is a
-  // reliable anchor on its own, and this avoids the extra window.find() scan +
-  // selection churn that computing real context would cost mid-playback.
-  const sourceLang = resolveRangeLang(cur.range) || document.documentElement.lang || undefined
-
-  const item: SavedItem = {
-    id: crypto.randomUUID(),
-    url: window.location.href,
-    text,
-    sourceLang,
-    prefix: '',
-    suffix: '',
-    occurrenceIndex: 0,
-    color: 'red',
-    createdAt: Date.now(),
-    orphaned: false,
-  }
-
-  try {
-    await chrome.runtime.sendMessage({ type: 'SAVE_ITEM', payload: item }).catch(() => {})
-    await chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'save' }).catch(() => {})
-    // Mark the saved sentence on the page + pulse it to tie the reward to it.
-    if (applyHighlight(item)) pulseHighlight(item.id, BOOKMARK_COLORS[item.color])
-    return true
-  } catch {
-    return false
-  }
-})
-
-// Walk up from a range's start container to the nearest element carrying a
-// `lang` attribute, so a saved sentence records the language it was read in.
-function resolveRangeLang(range: Range | null): string | undefined {
-  let node: Node | null = range?.startContainer ?? null
-  while (node && node !== document.body) {
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const l = (node as Element).getAttribute('lang')
-      if (l) return l
-    }
-    node = node.parentNode
-  }
-  return undefined
-}
 
 // Shared "start reading from the top" path, mirroring the popup's Start Reading:
 // pull settings, show the mini-player, kick off translation if enabled, then
@@ -464,46 +408,6 @@ document.addEventListener('mousemove', (e: MouseEvent) => {
     scheduleHide()
   }
 })
-
-// ── Click-a-word-to-define while reading ──────────────────────────────────────
-
-// While read-aloud is active, a plain click on a page word opens the dictionary
-// popover for it — without stopping playback. Skips interactive elements, the
-// extension's own UI, and cases where the user is actually selecting text.
-function isInteractiveOrOwnUi(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false
-  // Extension UI hosts (mini-player, dictionary, tooltip, OCR, toast). Events
-  // from shadow content are retargeted to the host, so checking the target
-  // element's own class/ancestry is sufficient.
-  if (target.closest('.cxt-player-host, .cxt-dict-host, .cxt-delete-tooltip, .cxt-toast-host, #cxt-ocr-root')) {
-    return true
-  }
-  // Don't hijack real interactive controls.
-  if (target.closest('a, button, [role="button"], input, textarea, select, [contenteditable=""], [contenteditable="true"]')) {
-    return true
-  }
-  return false
-}
-
-document.addEventListener('click', (e: MouseEvent) => {
-  if (getState() === 'idle') return
-  if (e.button !== 0 || e.defaultPrevented) return
-  if (isInteractiveOrOwnUi(e.target)) return
-
-  // If the user made a real (multi-char) selection, let the normal save flow
-  // handle it — don't override with a single-word lookup.
-  const sel = window.getSelection()
-  if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) return
-
-  const range = getWordRangeAtPoint(e.clientX, e.clientY)
-  if (!range) return
-
-  // Open the dictionary for this word. Playback is untouched — we never send a
-  // read-aloud control message here.
-  import('./modules/dictionary')
-    .then(({ showPopoverForRange }) => showPopoverForRange(range))
-    .catch(() => { })
-}, { capture: false })
 
 // ─────────────────────────────────────────────────────────────────────────────
 

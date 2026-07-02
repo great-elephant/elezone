@@ -7,8 +7,6 @@ let shadow: ShadowRoot | null = null
 let pauseBtn: HTMLButtonElement | null = null
 let focusBtn: HTMLButtonElement | null = null
 let speedBtn: HTMLButtonElement | null = null
-let sleepBtn: HTMLButtonElement | null = null
-let sleepMenu: HTMLElement | null = null
 let voiceChip: HTMLButtonElement | null = null
 let voiceMenu: HTMLElement | null = null
 let progressLabel: HTMLElement | null = null
@@ -18,23 +16,12 @@ let warningBanner: HTMLElement | null = null
 // H29/H30/H31 — learner controls.
 let shadowBtn: HTMLButtonElement | null = null
 let repeatBtn: HTMLButtonElement | null = null
-let saveBtn: HTMLButtonElement | null = null
 let shadowIndicator: HTMLElement | null = null
 // Live shadowing/repetition state mirrored from readAloud so the controls render
 // the right values.
 let curShadowing = false
 let curRepetition = 1
 let curInGap = false
-// Guards double-saves / resets the Save button label after feedback.
-let saveResetTimer: ReturnType<typeof setTimeout> | null = null
-
-// H30 — the content entry registers the actual save routine here (it needs
-// getCurrentSentence + anchor/highlight helpers). Returns whether the save
-// succeeded so the button can show "Saved ✓" or a brief error.
-let onSaveSentence: (() => Promise<boolean>) | null = null
-export function setOnSaveSentence(cb: () => Promise<boolean>) {
-  onSaveSentence = cb
-}
 
 // Per-sentence repetition presets shown by the Repeat control (H31).
 const REPEAT_STEPS = [1, 2, 3]
@@ -55,26 +42,6 @@ let onReplayFromTop: (() => void) | null = null
 export function setOnReplay(cb: () => void) {
   onReplayFromTop = cb
 }
-
-// ── Sleep timer (F23) ─────────────────────────────────────────────────────────
-// Content-side auto-stop. `sleepTimer` fires stop() after the chosen duration;
-// cleared on stop/pause/finish. "End of article" is the natural finish, so it
-// arms no timer (0) and just relies on the normal end.
-const SLEEP_OPTIONS: { label: string; minutes: number }[] = [
-  { label: 'Off', minutes: 0 },
-  { label: '5 min', minutes: 5 },
-  { label: '10 min', minutes: 10 },
-  { label: '15 min', minutes: 15 },
-  { label: '30 min', minutes: 30 },
-  { label: 'End of article', minutes: -1 },
-]
-let sleepTimer: ReturnType<typeof setTimeout> | null = null
-// Selected option in minutes: 0 = off, -1 = end of article, >0 = countdown.
-let sleepMinutes = 0
-let sleepDeadline = 0
-// Remaining ms captured when the countdown is paused, so resume continues from
-// where it left off rather than restarting the full duration.
-let sleepRemainingMs = 0
 
 const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 2]
 
@@ -298,76 +265,13 @@ const WIDGET_CSS = `
   }
   .voice-option .vo-check { flex: 0 0 auto; color: #4ade80; font-size: 11px; width: 12px; }
 
-  /* Sleep timer (F23) */
   .header-right {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 4px;
   }
-  .sleep-wrap {
-    position: relative;
-    display: inline-flex;
-  }
-  button.sleep {
-    font-size: 14px;
-    position: relative;
-  }
-  button.sleep.active {
-    color: #ffd93d;
-    background: #2a2a4a;
-  }
-  button.sleep.active:hover { background: #32325a; }
-  button.sleep .sleep-badge {
-    position: absolute;
-    bottom: 1px;
-    right: 1px;
-    font-size: 8px;
-    font-weight: 700;
-    line-height: 1;
-    color: #ffd93d;
-    font-variant-numeric: tabular-nums;
-    pointer-events: none;
-  }
-  .sleep-menu {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    right: 0;
-    z-index: 2;
-    box-sizing: border-box;
-    width: 150px;
-    background: #16162a;
-    border: 1px solid #3a3a6a;
-    border-radius: 10px;
-    padding: 4px;
-    box-shadow: 0 6px 24px rgba(0,0,0,0.55);
-  }
-  .sleep-option {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 100%;
-    padding: 7px 10px;
-    border-radius: 7px;
-    font-size: 12px;
-    color: #c0c0e0;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    text-align: left;
-    height: auto;
-    min-width: 0;
-  }
-  .sleep-option:hover { background: #2a2a4a; }
-  .sleep-option[aria-selected="true"] { color: #ffd93d; }
-  .sleep-option .so-check { flex: 0 0 auto; color: #ffd93d; font-size: 11px; width: 12px; }
 
-  /* ── Learner row (shadowing toggle, Repeat, Save) — H29/H30/H31 ── */
-  .learn-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
+  /* Shadowing toggle + Repeat controls (now in the header) — H29/H31 */
   button.shadow-toggle {
     font-size: 14px;
     flex: 0 0 auto;
@@ -393,28 +297,6 @@ const WIDGET_CSS = `
   }
   button.repeat:hover { background: #2a2a4a; color: #c8d0f0; }
   button.repeat.active { color: #4ade80; border-color: #2f5a42; }
-  button.save-current {
-    flex: 1 1 auto;
-    height: 28px;
-    min-height: 28px;
-    font-size: 12px;
-    font-weight: 600;
-    color: #c8d0f0;
-    background: #22223e;
-    border: 1px solid #33335a;
-    border-radius: 14px;
-    min-width: 0;
-    padding: 0 10px;
-    gap: 5px;
-    justify-content: center;
-  }
-  button.save-current:hover { background: #2a2a4a; color: #ffffff; }
-  button.save-current.saved {
-    color: #4ade80;
-    border-color: #2f5a42;
-    background: #21322a;
-  }
-  button.save-current:disabled { cursor: default; opacity: 0.9; }
   /* Subtle "shadowing…" gap indicator (replaces the ● dot in the title). */
   .title .shadow-hint {
     color: #4ade80;
@@ -611,51 +493,6 @@ function cycleRepeat() {
   refreshRepeatButton()
 }
 
-function refreshSaveButton() {
-  if (!saveBtn) return
-  // Only reset to the default label when not mid-feedback.
-  if (saveResetTimer) return
-  saveBtn.disabled = false
-  saveBtn.classList.remove('saved')
-  saveBtn.textContent = '＋ Save'
-  saveBtn.title = 'Save the current sentence to your library'
-  saveBtn.setAttribute('aria-label', 'Save the current sentence to your library')
-}
-
-async function onSaveClick() {
-  const btn = saveBtn
-  if (!btn || !onSaveSentence) return
-  if (btn.disabled) return
-  btn.disabled = true
-  btn.textContent = 'Saving…'
-
-  let ok = false
-  try {
-    ok = await onSaveSentence()
-  } catch {
-    ok = false
-  }
-
-  // The widget may have been torn down while we awaited (session ended).
-  if (saveBtn !== btn) return
-
-  if (saveResetTimer) { clearTimeout(saveResetTimer); saveResetTimer = null }
-
-  if (ok) {
-    btn.classList.add('saved')
-    btn.textContent = 'Saved ✓'
-  } else {
-    btn.classList.remove('saved')
-    btn.textContent = 'Try again'
-  }
-  // Revert to the default label so another sentence can be saved. Keep the
-  // button disabled only briefly on success to make the feedback readable.
-  saveResetTimer = setTimeout(() => {
-    saveResetTimer = null
-    refreshSaveButton()
-  }, 1400)
-}
-
 // Subtle "shadowing…" hint in the title, shown only during the intentional gap.
 function refreshShadowIndicator() {
   if (!shadowIndicator) return
@@ -670,184 +507,6 @@ export function updateWidgetShadowInfo(shadowing: boolean, repetition: number, i
   refreshShadowButton()
   refreshRepeatButton()
   refreshShadowIndicator()
-}
-
-// ── Sleep timer (F23) ─────────────────────────────────────────────────────────
-
-// Clear any pending auto-stop. Called on stop/pause/finish and when re-arming.
-function clearSleepTimer() {
-  if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null }
-  sleepDeadline = 0
-}
-
-// Reset the sleep timer entirely (selection back to Off). Used when a session ends.
-function resetSleepTimer() {
-  clearSleepTimer()
-  sleepMinutes = 0
-  sleepRemainingMs = 0
-  refreshSleepButton()
-}
-
-// Start (or restart) the countdown for `ms` and fire the auto-stop when it
-// elapses. Shared by initial arm and resume-after-pause.
-function startSleepCountdown(ms: number) {
-  if (sleepTimer) { clearTimeout(sleepTimer); sleepTimer = null }
-  sleepDeadline = Date.now() + ms
-  sleepTimer = setTimeout(() => {
-    sleepTimer = null
-    sleepDeadline = 0
-    sleepRemainingMs = 0
-    sleepMinutes = 0
-    refreshSleepButton()
-    stop()
-    hideWidget()
-  }, ms)
-}
-
-// Halt the countdown on pause, remembering how much time was left.
-function pauseSleepTimer() {
-  if (!sleepTimer || sleepDeadline <= 0) return
-  sleepRemainingMs = Math.max(0, sleepDeadline - Date.now())
-  clearTimeout(sleepTimer)
-  sleepTimer = null
-  sleepDeadline = 0
-}
-
-// Continue a paused countdown from the remembered remaining time.
-function resumeSleepTimer() {
-  if (sleepMinutes <= 0) return
-  const ms = sleepRemainingMs > 0 ? sleepRemainingMs : sleepMinutes * 60 * 1000
-  startSleepCountdown(ms)
-}
-
-function refreshSleepButton() {
-  if (!sleepBtn) return
-  const active = sleepMinutes !== 0
-  sleepBtn.classList.toggle('active', active)
-  sleepBtn.replaceChildren(document.createTextNode('⏱'))
-  if (sleepMinutes > 0) {
-    const badge = document.createElement('span')
-    badge.className = 'sleep-badge'
-    badge.textContent = String(sleepMinutes)
-    sleepBtn.appendChild(badge)
-  } else if (sleepMinutes === -1) {
-    const badge = document.createElement('span')
-    badge.className = 'sleep-badge'
-    badge.textContent = '∞'
-    sleepBtn.appendChild(badge)
-  }
-  const label = sleepMinutes === 0
-    ? 'Sleep timer: off'
-    : sleepMinutes === -1
-      ? 'Sleep timer: end of article'
-      : `Sleep timer: ${sleepMinutes} min`
-  sleepBtn.title = label
-  sleepBtn.setAttribute('aria-label', label)
-  sleepBtn.setAttribute('aria-pressed', String(active))
-}
-
-function armSleepTimer(minutes: number) {
-  clearSleepTimer()
-  sleepMinutes = minutes
-  sleepRemainingMs = 0
-  // minutes <= 0 means Off (0) or "end of article" (-1): no countdown timer, we
-  // just rely on the natural finish. Only positive durations arm a stop.
-  if (minutes > 0) startSleepCountdown(minutes * 60 * 1000)
-  refreshSleepButton()
-}
-
-function toggleSleepMenu() {
-  if (sleepMenu) closeSleepMenu()
-  else openSleepMenu()
-}
-
-function closeSleepMenu() {
-  sleepMenu?.remove()
-  sleepMenu = null
-  sleepBtn?.setAttribute('aria-expanded', 'false')
-  document.removeEventListener('mousedown', onDocMouseDownForSleep, { capture: true })
-}
-
-function onDocMouseDownForSleep(e: MouseEvent) {
-  if (host && e.composedPath().includes(host)) return
-  closeSleepMenu()
-}
-
-function getSleepOptionEls(): HTMLButtonElement[] {
-  if (!sleepMenu) return []
-  return Array.from(sleepMenu.querySelectorAll<HTMLButtonElement>('.sleep-option'))
-}
-
-// Keyboard navigation for the sleep-timer listbox (mirrors the voice menu):
-// Up/Down/Home/End move focus, Esc closes and returns focus to the button.
-function onSleepMenuKeydown(e: KeyboardEvent) {
-  const options = getSleepOptionEls()
-  if (options.length === 0) return
-  const activeEl = (shadow?.activeElement as HTMLButtonElement) ?? null
-  let idx = options.findIndex(o => o === activeEl)
-
-  if (e.key === 'ArrowDown') {
-    e.preventDefault()
-    idx = idx < 0 ? 0 : Math.min(idx + 1, options.length - 1)
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault()
-    idx = idx <= 0 ? 0 : idx - 1
-  } else if (e.key === 'Home') {
-    e.preventDefault()
-    idx = 0
-  } else if (e.key === 'End') {
-    e.preventDefault()
-    idx = options.length - 1
-  } else if (e.key === 'Escape') {
-    e.preventDefault()
-    closeSleepMenu()
-    sleepBtn?.focus()
-    return
-  } else {
-    return
-  }
-
-  options[idx]?.focus()
-}
-
-function openSleepMenu() {
-  if (!sleepBtn || !sleepBtn.parentElement) return
-  sleepMenu = document.createElement('div')
-  sleepMenu.className = 'sleep-menu'
-  sleepMenu.setAttribute('role', 'listbox')
-  sleepMenu.setAttribute('aria-label', 'Sleep timer')
-  sleepMenu.addEventListener('keydown', onSleepMenuKeydown)
-
-  for (const opt of SLEEP_OPTIONS) {
-    const el = document.createElement('button')
-    el.className = 'sleep-option'
-    el.type = 'button'
-    el.setAttribute('role', 'option')
-    const selected = opt.minutes === sleepMinutes
-    el.setAttribute('aria-selected', String(selected))
-
-    const name = document.createElement('span')
-    name.textContent = opt.label
-    const check = document.createElement('span')
-    check.className = 'so-check'
-    check.textContent = selected ? '✓' : ''
-    el.append(name, check)
-
-    el.onclick = () => {
-      armSleepTimer(opt.minutes)
-      closeSleepMenu()
-    }
-    sleepMenu.appendChild(el)
-  }
-
-  sleepBtn.parentElement.appendChild(sleepMenu)
-  sleepBtn.setAttribute('aria-expanded', 'true')
-  document.addEventListener('mousedown', onDocMouseDownForSleep, { capture: true })
-
-  // Move focus to the selected option (or the first) for keyboard users.
-  const options = getSleepOptionEls()
-  const selectedIdx = SLEEP_OPTIONS.findIndex(o => o.minutes === sleepMinutes)
-  options[selectedIdx >= 0 ? selectedIdx : 0]?.focus()
 }
 
 function renderProgress() {
@@ -1126,20 +785,16 @@ export function showWidget() {
   shadowIndicator.append(pulse, shadowHintText)
   title.append(dot, titleText, shadowIndicator)
 
-  // Sleep timer control lives in the header (right side) inside a positioned
-  // wrapper so its dropdown anchors to the button.
-  const sleepWrap = document.createElement('div')
-  sleepWrap.className = 'sleep-wrap'
-  sleepBtn = makeButton('sleep', '⏱', 'Sleep timer: off', toggleSleepMenu)
-  sleepBtn.setAttribute('aria-haspopup', 'listbox')
-  sleepBtn.setAttribute('aria-expanded', 'false')
-  sleepWrap.appendChild(sleepBtn)
+  shadowBtn = makeButton('shadow-toggle', '🗣', 'Shadowing mode: off', toggleShadowing)
+  shadowBtn.setAttribute('aria-pressed', 'false')
+
+  repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', cycleRepeat)
 
   const closeBtn = makeButton('close', '⏹', 'Stop', () => { stop(); hideWidget() })
 
   const headerRight = document.createElement('div')
   headerRight.className = 'header-right'
-  headerRight.append(sleepWrap, closeBtn)
+  headerRight.append(shadowBtn, repeatBtn, closeBtn)
 
   header.append(title, headerRight)
 
@@ -1194,20 +849,7 @@ export function showWidget() {
 
   controls.append(prevBtn, replayBtn, pauseBtn, nextBtn, focusBtn, speedBtn)
 
-  // ── Learner row (shadowing toggle · Repeat · Save) — H29/H30/H31 ────────
-  const learnRow = document.createElement('div')
-  learnRow.className = 'learn-row'
-
-  shadowBtn = makeButton('shadow-toggle', '🗣', 'Shadowing mode: off', toggleShadowing)
-  shadowBtn.setAttribute('aria-pressed', 'false')
-
-  repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', cycleRepeat)
-
-  saveBtn = makeButton('save-current', '＋ Save', 'Save the current sentence to your library', () => { void onSaveClick() })
-
-  learnRow.append(shadowBtn, repeatBtn, saveBtn)
-
-  player.append(header, progressRow, voiceRow, controls, learnRow)
+  player.append(header, progressRow, voiceRow, controls)
   shadow.append(style, player)
   document.body.appendChild(host)
 
@@ -1215,10 +857,8 @@ export function showWidget() {
   renderVoiceChip()
   refreshSpeedLabel()
   refreshFocusButton()
-  refreshSleepButton()
   refreshShadowButton()
   refreshRepeatButton()
-  refreshSaveButton()
   refreshShadowIndicator()
   makeDraggable(player, header)
 }
@@ -1230,17 +870,11 @@ export function updateWidgetState(state: 'playing' | 'paused' | 'idle') {
     pauseBtn.title = 'Pause'
     pauseBtn.setAttribute('aria-label', 'Pause')
     pauseBtn.setAttribute('aria-pressed', 'true')
-    // Resuming re-arms the sleep countdown from the remaining duration if a
-    // positive timer was selected but is not currently ticking (F23).
-    if (sleepMinutes > 0 && !sleepTimer) resumeSleepTimer()
   } else if (state === 'paused') {
     pauseBtn.textContent = '▶'
     pauseBtn.title = 'Resume'
     pauseBtn.setAttribute('aria-label', 'Resume')
     pauseBtn.setAttribute('aria-pressed', 'false')
-    // Pause halts the countdown (task: clear on pause) but keeps the selection
-    // so resume can continue from the time that was left.
-    pauseSleepTimer()
   }
   refreshSpeedLabel()
 }
@@ -1255,18 +889,12 @@ export function hideWidget() {
   // Reset focus mode so the next session starts with the spotlight off (default).
   setFocusMode(false)
   closeVoiceMenu()
-  closeSleepMenu()
-  // Drop any armed sleep timer + selection so the next session starts clean.
-  resetSleepTimer()
-  if (saveResetTimer) { clearTimeout(saveResetTimer); saveResetTimer = null }
   host?.remove()
   host = null
   shadow = null
   pauseBtn = null
   focusBtn = null
   speedBtn = null
-  sleepBtn = null
-  sleepMenu = null
   voiceChip = null
   voiceMenu = null
   progressLabel = null
@@ -1274,7 +902,6 @@ export function hideWidget() {
   progressTrack = null
   shadowBtn = null
   repeatBtn = null
-  saveBtn = null
   shadowIndicator = null
   curIndex = 0
   curTotal = 0

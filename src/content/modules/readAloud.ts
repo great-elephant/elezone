@@ -65,16 +65,6 @@ export function getShadowInfo(): { shadowing: boolean; repetition: number; inGap
   return { shadowing: shadowingOn, repetition: currentRepetition, inGap: inShadowGap }
 }
 
-// The text + DOM range of the sentence currently being read. Used by the
-// mini-player's "＋ Save" button (H30) to save the current sentence to the
-// library without interrupting playback. Returns null when idle / out of range.
-export function getCurrentSentence(): { text: string; range: Range | null } | null {
-  if (state === 'idle') return null
-  const text = sentences[currentIndex]
-  if (typeof text !== 'string' || !text.trim()) return null
-  return { text, range: sentenceRanges[currentIndex] ?? null }
-}
-
 // Whether the most recent idle transition was a natural finish (F22). Only
 // meaningful when read from within the `onStateChange('idle')` callback.
 export function didFinishNaturally(): boolean {
