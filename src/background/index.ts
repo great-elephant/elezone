@@ -494,7 +494,7 @@ async function broadcastReadAloudState(
 
   await chrome.runtime.sendMessage({
     type: 'READ_ALOUD_STATE',
-    payload: { tabId, state },
+    payload: { tabId, state, index, total, speed },
   }).catch(() => { })
 }
 
@@ -1073,7 +1073,16 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
     }
     case 'GET_READ_ALOUD_STATE': {
       const tabId = (msg.payload as { tabId?: number } | undefined)?.tabId ?? sender.tab?.id
-      return { state: tabId ? (readAloudStateByTab.get(tabId) ?? 'idle') : 'idle' as ReadAloudState }
+      const state = tabId ? (readAloudStateByTab.get(tabId) ?? 'idle') : ('idle' as ReadAloudState)
+      // Mirror the live-session progress/speed the same way broadcastReadAloudState
+      // and READ_ALOUD_UPDATE source them, so the popup can render progress on open.
+      const forThisTab = activeSession?.tabId === tabId ? activeSession : undefined
+      return {
+        state,
+        index: forThisTab?.currentIndex,
+        total: forThisTab?.sentences.length,
+        speed: forThisTab?.settings.speed,
+      }
     }
     case 'CAPTURE_VISIBLE_TAB':
       return new Promise((resolve) => {

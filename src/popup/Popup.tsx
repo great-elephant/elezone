@@ -11,6 +11,29 @@ function formatTime(seconds?: number): string | null {
   return `${m}m`;
 }
 
+// Mirror the on-page mini-player's speed presets (floatingWidget SPEED_STEPS).
+const READ_ALOUD_SPEED_STEPS = [0.75, 1, 1.25, 1.5, 2];
+
+function nearestSpeedStep(rate: number): number {
+  let best = READ_ALOUD_SPEED_STEPS[0];
+  let bestDiff = Infinity;
+  for (const s of READ_ALOUD_SPEED_STEPS) {
+    const d = Math.abs(s - rate);
+    if (d < bestDiff) { bestDiff = d; best = s; }
+  }
+  return best;
+}
+
+function nextSpeedStep(rate: number): number {
+  let idx = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < READ_ALOUD_SPEED_STEPS.length; i++) {
+    const d = Math.abs(READ_ALOUD_SPEED_STEPS[i] - rate);
+    if (d < bestDiff) { bestDiff = d; idx = i; }
+  }
+  return READ_ALOUD_SPEED_STEPS[(idx + 1) % READ_ALOUD_SPEED_STEPS.length];
+}
+
 export default function Popup() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
@@ -21,6 +44,11 @@ export default function Popup() {
     "available" | "downloadable" | "downloading" | "unavailable" | null
   >(null);
   const [readAloudState, setReadAloudState] = useState<ReadAloudState>("idle");
+  // Live progress/speed for the active tab's read-aloud session, mirrored from
+  // the background so the popup can show the same info as the on-page player.
+  const [readAloudIndex, setReadAloudIndex] = useState<number | null>(null);
+  const [readAloudTotal, setReadAloudTotal] = useState<number | null>(null);
+  const [readAloudSpeed, setReadAloudSpeed] = useState<number | null>(null);
   const [pomodoroState, setPomodoroState] = useState<PomodoroState | null>(null);
   const [showTodoList, setShowTodoList] = useState(false);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
@@ -66,9 +94,12 @@ export default function Popup() {
       activeTabId = tab.id;
       chrome.runtime.sendMessage(
         { type: "GET_READ_ALOUD_STATE", payload: { tabId: tab.id } },
-        (res: { state: ReadAloudState } | null) => {
+        (res: { state: ReadAloudState; index?: number; total?: number; speed?: number } | null) => {
           void chrome.runtime.lastError;
           setReadAloudState(res?.state ?? "idle");
+          setReadAloudIndex(typeof res?.index === "number" ? res.index : null);
+          setReadAloudTotal(typeof res?.total === "number" ? res.total : null);
+          setReadAloudSpeed(typeof res?.speed === "number" ? res.speed : null);
         },
       );
 
@@ -106,10 +137,13 @@ export default function Popup() {
     ) => {
       if (msg.type === "READ_ALOUD_STATE") {
         const payload = msg.payload as
-          | { tabId?: number; state?: ReadAloudState }
+          | { tabId?: number; state?: ReadAloudState; index?: number; total?: number; speed?: number }
           | undefined;
         if (payload?.tabId === activeTabId && payload.state) {
           setReadAloudState(payload.state);
+          setReadAloudIndex(typeof payload.index === "number" ? payload.index : null);
+          setReadAloudTotal(typeof payload.total === "number" ? payload.total : null);
+          setReadAloudSpeed(typeof payload.speed === "number" ? payload.speed : null);
         }
       } else if (msg.type === "POMODORO_STATE_UPDATE") {
         setPomodoroState(msg.payload as PomodoroState);
@@ -156,12 +190,15 @@ export default function Popup() {
     });
   }
 
-  function controlReadAloud(action: 'pause' | 'resume' | 'stop') {
+  function controlReadAloud(
+    action: 'pause' | 'resume' | 'stop' | 'next' | 'prev' | 'seek' | 'setSpeed',
+    extra?: { index?: number; speed?: number },
+  ) {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
       if (tab?.id && tab.id >= 0) {
         chrome.runtime
-          .sendMessage({ type: "CONTROL_READ_ALOUD", payload: { action, tabId: tab.id } })
+          .sendMessage({ type: "CONTROL_READ_ALOUD", payload: { action, tabId: tab.id, ...extra } })
           .catch(() => { });
       }
     });
@@ -597,11 +634,12 @@ export default function Popup() {
 
         </div>
 
+        {/* Translate Section */}
         <div style={styles.pomodoroBox}>
           <div style={styles.pomodoroHeader}>
-            <span>Reading Assistant</span>
+            <span>Translate</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>Translate</span>
+              <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>On page</span>
               <button
                 style={{
                   ...styles.toggle,
@@ -621,8 +659,8 @@ export default function Popup() {
               </button>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: '#8a8ab0', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
-            Read aloud and translate website text on the fly.
+          <div style={{ fontSize: 11, color: '#8a8ab0', marginTop: -6, marginBottom: settings.translation.enabled ? 8 : 0, lineHeight: 1.4 }}>
+            Translate website text on the fly.
           </div>
 
           {settings.translation.enabled && (() => {
@@ -636,11 +674,21 @@ export default function Popup() {
               ? badges[translatorStatus]
               : { text: '🌐 Translation unavailable on this page', color: '#8a8ab0' };
             return (
-              <div style={{ fontSize: 11, color: badge.color, marginTop: -4, marginBottom: 8, lineHeight: 1.4 }}>
+              <div style={{ fontSize: 11, color: badge.color, marginTop: -4, lineHeight: 1.4 }}>
                 {badge.text}
               </div>
             );
           })()}
+        </div>
+
+        {/* Read Aloud Section */}
+        <div style={styles.pomodoroBox}>
+          <div style={styles.pomodoroHeader}>
+            <span>Read Aloud</span>
+          </div>
+          <div style={{ fontSize: 11, color: '#8a8ab0', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
+            Listen to this page read out loud, sentence by sentence.
+          </div>
 
           {readAloudState === 'idle' ? (
             <button
@@ -650,83 +698,155 @@ export default function Popup() {
               title={startDisabled ? "No readable content found on this page" : ""}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-              Start Reading
+              Listen
             </button>
-          ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#2d4fd4', borderRadius: 8, padding: '8px 12px' }}>
-              <span style={{ fontSize: 13, color: '#fff', fontWeight: 600, flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 3, backgroundColor: readAloudState === 'playing' ? '#4ade80' : '#facc15' }} />
-                {readAloudState === 'playing' ? 'Reading...' : 'Paused'}
-              </span>
-              {readAloudState === 'playing' ? (
-                <button style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }} onClick={() => controlReadAloud('pause')}>Pause</button>
-              ) : (
-                <button style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }} onClick={() => controlReadAloud('resume')}>Resume</button>
-              )}
-              <button style={{ background: 'rgba(255,100,100,0.5)', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12, fontWeight: 600 }} onClick={() => controlReadAloud('stop')}>Stop</button>
-
-              <div
-                ref={readAloudVolumeControlRef}
-                style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
-                onWheel={(e) => {
-                  if (!showReadAloudVolumeSlider) return;
-                  e.preventDefault();
-                  const step = 0.05;
-                  const direction = e.deltaY < 0 ? 1 : -1;
-                  const vol = settings.readAloud?.volume ?? 1;
-                  let newVol = vol + (direction * step);
-                  newVol = Math.max(0, Math.min(1, newVol));
-
-                  const newSettings = { ...settings, updatedAt: Date.now(), readAloud: { ...settings.readAloud!, volume: newVol } };
-                  setSettings(newSettings);
-                  chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
-                }}
-              >
-                <button
-                  onClick={() => setShowReadAloudVolumeSlider(!showReadAloudVolumeSlider)}
-                  style={{ background: 'rgba(255,255,255,0.2)', border: 'none', borderRadius: 4, color: '#fff', cursor: 'pointer', padding: 4, display: 'flex', transition: 'background 0.2s' }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.3)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.2)'}
-                  title={`Volume: ${Math.round((settings.readAloud?.volume ?? 1) * 100)}%`}
-                  aria-label={`Read aloud volume: ${Math.round((settings.readAloud?.volume ?? 1) * 100)}%`}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    {(settings.readAloud?.volume ?? 1) === 0 ? (
-                      <>
-                        <line x1="23" y1="9" x2="17" y2="15"></line>
-                        <line x1="17" y1="9" x2="23" y2="15"></line>
-                      </>
-                    ) : (
-                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                    )}
-                  </svg>
-                </button>
-                {showReadAloudVolumeSlider && (
-                  <div style={{ position: 'absolute', bottom: '100%', marginBottom: 8, left: '50%', transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, zIndex: 10, background: '#1a1a2e', padding: '8px 4px', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', border: '1px solid #3a3a5a' }}>
-                    <span style={{ fontSize: 10, color: '#8888aa', fontWeight: 'bold', width: '28px', textAlign: 'center' }}>
-                      {Math.round((settings.readAloud?.volume ?? 1) * 100)}%
+          ) : (() => {
+            // Progress mirrors the on-page mini-player: "Sentence X / N" and a
+            // fill of index / (total - 1). Fields may be absent if the tab has
+            // no live session (background couldn't source them) — degrade to
+            // just the status + Pause/Stop rather than showing bogus numbers.
+            const hasProgress = typeof readAloudIndex === 'number' && typeof readAloudTotal === 'number' && readAloudTotal > 0;
+            const displayIndex = hasProgress ? Math.min(readAloudIndex! + 1, readAloudTotal!) : null;
+            const pct = hasProgress
+              ? (readAloudTotal! > 1 ? (readAloudIndex! / (readAloudTotal! - 1)) * 100 : 100)
+              : 0;
+            const speedLabel = readAloudSpeed != null ? nearestSpeedStep(readAloudSpeed) : null;
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#2d4fd4', borderRadius: 8, padding: '8px 12px' }}>
+                {/* Status + progress label */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 3, backgroundColor: readAloudState === 'playing' ? '#4ade80' : '#facc15', flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>
+                    {readAloudState === 'playing' ? 'Reading…' : 'Paused'}
+                  </span>
+                  {displayIndex != null && (
+                    <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', marginLeft: 'auto' }}>
+                      Sentence {displayIndex} / {readAloudTotal}
                     </span>
-                    <input
-                      autoFocus
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={settings.readAloud?.volume ?? 1}
-                      onChange={(e) => {
-                        const vol = parseFloat(e.target.value);
-                        const newSettings = { ...settings, updatedAt: Date.now(), readAloud: { ...settings.readAloud!, volume: vol } };
-                        setSettings(newSettings);
-                        chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
-                      }}
-                      style={{ accentColor: '#4ade80', height: 60, width: 8, margin: 0, writingMode: 'vertical-lr', direction: 'rtl' }}
-                    />
+                  )}
+                </div>
+
+                {/* Progress bar (seek by clicking) */}
+                {hasProgress && (
+                  <input
+                    type="range"
+                    min={0}
+                    max={readAloudTotal! - 1}
+                    step={1}
+                    value={readAloudIndex!}
+                    onChange={(e) => {
+                      const target = parseInt(e.target.value, 10);
+                      setReadAloudIndex(target);
+                      controlReadAloud('seek', { index: target });
+                    }}
+                    aria-label={`Seek to sentence, currently ${displayIndex} of ${readAloudTotal}`}
+                    style={{ accentColor: '#fff', width: '100%', height: 4, margin: 0, cursor: 'pointer' }}
+                  />
+                )}
+                {!hasProgress && (
+                  <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.25)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${pct}%`, background: '#fff', borderRadius: 2 }} />
                   </div>
                 )}
+
+                {/* Transport controls */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('prev')} title="Previous sentence" aria-label="Previous sentence">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20" /><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+                  </button>
+                  <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('seek', { index: readAloudIndex ?? 0 })} title="Replay current sentence" aria-label="Replay current sentence">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+                  </button>
+                  {readAloudState === 'playing' ? (
+                    <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('pause')} title="Pause" aria-label="Pause">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
+                    </button>
+                  ) : (
+                    <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('resume')} title="Resume" aria-label="Resume">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3" /></svg>
+                    </button>
+                  )}
+                  <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('next')} title="Next sentence" aria-label="Next sentence">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4" /><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
+                  </button>
+                  {speedLabel != null && (
+                    <button
+                      style={{ ...styles.readAloudCtrlBtn, width: 'auto', padding: '0 8px', fontSize: 12, fontWeight: 700 }}
+                      onClick={() => controlReadAloud('setSpeed', { speed: nextSpeedStep(readAloudSpeed!) })}
+                      title="Playback speed"
+                      aria-label={`Playback speed ${speedLabel}x, click to change`}
+                    >
+                      {speedLabel}x
+                    </button>
+                  )}
+
+                  <button style={{ ...styles.readAloudCtrlBtn, background: 'rgba(255,100,100,0.5)', width: 'auto', padding: '0 10px', fontSize: 12, fontWeight: 600, marginLeft: 'auto' }} onClick={() => controlReadAloud('stop')} title="Stop" aria-label="Stop">
+                    Stop
+                  </button>
+
+                  {/* Volume (popup/settings-controlled, separate from the on-page player) */}
+                  <div
+                    ref={readAloudVolumeControlRef}
+                    style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+                    onWheel={(e) => {
+                      if (!showReadAloudVolumeSlider) return;
+                      e.preventDefault();
+                      const step = 0.05;
+                      const direction = e.deltaY < 0 ? 1 : -1;
+                      const vol = settings.readAloud?.volume ?? 1;
+                      let newVol = vol + (direction * step);
+                      newVol = Math.max(0, Math.min(1, newVol));
+
+                      const newSettings = { ...settings, updatedAt: Date.now(), readAloud: { ...settings.readAloud!, volume: newVol } };
+                      setSettings(newSettings);
+                      chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
+                    }}
+                  >
+                    <button
+                      onClick={() => setShowReadAloudVolumeSlider(!showReadAloudVolumeSlider)}
+                      style={styles.readAloudCtrlBtn}
+                      title={`Volume: ${Math.round((settings.readAloud?.volume ?? 1) * 100)}%`}
+                      aria-label={`Read aloud volume: ${Math.round((settings.readAloud?.volume ?? 1) * 100)}%`}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        {(settings.readAloud?.volume ?? 1) === 0 ? (
+                          <>
+                            <line x1="23" y1="9" x2="17" y2="15"></line>
+                            <line x1="17" y1="9" x2="23" y2="15"></line>
+                          </>
+                        ) : (
+                          <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                        )}
+                      </svg>
+                    </button>
+                    {showReadAloudVolumeSlider && (
+                      <div style={{ position: 'absolute', bottom: '100%', marginBottom: 8, right: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, zIndex: 10, background: '#1a1a2e', padding: '8px 4px', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', border: '1px solid #3a3a5a' }}>
+                        <span style={{ fontSize: 10, color: '#8888aa', fontWeight: 'bold', width: '28px', textAlign: 'center' }}>
+                          {Math.round((settings.readAloud?.volume ?? 1) * 100)}%
+                        </span>
+                        <input
+                          autoFocus
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.05"
+                          value={settings.readAloud?.volume ?? 1}
+                          onChange={(e) => {
+                            const vol = parseFloat(e.target.value);
+                            const newSettings = { ...settings, updatedAt: Date.now(), readAloud: { ...settings.readAloud!, volume: vol } };
+                            setSettings(newSettings);
+                            chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: newSettings });
+                          }}
+                          style={{ accentColor: '#4ade80', height: 60, width: 8, margin: 0, writingMode: 'vertical-lr', direction: 'rtl' }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
     </div>
@@ -1009,5 +1129,21 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "5px 0",
     fontSize: 13,
     cursor: "pointer",
+  },
+  // Compact transport button used inside the active Read Aloud card (dark blue
+  // panel), mirroring the on-page mini-player controls.
+  readAloudCtrlBtn: {
+    background: "rgba(255,255,255,0.2)",
+    border: "none",
+    color: "#fff",
+    height: 26,
+    minWidth: 26,
+    borderRadius: 4,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+    transition: "background 0.2s",
   }
 };
