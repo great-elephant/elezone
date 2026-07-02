@@ -449,9 +449,12 @@ async function broadcastReadAloudState(tabId: number, state: ReadAloudState, ind
   if (state === 'idle') readAloudStateByTab.delete(tabId)
   else readAloudStateByTab.set(tabId, state)
 
+  const total = activeSession?.tabId === tabId ? activeSession.sentences.length : undefined
+  const speed = activeSession?.tabId === tabId ? activeSession.settings.speed : undefined
+
   await chrome.tabs.sendMessage(tabId, {
     type: 'READ_ALOUD_UPDATE',
-    payload: { state, index },
+    payload: { state, index, total, speed },
   }).catch(() => { })
 
   await chrome.runtime.sendMessage({
@@ -647,6 +650,39 @@ async function controlReadAloud(
 
   if (action === 'stop') {
     await stopActiveSession()
+    return { ok: true }
+  }
+
+  if (action === 'next' || action === 'prev' || action === 'seek' || action === 'setSpeed') {
+    const session = activeSession
+    const lastIndex = session.sentences.length - 1
+
+    if (action === 'next') {
+      session.currentIndex = Math.min(session.currentIndex + 1, lastIndex)
+      session.currentRep = 0
+    } else if (action === 'prev') {
+      session.currentIndex = Math.max(session.currentIndex - 1, 0)
+      session.currentRep = 0
+    } else if (action === 'seek') {
+      const target = (payload as { index?: number }).index
+      if (typeof target !== 'number') return { ok: false }
+      session.currentIndex = Math.max(0, Math.min(Math.round(target), lastIndex))
+      session.currentRep = 0
+    } else if (action === 'setSpeed') {
+      const speed = (payload as { speed?: number }).speed
+      if (typeof speed !== 'number' || !Number.isFinite(speed)) return { ok: false }
+      session.settings = { ...session.settings, speed }
+    }
+
+    // chrome.tts can't change rate/position mid-utterance, so re-speak the
+    // (possibly new) current sentence. Bump the token first so any stale
+    // 'interrupted'/'cancelled' event from the utterance we're stopping can't
+    // tear the session down.
+    session.token = ++sessionCounter
+    session.state = 'playing'
+    chrome.tts.stop()
+    startSpeakingWatchdog(session.token)
+    await speakCurrentSentence(session.token)
     return { ok: true }
   }
 

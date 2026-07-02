@@ -7,6 +7,7 @@ let state: ReadAloudState = 'idle'
 let sentences: string[] = []
 let sentenceRanges: Range[] = []
 let currentIndex = 0
+let currentSpeed = 1
 let onStateChange: ((s: ReadAloudState) => void) | null = null
 
 export function setOnStateChange(cb: (s: ReadAloudState) => void) {
@@ -92,9 +93,11 @@ async function beginSession(
   const mismatch = checkLanguageMismatch(settings, lang)
   if (mismatch && warning) warning(mismatch)
 
+  currentSpeed = settings.speed
+
   const response = await chrome.runtime.sendMessage({
     type: 'START_READ_ALOUD_SESSION',
-    payload: { sentences, startIndex, settings, lang },
+    payload: { sentences, startIndex, settings: { ...settings, speed: currentSpeed }, lang },
   }) as { ok?: boolean }
 
   if (!response?.ok) {
@@ -209,9 +212,57 @@ export function stop() {
   chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'stop' } }).catch(() => {})
 }
 
-export function syncRemoteState(nextState: ReadAloudState, index?: number) {
+export function next() {
+  if (state === 'idle') return
+  notifyState('playing')
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'next' } }).catch(() => {})
+}
+
+export function prev() {
+  if (state === 'idle') return
+  notifyState('playing')
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'prev' } }).catch(() => {})
+}
+
+export function replay() {
+  if (state === 'idle') return
+  seekTo(currentIndex)
+}
+
+export function seekTo(index: number) {
+  if (state === 'idle') return
+  const total = sentences.length
+  if (total === 0) return
+  const clamped = Math.max(0, Math.min(Math.round(index), total - 1))
+  // Highlight immediately for responsiveness; background confirms via broadcast.
+  applySentenceIndex(clamped)
+  notifyState('playing')
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'seek', index: clamped } }).catch(() => {})
+}
+
+export function setSpeed(rate: number) {
+  if (!Number.isFinite(rate) || rate <= 0) return
+  currentSpeed = rate
+  if (state === 'idle') return
+  notifyState('playing')
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setSpeed', speed: rate } }).catch(() => {})
+}
+
+export function getSpeed(): number {
+  return currentSpeed
+}
+
+export function getProgress(): { index: number; total: number } {
+  return { index: currentIndex, total: sentences.length }
+}
+
+export function syncRemoteState(nextState: ReadAloudState, index?: number, speed?: number) {
   if (typeof index === 'number') {
     applySentenceIndex(index)
+  }
+
+  if (typeof speed === 'number' && Number.isFinite(speed)) {
+    currentSpeed = speed
   }
 
   if (nextState === 'idle') {

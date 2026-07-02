@@ -1,6 +1,6 @@
 import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint } from './modules/anchor'
-import { start, startFrom, setOnStateChange, getState, syncRemoteState } from './modules/readAloud'
-import { showWidget, hideWidget, updateWidgetState, showWarning } from './modules/floatingWidget'
+import { start, startFrom, setOnStateChange, getState, syncRemoteState, getProgress } from './modules/readAloud'
+import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, showWarning } from './modules/floatingWidget'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
 import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor } from '../shared/types'
 import { initDictionary } from './modules/dictionary'
@@ -61,7 +61,12 @@ function checkScrollTarget() {
 // Broadcast Read Aloud state to the extension popup so it can update its UI
 setOnStateChange(newState => {
   updateWidgetState(newState)
-  if (newState === 'idle') hideWidget()
+  if (newState === 'idle') {
+    hideWidget()
+  } else {
+    const { index, total } = getProgress()
+    updateWidgetProgress(index, total)
+  }
 })
 
 // ── Bookmark delete tooltip ───────────────────────────────────────────────────
@@ -384,8 +389,13 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
       return { ok: true }
 
     case 'READ_ALOUD_UPDATE': {
-      const { state, index } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number }
-      syncRemoteState(state, index)
+      const { state, index, total, speed } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number; total?: number; speed?: number }
+      syncRemoteState(state, index, speed)
+      if (state !== 'idle') {
+        const progress = getProgress()
+        // Prefer content-side counts; fall back to the background's authoritative total.
+        updateWidgetProgress(progress.index, progress.total || total || 0)
+      }
       return { ok: true }
     }
 
