@@ -140,14 +140,22 @@ async function beginSession(
   notifyState('playing')
 }
 
-export async function start(settings: ReadAloudSettings, warning?: (msg: string) => void) {
-  if (state !== 'idle') return
-
+// Build the sentence plan for the whole readable article and load it into the
+// module-level session buffers. Returns the language used. Shared by every
+// start path (top / from-selection / from-element).
+function loadArticlePlan(): string {
   const lang = document.documentElement.lang || 'en'
   const readableText = extractReadableArticle()?.textContent ?? ''
   const plan = buildSentencePlan(getContentElements(readableText), lang)
   sentences = plan.map(p => p.text)
   sentenceRanges = plan.map(p => p.range)
+  return lang
+}
+
+export async function start(settings: ReadAloudSettings, warning?: (msg: string) => void) {
+  if (state !== 'idle') return
+
+  const lang = loadArticlePlan()
   if (sentences.length === 0) return
 
   currentIndex = 0
@@ -213,14 +221,44 @@ export async function startFrom(
   selRange: Range | null,
   warning?: (msg: string) => void,
 ) {
-  const lang = document.documentElement.lang || 'en'
-  const readableText = extractReadableArticle()?.textContent ?? ''
-  const plan = buildSentencePlan(getContentElements(readableText), lang)
-  sentences = plan.map(p => p.text)
-  sentenceRanges = plan.map(p => p.range)
+  const lang = loadArticlePlan()
   if (sentences.length === 0) return
 
   currentIndex = findSentenceIndex(sentences, sentenceRanges, selectedText, selRange)
+  await beginSession(settings, currentIndex, lang, warning)
+}
+
+// Find the first planned sentence whose range starts inside `el`. Used by the
+// paragraph "▶ Read from here" affordance so we start exactly at the paragraph
+// the user pointed at, regardless of where its text falls in the plan.
+function findElementSentenceIndex(el: HTMLElement): number {
+  for (let i = 0; i < sentenceRanges.length; i++) {
+    const r = sentenceRanges[i]
+    const container = r?.startContainer
+    if (!container || container.nodeType === Node.DOCUMENT_NODE) continue
+    const node = container.nodeType === Node.TEXT_NODE ? container.parentElement : (container as Element)
+    if (node && el.contains(node)) return i
+  }
+  return -1
+}
+
+/**
+ * Start reading from a specific content element (paragraph/heading). Builds the
+ * article plan, locates the sentence that begins inside `el`, and starts there.
+ * Falls back to the article top when the element can't be matched to a sentence.
+ */
+export async function startFromElement(
+  settings: ReadAloudSettings,
+  el: HTMLElement,
+  warning?: (msg: string) => void,
+) {
+  if (state !== 'idle') return
+
+  const lang = loadArticlePlan()
+  if (sentences.length === 0) return
+
+  const matched = findElementSentenceIndex(el)
+  currentIndex = matched >= 0 ? matched : 0
   await beginSession(settings, currentIndex, lang, warning)
 }
 

@@ -203,6 +203,26 @@ chrome.commands.onCommand.addListener(async (command) => {
   } else if (command === 'trigger_ocr') {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
     if (tabs[0]) await startOcr(tabs[0])
+  } else if (command === 'toggle_read_aloud') {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
+    const tab = tabs[0]
+    if (!tab?.id) return
+    // If read-aloud is already running on this tab (playing OR paused), stop it.
+    // Otherwise kick off a fresh session exactly like the popup's "Start Reading".
+    const isActive = activeSession?.tabId === tab.id
+      || (readAloudStateByTab.get(tab.id) ?? 'idle') !== 'idle'
+    if (isActive) {
+      if (activeSession?.tabId === tab.id) {
+        await stopActiveSession()
+      } else {
+        // No live TTS session here, but the tab still thinks it's reading —
+        // tell it to reset so its mini-player/highlights tear down.
+        readAloudStateByTab.delete(tab.id)
+        chrome.tabs.sendMessage(tab.id, { type: 'STOP_READ_ALOUD' }).catch(() => { })
+      }
+    } else {
+      chrome.tabs.sendMessage(tab.id, { type: 'START_READ_ALOUD' }).catch(() => { })
+    }
   }
 })
 

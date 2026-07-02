@@ -1,7 +1,8 @@
 import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, getWordRangeAtPoint } from './modules/anchor'
-import { start, startFrom, setOnStateChange, getState, syncRemoteState, getProgress, handleWordEvent } from './modules/readAloud'
+import { start, startFrom, startFromElement, setOnStateChange, getState, syncRemoteState, getProgress, handleWordEvent } from './modules/readAloud'
 import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, showWarning } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
+import { initReadAloudAffordances, setEnabled as setAffordancesEnabled, setAffordanceSpeed } from './modules/readAloudAffordances'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
 import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor } from '../shared/types'
 import { initDictionary } from './modules/dictionary'
@@ -80,9 +81,52 @@ setOnStateChange(newState => {
     hideWidget()
     // Tear down the reading marker + focus spotlight hosts when reading stops.
     destroyReadingOverlays()
+    // Reading finished/stopped — bring the idle "Listen" chip + ▶ handle back.
+    setAffordancesEnabled(true)
   } else {
+    // Reading is active — hide the idle affordances so they don't overlap the
+    // mini-player or the click-to-define flow.
+    setAffordancesEnabled(false)
     const { index, total } = getProgress()
     updateWidgetProgress(index, total)
+  }
+})
+
+// Shared "start reading from the top" path, mirroring the popup's Start Reading:
+// pull settings, show the mini-player, kick off translation if enabled, then
+// read from the article top. Reused by the popup message, the keyboard command,
+// and the "🎧 Listen" chip.
+async function startReadingFromTop() {
+  if (getState() !== 'idle') return
+  const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+  if (!settings?.readAloud) return
+  showWidget()
+  if (settings.translation?.enabled) {
+    await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
+  }
+  await start(settings.readAloud, msg => showWarning(msg))
+}
+
+// Same as above but starts at a specific content paragraph (the ▶ handle).
+async function startReadingFromElement(el: HTMLElement) {
+  if (getState() !== 'idle') return
+  const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+  if (!settings?.readAloud) return
+  showWidget()
+  if (settings.translation?.enabled) {
+    await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
+  }
+  await startFromElement(settings.readAloud, el, msg => showWarning(msg))
+}
+
+// Keep the chip's "~N min" estimate in sync with the configured speed.
+chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).then((s: Settings) => {
+  if (s?.readAloud?.speed) setAffordanceSpeed(s.readAloud.speed)
+}).catch(() => { })
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes['settings']) {
+    const speed = (changes['settings'].newValue as Settings)?.readAloud?.speed
+    if (speed) setAffordanceSpeed(speed)
   }
 })
 
@@ -369,6 +413,12 @@ function protectFromSiteEvents(container: HTMLElement) {
 async function init() {
   initDictionary()
   initSelectionChip()
+  // Idle discoverability: "🎧 Listen" chip near the title + per-paragraph ▶.
+  // Only active while read-aloud is idle (toggled via the state-change handler).
+  initReadAloudAffordances(
+    () => { void startReadingFromTop() },
+    (el) => { void startReadingFromElement(el) },
+  )
   void maybeShowSelectionTip()
   await reanchor(window.location.href)
   checkScrollTarget()
@@ -418,14 +468,7 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
 
     case 'START_READ_ALOUD': {
       if (getState() !== 'idle') return { ok: true }
-      const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
-      if (!settings?.readAloud) return { ok: true }
-      showWidget()
-      // Start translation alongside reading if the toggle is ON
-      if (settings.translation?.enabled) {
-        await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
-      }
-      await start(settings.readAloud, msg => showWarning(msg))
+      await startReadingFromTop()
       return { ok: true }
     }
 
