@@ -159,6 +159,36 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 })
 
+async function startOcr(tab?: chrome.tabs.Tab | null) {
+  if (!tab?.id) return
+  try {
+    // Normal pages: the content script draws the in-page crop overlay.
+    await chrome.tabs.sendMessage(tab.id, { type: 'START_CROP_MODE' })
+  } catch {
+    // No content script here (Chrome's PDF viewer, chrome:// pages, ...) —
+    // fall back to a standalone crop window that works over a screenshot.
+    await openOcrWindow(tab)
+  }
+}
+
+async function openOcrWindow(tab: chrome.tabs.Tab) {
+  try {
+    const winId = tab.windowId ?? chrome.windows.WINDOW_ID_CURRENT
+    const dataUrl = await chrome.tabs.captureVisibleTab(winId, { format: 'png' })
+    const settings = await getSettings()
+    const lang = settings.ocr?.language || 'eng'
+    await chrome.storage.session.set({ ocr_window_payload: { dataUrl, lang } })
+    await chrome.windows.create({
+      url: chrome.runtime.getURL('src/crop/index.html'),
+      type: 'popup',
+      width: 1000,
+      height: 780,
+    })
+  } catch (e) {
+    console.error('Failed to open OCR window:', e)
+  }
+}
+
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === 'play_pause' && activeSession) {
     if (activeSession.state === 'playing') {
@@ -172,9 +202,7 @@ chrome.commands.onCommand.addListener(async (command) => {
     }
   } else if (command === 'trigger_ocr') {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
-    if (tabs[0]?.id) {
-      chrome.tabs.sendMessage(tabs[0].id, { type: 'START_CROP_MODE' }).catch(() => {})
-    }
+    if (tabs[0]) await startOcr(tabs[0])
   }
 })
 
@@ -629,7 +657,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab?.id) return
 
   if (info.menuItemId === 'ocr') {
-    chrome.tabs.sendMessage(tab.id, { type: 'START_CROP_MODE' }).catch(() => { })
+    await startOcr(tab)
     return
   }
 
@@ -859,6 +887,11 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
     case 'POMODORO_COMMAND':
       await setupOffscreenDocument('src/offscreen/index.html');
       return chrome.runtime.sendMessage({ type: 'POMODORO_COMMAND', payload: msg.payload });
+    case 'START_OCR': {
+      const [t] = await chrome.tabs.query({ active: true, currentWindow: true })
+      await startOcr(t)
+      return { ok: true }
+    }
     case 'FORWARD_RECOGNIZE_TEXT': {
       const tabId = sender.tab?.id;
       const payload = msg.payload as any;
@@ -873,15 +906,19 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return { ack: true }; // Respond immediately so channel doesn't die
     }
     case 'OCR_PROGRESS': {
-      const { tabId, status, progress } = msg.payload as { tabId?: number; status: string; progress: number };
-      if (tabId) {
+      const { tabId, status, progress, broadcast } = msg.payload as { tabId?: number; status: string; progress: number; broadcast?: boolean };
+      if (broadcast) {
+        chrome.runtime.sendMessage({ type: 'OCR_WINDOW_PROGRESS', payload: { status, progress } }).catch(() => {});
+      } else if (tabId) {
         chrome.tabs.sendMessage(tabId, { type: 'OCR_PROGRESS', payload: { status, progress } }).catch(() => {});
       }
       return { ok: true };
     }
     case 'OCR_COMPLETE': {
-      const { tabId, text, error } = msg.payload as { tabId?: number; text?: string; error?: string };
-      if (tabId) {
+      const { tabId, text, error, broadcast } = msg.payload as { tabId?: number; text?: string; error?: string; broadcast?: boolean };
+      if (broadcast) {
+        chrome.runtime.sendMessage({ type: 'OCR_WINDOW_RESULT', payload: { text, error } }).catch(() => {});
+      } else if (tabId) {
         chrome.tabs.sendMessage(tabId, { type: 'OCR_COMPLETE', payload: { text, error } }).catch(() => {});
       }
       return { ok: true };

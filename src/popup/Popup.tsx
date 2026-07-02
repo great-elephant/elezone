@@ -357,11 +357,7 @@ export default function Popup() {
         }}>
           <button
             onClick={() => {
-              chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
-                if (tabs[0]?.id) {
-                  chrome.tabs.sendMessage(tabs[0].id, { type: 'START_CROP_MODE' }).catch(() => { });
-                }
-              });
+              chrome.runtime.sendMessage({ type: 'START_OCR' }).catch(() => { });
               window.close();
             }}
             style={{

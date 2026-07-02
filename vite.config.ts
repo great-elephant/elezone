@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         guide: 'src/options/guide.html',
         offscreen: 'src/offscreen/index.html',
+        crop: 'src/crop/index.html',
       },
     },
   },
