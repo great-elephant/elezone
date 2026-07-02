@@ -1,8 +1,10 @@
 import { pause, resume, stop, getState, next, prev, replay, seekTo, setSpeed, getSpeed } from './readAloud'
+import { setFocusMode, isFocusMode } from './readAloudOverlay'
 
 let host: HTMLElement | null = null
 let shadow: ShadowRoot | null = null
 let pauseBtn: HTMLButtonElement | null = null
+let focusBtn: HTMLButtonElement | null = null
 let speedBtn: HTMLButtonElement | null = null
 let progressLabel: HTMLElement | null = null
 let progressFill: HTMLElement | null = null
@@ -118,6 +120,11 @@ const WIDGET_CSS = `
     min-width: 42px;
     font-variant-numeric: tabular-nums;
   }
+  button.focus.active {
+    color: #ffd93d;
+    background: #2a2a4a;
+  }
+  button.focus.active:hover { background: #32325a; }
   button.close { color: #9a9ac0; font-size: 16px; }
   button.close:hover { color: #ff8888; background: #2a1a1a; }
   .warning {
@@ -174,6 +181,21 @@ function cycleSpeed() {
 
 function refreshSpeedLabel() {
   if (speedBtn) speedBtn.textContent = nearestSpeedLabel(getSpeed())
+}
+
+function refreshFocusButton() {
+  if (!focusBtn) return
+  const on = isFocusMode()
+  focusBtn.classList.toggle('active', on)
+  const label = on ? 'Focus mode: on' : 'Focus mode: off'
+  focusBtn.title = label
+  focusBtn.setAttribute('aria-label', label)
+  focusBtn.setAttribute('aria-pressed', String(on))
+}
+
+function toggleFocusMode() {
+  setFocusMode(!isFocusMode())
+  refreshFocusButton()
 }
 
 function renderProgress() {
@@ -260,9 +282,11 @@ export function showWidget() {
   pauseBtn = makeButton('play', '⏸', 'Pause', togglePause)
   const nextBtn = makeButton('next', '⏭', 'Next sentence', () => next())
 
+  focusBtn = makeButton('focus', '🔦', 'Focus mode: off', toggleFocusMode)
+
   speedBtn = makeButton('speed', `${getSpeed()}x`, 'Playback speed', cycleSpeed)
 
-  controls.append(prevBtn, replayBtn, pauseBtn, nextBtn, speedBtn)
+  controls.append(prevBtn, replayBtn, pauseBtn, nextBtn, focusBtn, speedBtn)
 
   player.append(header, progressRow, controls)
   shadow.append(style, player)
@@ -270,6 +294,7 @@ export function showWidget() {
 
   renderProgress()
   refreshSpeedLabel()
+  refreshFocusButton()
   makeDraggable(player, header)
 }
 
@@ -294,10 +319,13 @@ export function updateWidgetProgress(index: number, total: number) {
 }
 
 export function hideWidget() {
+  // Reset focus mode so the next session starts with the spotlight off (default).
+  setFocusMode(false)
   host?.remove()
   host = null
   shadow = null
   pauseBtn = null
+  focusBtn = null
   speedBtn = null
   progressLabel = null
   progressFill = null

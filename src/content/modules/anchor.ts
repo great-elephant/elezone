@@ -1,4 +1,5 @@
 import { SavedItem } from '../../shared/types'
+import { updateReadingOverlays, hideReadingOverlays } from './readAloudOverlay'
 
 // ── window.find() helper ─────────────────────────────────────────────────────
 
@@ -476,22 +477,46 @@ export function buildSentencePlan(
   return plan
 }
 
+// Comfortable viewport band: only auto-scroll when the sentence falls outside
+// it. Top margin keeps the line clear of sticky site headers; the bottom margin
+// leaves room for the mini-player (~130px tall, bottom: 24px).
+const SCROLL_MARGIN_TOP = 80
+const SCROLL_MARGIN_BOTTOM = 140
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+}
+
 export function highlightSentenceRange(range: Range): void {
   if (!range.toString()) return
   CSS.highlights.set('cxt-speaking', new Highlight(range))
 
+  // Keep the left "reading" marker + focus spotlight in sync with the sentence.
+  updateReadingOverlays(range)
+
   const rect = range.getBoundingClientRect()
-  if (rect.height > 0) {
-    window.scrollTo({
-      top: window.scrollY + rect.top - window.innerHeight / 3,
-      behavior: 'smooth',
-    })
-  }
+  if (rect.height <= 0) return
+
+  const vh = window.innerHeight
+  const tallerThanViewport = rect.height > vh - SCROLL_MARGIN_TOP - SCROLL_MARGIN_BOTTOM
+  const aboveBand = rect.top < SCROLL_MARGIN_TOP
+  const belowBand = rect.bottom > vh - SCROLL_MARGIN_BOTTOM
+
+  // Already comfortably in view — don't scroll (avoids constant jitter).
+  if (!aboveBand && !belowBand && !tallerThanViewport) return
+
+  window.scrollTo({
+    // Only vertical: keep the existing scrollX so we never pan horizontally.
+    left: window.scrollX,
+    top: window.scrollY + rect.top - vh / 3,
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  })
 }
 
 export function clearSentenceHighlight(): void {
   CSS.highlights.delete('cxt-speaking')
   clearWordHighlight()
+  hideReadingOverlays()
   window.getSelection()?.removeAllRanges()
 }
 

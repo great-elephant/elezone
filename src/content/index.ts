@@ -1,6 +1,7 @@
 import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, getWordRangeAtPoint } from './modules/anchor'
 import { start, startFrom, setOnStateChange, getState, syncRemoteState, getProgress, handleWordEvent } from './modules/readAloud'
 import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, showWarning } from './modules/floatingWidget'
+import { destroyReadingOverlays } from './modules/readAloudOverlay'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
 import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor } from '../shared/types'
 import { initDictionary } from './modules/dictionary'
@@ -27,10 +28,16 @@ function injectHighlightStyles() {
     ::highlight(cxt-teal)   { background-color: rgba(107, 255, 217, 0.45); color: inherit; }
     ::highlight(cxt-gray)   { background-color: rgba(192, 192, 192, 0.45); color: inherit; }
     ::highlight(cxt-flash)    { background-color: rgba(255, 217, 61, 0.7); color: inherit; }
-    ::highlight(cxt-speaking) { background-color: rgba(79, 110, 247, 0.25); color: inherit; }
+    /* Current sentence: a stronger translucent band than before so it reads on
+       both light and dark pages. The left "reading" accent bar is drawn
+       separately (CSS Highlight API can't paint pseudo-elements). */
+    ::highlight(cxt-speaking) {
+      background-color: rgba(79, 110, 247, 0.38);
+      color: inherit;
+    }
     /* Karaoke: the single word currently being spoken, painted over cxt-speaking. */
     ::highlight(cxt-word) {
-      background-color: rgba(79, 110, 247, 0.85);
+      background-color: rgba(79, 110, 247, 0.9);
       color: #ffffff;
       text-decoration: underline;
       text-decoration-color: rgba(255, 217, 61, 0.95);
@@ -71,6 +78,8 @@ setOnStateChange(newState => {
   updateWidgetState(newState)
   if (newState === 'idle') {
     hideWidget()
+    // Tear down the reading marker + focus spotlight hosts when reading stops.
+    destroyReadingOverlays()
   } else {
     const { index, total } = getProgress()
     updateWidgetProgress(index, total)
