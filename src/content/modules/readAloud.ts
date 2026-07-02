@@ -14,6 +14,11 @@ import { savePosition, clearPosition, setSessionUrl, clearSessionUrl } from './r
 let state: ReadAloudState = 'idle'
 let sentences: string[] = []
 let sentenceRanges: Range[] = []
+// The exact content block (paragraph/heading) each sentence came from — lets
+// the focus-mode spotlight find the sentence's translation deterministically
+// instead of guessing via DOM-climbing (a paragraph mode overlay sits after the
+// whole paragraph, not after each individual sentence within it).
+let sentenceElements: HTMLElement[] = []
 let currentIndex = 0
 let currentSpeed = 1
 // H31 — how many times each sentence is spoken (mirrors settings.repetition).
@@ -98,6 +103,7 @@ function clearLocalSession() {
   clearWordHighlight()
   sentences = []
   sentenceRanges = []
+  sentenceElements = []
   currentIndex = 0
   wordIndexSentence = -1
 }
@@ -107,7 +113,7 @@ function applySentenceIndex(index: number) {
   const changed = index !== currentIndex
   currentIndex = index
   const range = sentenceRanges[index] ?? new Range()
-  highlightSentenceRange(range)
+  highlightSentenceRange(range, sentenceElements[index] ?? null)
   // Only reset karaoke state when the sentence actually changes. The background
   // re-broadcasts the same index on start/pause/resume, and rebuilding here on
   // every broadcast would wipe the in-progress word highlight mid-sentence.
@@ -172,6 +178,7 @@ function loadArticlePlan(): string {
   const plan = buildSentencePlan(getContentElements(readableText), lang)
   sentences = plan.map(p => p.text)
   sentenceRanges = plan.map(p => p.range)
+  sentenceElements = plan.map(p => p.el)
   return lang
 }
 

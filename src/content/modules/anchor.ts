@@ -409,7 +409,7 @@ function resolveOffset(
 export function buildSentencePlan(
   elements: HTMLElement[],
   lang: string,
-): Array<{ text: string; range: Range }> {
+): Array<{ text: string; range: Range; el: HTMLElement }> {
   let segmenter: Intl.Segmenter
   try {
     segmenter = new Intl.Segmenter(lang, { granularity: 'sentence' })
@@ -417,7 +417,7 @@ export function buildSentencePlan(
     segmenter = new Intl.Segmenter('en', { granularity: 'sentence' })
   }
 
-  const plan: Array<{ text: string; range: Range }> = []
+  const plan: Array<{ text: string; range: Range; el: HTMLElement }> = []
 
   for (const el of elements) {
     const { entries, text: raw } = buildElementTextIndex(el)
@@ -454,7 +454,7 @@ export function buildSentencePlan(
       }
 
       if (matchStart === -1) {
-        plan.push({ text: sentence, range: new Range() })
+        plan.push({ text: sentence, range: new Range(), el })
         continue
       }
 
@@ -462,14 +462,14 @@ export function buildSentencePlan(
       const endPos = resolveOffset(entries, matchEnd, true)
 
       if (!startPos || !endPos) {
-        plan.push({ text: sentence, range: new Range() })
+        plan.push({ text: sentence, range: new Range(), el })
         continue
       }
 
       const range = new Range()
       range.setStart(startPos.node, startPos.nodeOffset)
       range.setEnd(endPos.node, endPos.nodeOffset)
-      plan.push({ text: sentence, range })
+      plan.push({ text: sentence, range, el })
       searchFrom = matchEnd
     }
   }
@@ -487,12 +487,15 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 }
 
-export function highlightSentenceRange(range: Range): void {
+export function highlightSentenceRange(range: Range, contentEl?: HTMLElement | null): void {
   if (!range.toString()) return
   CSS.highlights.set('cxt-speaking', new Highlight(range))
 
   // Keep the left "reading" marker + focus spotlight in sync with the sentence.
-  updateReadingOverlays(range)
+  // `contentEl` (the exact paragraph/content block this sentence came from, from
+  // buildSentencePlan) lets the overlay find its translation deterministically
+  // instead of guessing via DOM-climbing from the sentence's own range.
+  updateReadingOverlays(range, contentEl ?? null)
 
   const rect = range.getBoundingClientRect()
   if (rect.height <= 0) return
