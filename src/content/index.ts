@@ -1,5 +1,5 @@
-import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint } from './modules/anchor'
-import { start, startFrom, setOnStateChange, getState, syncRemoteState, getProgress } from './modules/readAloud'
+import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, getWordRangeAtPoint } from './modules/anchor'
+import { start, startFrom, setOnStateChange, getState, syncRemoteState, getProgress, handleWordEvent } from './modules/readAloud'
 import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, showWarning } from './modules/floatingWidget'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
 import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor } from '../shared/types'
@@ -28,6 +28,14 @@ function injectHighlightStyles() {
     ::highlight(cxt-gray)   { background-color: rgba(192, 192, 192, 0.45); color: inherit; }
     ::highlight(cxt-flash)    { background-color: rgba(255, 217, 61, 0.7); color: inherit; }
     ::highlight(cxt-speaking) { background-color: rgba(79, 110, 247, 0.25); color: inherit; }
+    /* Karaoke: the single word currently being spoken, painted over cxt-speaking. */
+    ::highlight(cxt-word) {
+      background-color: rgba(79, 110, 247, 0.85);
+      color: #ffffff;
+      text-decoration: underline;
+      text-decoration-color: rgba(255, 217, 61, 0.95);
+      text-decoration-thickness: 2px;
+    }
 
     /* Force text selection to work inside extension popups, overriding any site CSS */
     #cxt-ocr-root *, .cxt-dict-host *, .cxt-delete-tooltip * {
@@ -300,6 +308,46 @@ document.addEventListener('mousemove', (e: MouseEvent) => {
   }
 })
 
+// ── Click-a-word-to-define while reading ──────────────────────────────────────
+
+// While read-aloud is active, a plain click on a page word opens the dictionary
+// popover for it — without stopping playback. Skips interactive elements, the
+// extension's own UI, and cases where the user is actually selecting text.
+function isInteractiveOrOwnUi(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false
+  // Extension UI hosts (mini-player, dictionary, tooltip, OCR, toast). Events
+  // from shadow content are retargeted to the host, so checking the target
+  // element's own class/ancestry is sufficient.
+  if (target.closest('.cxt-player-host, .cxt-dict-host, .cxt-delete-tooltip, .cxt-toast-host, #cxt-ocr-root')) {
+    return true
+  }
+  // Don't hijack real interactive controls.
+  if (target.closest('a, button, [role="button"], input, textarea, select, [contenteditable=""], [contenteditable="true"]')) {
+    return true
+  }
+  return false
+}
+
+document.addEventListener('click', (e: MouseEvent) => {
+  if (getState() === 'idle') return
+  if (e.button !== 0 || e.defaultPrevented) return
+  if (isInteractiveOrOwnUi(e.target)) return
+
+  // If the user made a real (multi-char) selection, let the normal save flow
+  // handle it — don't override with a single-word lookup.
+  const sel = window.getSelection()
+  if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) return
+
+  const range = getWordRangeAtPoint(e.clientX, e.clientY)
+  if (!range) return
+
+  // Open the dictionary for this word. Playback is untouched — we never send a
+  // read-aloud control message here.
+  import('./modules/dictionary')
+    .then(({ showPopoverForRange }) => showPopoverForRange(range))
+    .catch(() => { })
+}, { capture: false })
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function protectFromSiteEvents(container: HTMLElement) {
@@ -396,6 +444,12 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
         // Prefer content-side counts; fall back to the background's authoritative total.
         updateWidgetProgress(progress.index, progress.total || total || 0)
       }
+      return { ok: true }
+    }
+
+    case 'READ_ALOUD_WORD': {
+      const { index, charIndex, length } = msg.payload as { index: number; charIndex: number; length?: number }
+      handleWordEvent(index, charIndex, length)
       return { ok: true }
     }
 

@@ -491,5 +491,229 @@ export function highlightSentenceRange(range: Range): void {
 
 export function clearSentenceHighlight(): void {
   CSS.highlights.delete('cxt-speaking')
+  clearWordHighlight()
   window.getSelection()?.removeAllRanges()
+}
+
+// ── Read Aloud word (karaoke) highlighting ────────────────────────────────────
+
+// Text-node index for the *currently speaking* sentence range. Built once when a
+// sentence starts (via prepareWordIndex) so per-word events resolve cheaply.
+type WordIndexEntry = { node: Text; start: number; end: number }
+let wordIndexEntries: WordIndexEntry[] = []
+// Offset that aligns a charIndex reported against the TTS sentence text with the
+// raw concatenated text of the sentence range. TTS text may be trimmed/normalised
+// relative to range.toString(), so leading whitespace can differ.
+let wordIndexTextOffset = 0
+// Raw concatenated text of the sentence range (whitespace preserved) — used to
+// find a word's end when the TTS event omits `length`.
+let wordIndexRawText = ''
+
+/**
+ * Build a character index over the text nodes inside `range`, so a character
+ * offset (relative to the sentence's TTS text) can be resolved to a DOM
+ * (node, offset) pair. `ttsText` is the exact string handed to chrome.tts for
+ * this sentence; we align it against the raw range text to absorb any
+ * leading-whitespace / trimming differences.
+ *
+ * Safe to call with an empty / detached range — it simply produces an empty
+ * index and word highlighting is skipped for that sentence.
+ */
+export function prepareWordIndex(range: Range, ttsText: string): void {
+  wordIndexEntries = []
+  wordIndexTextOffset = 0
+  wordIndexRawText = ''
+
+  if (!range || !range.startContainer || range.collapsed) return
+
+  const entries: WordIndexEntry[] = []
+  const parts: string[] = []
+  let offset = 0
+
+  const root = range.commonAncestorContainer
+  if (root.nodeType === Node.TEXT_NODE) {
+    // Single-text-node range.
+    const t = root as Text
+    const startOff = range.startContainer === t ? range.startOffset : 0
+    const endOff = range.endContainer === t ? range.endOffset : (t.nodeValue?.length ?? 0)
+    const val = (t.nodeValue ?? '').slice(startOff, endOff)
+    entries.push({ node: t, start: 0, end: val.length })
+    // NOTE: single-node offsets are relative to startOff; record it so we can
+    // translate a range-relative offset back to a node offset below.
+    ;(entries[0] as WordIndexEntry & { base?: number }).base = startOff
+    parts.push(val)
+    offset = val.length
+  } else {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        // Only nodes that actually intersect the range.
+        return range.intersectsNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      },
+    })
+    let n: Node | null
+    while ((n = walker.nextNode())) {
+      const t = n as Text
+      const full = t.nodeValue ?? ''
+      const startOff = t === range.startContainer ? range.startOffset : 0
+      const endOff = t === range.endContainer ? range.endOffset : full.length
+      const val = full.slice(startOff, endOff)
+      if (!val) continue
+      const entry: WordIndexEntry & { base?: number } = { node: t, start: offset, end: offset + val.length, base: startOff }
+      entries.push(entry)
+      parts.push(val)
+      offset += val.length
+    }
+  }
+
+  wordIndexEntries = entries
+  wordIndexRawText = parts.join('')
+
+  // Align the TTS text to the raw range text. TTS `.text` is often the raw text
+  // trimmed and unicode-normalised. We only need the *leading* alignment: find
+  // where the normalised, trimmed TTS text begins inside the normalised raw text.
+  const trimmedTts = ttsText.trimStart()
+  const normRaw = normText(wordIndexRawText)
+  const normTts = normText(trimmedTts)
+  if (normTts) {
+    const head = normTts.slice(0, Math.min(24, normTts.length))
+    const at = normRaw.indexOf(head)
+    wordIndexTextOffset = at >= 0 ? at : 0
+  }
+}
+
+// Resolve a character offset (relative to the raw range text) to (node, offset).
+function resolveWordOffset(rawOffset: number): { node: Text; nodeOffset: number } | null {
+  if (!wordIndexEntries.length) return null
+  const clamped = Math.max(0, Math.min(rawOffset, wordIndexRawText.length))
+  for (const e of wordIndexEntries) {
+    if (clamped >= e.start && clamped <= e.end) {
+      const base = (e as WordIndexEntry & { base?: number }).base ?? 0
+      return { node: e.node, nodeOffset: base + (clamped - e.start) }
+    }
+  }
+  return null
+}
+
+/**
+ * Given a word position reported by chrome.tts (charIndex relative to the TTS
+ * sentence text, optional length), highlight that single word as `cxt-word`
+ * on top of the sentence's `cxt-speaking` highlight.
+ *
+ * Never throws and never falls back to highlighting the whole sentence: if the
+ * offset can't be resolved to a sub-range, the word highlight is simply skipped.
+ */
+export function highlightSpokenWord(charIndex: number, length?: number): void {
+  if (!wordIndexEntries.length) return
+
+  // Map TTS-text offset → raw-range offset.
+  const rawStart = charIndex + wordIndexTextOffset
+  if (rawStart < 0 || rawStart >= wordIndexRawText.length) return
+
+  // Determine the word's end: prefer the reported length, else extend to the
+  // next whitespace in the raw range text (word boundary).
+  let rawEnd: number
+  if (typeof length === 'number' && length > 0) {
+    rawEnd = rawStart + length
+  } else {
+    const ws = wordIndexRawText.slice(rawStart).search(/\s/)
+    rawEnd = ws === -1 ? wordIndexRawText.length : rawStart + ws
+  }
+  rawEnd = Math.min(rawEnd, wordIndexRawText.length)
+  if (rawEnd <= rawStart) return
+
+  const startPos = resolveWordOffset(rawStart)
+  const endPos = resolveWordOffset(rawEnd)
+  if (!startPos || !endPos) return
+
+  try {
+    const wordRange = new Range()
+    wordRange.setStart(startPos.node, startPos.nodeOffset)
+    wordRange.setEnd(endPos.node, endPos.nodeOffset)
+    if (wordRange.collapsed) return
+    CSS.highlights.set('cxt-word', new Highlight(wordRange))
+  } catch {
+    // Bad offsets (e.g. node mutated) — skip this word rather than mis-highlight.
+  }
+}
+
+export function clearWordHighlight(): void {
+  CSS.highlights.delete('cxt-word')
+}
+
+/**
+ * Resolve the word under a viewport point to a DOM Range, using caret
+ * positioning + Intl word segmentation. Returns null when the point isn't over
+ * readable text. Used by click-to-define during read-aloud.
+ */
+export function getWordRangeAtPoint(x: number, y: number): Range | null {
+  const caret = caretRangeFromPoint(x, y)
+  if (!caret) return null
+  const node = caret.node
+  const text = node.nodeValue ?? ''
+  if (!text.trim()) return null
+
+  const [start, end] = wordBoundsAt(text, caret.offset)
+  if (end <= start) return null
+  if (!text.slice(start, end).trim()) return null
+
+  try {
+    const range = document.createRange()
+    range.setStart(node, start)
+    range.setEnd(node, end)
+    const rect = range.getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) return null
+    return range
+  } catch {
+    return null
+  }
+}
+
+// Cross-browser caret-from-point → (text node, offset).
+function caretRangeFromPoint(x: number, y: number): { node: Text; offset: number } | null {
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+  }
+  if (typeof doc.caretPositionFromPoint === 'function') {
+    const pos = doc.caretPositionFromPoint(x, y)
+    if (pos && pos.offsetNode.nodeType === Node.TEXT_NODE) {
+      return { node: pos.offsetNode as Text, offset: pos.offset }
+    }
+    return null
+  }
+  if (typeof doc.caretRangeFromPoint === 'function') {
+    const r = doc.caretRangeFromPoint(x, y)
+    if (r && r.startContainer.nodeType === Node.TEXT_NODE) {
+      return { node: r.startContainer as Text, offset: r.startOffset }
+    }
+  }
+  return null
+}
+
+// Expand [offset] to word boundaries within `text` using Intl.Segmenter when
+// available, falling back to a whitespace/punctuation split.
+function wordBoundsAt(text: string, offset: number): [number, number] {
+  const idx = Math.max(0, Math.min(offset, text.length))
+  try {
+    const seg = new Intl.Segmenter(document.documentElement.lang || undefined, { granularity: 'word' })
+    for (const s of seg.segment(text) as Iterable<{ index: number; segment: string; isWordLike?: boolean }>) {
+      const segEnd = s.index + s.segment.length
+      if (idx >= s.index && idx < segEnd && s.isWordLike) {
+        return [s.index, segEnd]
+      }
+    }
+    // Point landed on whitespace/punctuation — try the word just before it.
+    for (const s of seg.segment(text) as Iterable<{ index: number; segment: string; isWordLike?: boolean }>) {
+      const segEnd = s.index + s.segment.length
+      if (segEnd === idx && s.isWordLike) return [s.index, segEnd]
+    }
+    return [idx, idx]
+  } catch {
+    // Fallback: expand over non-space characters around idx.
+    let start = idx
+    let end = idx
+    while (start > 0 && !/\s/.test(text[start - 1])) start--
+    while (end < text.length && !/\s/.test(text[end])) end++
+    return [start, end]
+  }
 }

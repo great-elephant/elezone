@@ -284,6 +284,22 @@ function handleClickOutside(e: MouseEvent) {
   }
 }
 
+/**
+ * Open the dictionary popover for a word identified by a DOM range (e.g. the
+ * word under the cursor while read-aloud is active). Selects the range so the
+ * existing selection-based context resolution works unchanged, then delegates
+ * to showPopoverFromSelection.
+ */
+export async function showPopoverForRange(range: Range, color: BookmarkColor = 'red') {
+  const word = range.toString().trim()
+  if (!word) return
+  const sel = window.getSelection()
+  if (!sel) return
+  sel.removeAllRanges()
+  sel.addRange(range)
+  await showPopoverFromSelection(word, color)
+}
+
 export async function showPopoverFromSelection(selectedText?: string, color: BookmarkColor = 'red') {
   const sel = window.getSelection()
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return

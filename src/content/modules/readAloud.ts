@@ -1,5 +1,12 @@
 import { ReadAloudSettings, ReadAloudState } from '../../shared/types'
-import { buildSentencePlan, highlightSentenceRange, clearSentenceHighlight } from './anchor'
+import {
+  buildSentencePlan,
+  highlightSentenceRange,
+  clearSentenceHighlight,
+  prepareWordIndex,
+  highlightSpokenWord,
+  clearWordHighlight,
+} from './anchor'
 import { extractReadableArticle, getContentElements } from './contentDiscovery'
 import { prefetchAhead } from './translation'
 
@@ -8,6 +15,8 @@ let sentences: string[] = []
 let sentenceRanges: Range[] = []
 let currentIndex = 0
 let currentSpeed = 1
+// Which sentence the anchor word index was last built for (-1 = none).
+let wordIndexSentence = -1
 let onStateChange: ((s: ReadAloudState) => void) | null = null
 
 export function setOnStateChange(cb: (s: ReadAloudState) => void) {
@@ -72,16 +81,37 @@ function checkLanguageMismatch(settings: ReadAloudSettings, pageLang: string): s
 
 function clearLocalSession() {
   clearSentenceHighlight()
+  clearWordHighlight()
   sentences = []
   sentenceRanges = []
   currentIndex = 0
+  wordIndexSentence = -1
 }
 
 function applySentenceIndex(index: number) {
   if (index < 0 || index >= sentenceRanges.length) return
+  const changed = index !== currentIndex
   currentIndex = index
-  highlightSentenceRange(sentenceRanges[index] ?? new Range())
+  const range = sentenceRanges[index] ?? new Range()
+  highlightSentenceRange(range)
+  // Only reset karaoke state when the sentence actually changes. The background
+  // re-broadcasts the same index on start/pause/resume, and rebuilding here on
+  // every broadcast would wipe the in-progress word highlight mid-sentence.
+  if (changed || wordIndexSentence !== index) {
+    clearWordHighlight()
+    prepareWordIndex(range, sentences[index] ?? '')
+    wordIndexSentence = index
+  }
   prefetchAhead(index, sentences, 3)
+}
+
+// Called when the background reports a spoken-word position (karaoke). Guarded
+// by `index` so a late word event from a sentence we've already left can't
+// mis-highlight the current one. No-op unless we're actively playing.
+export function handleWordEvent(index: number, charIndex: number, length?: number) {
+  if (state !== 'playing') return
+  if (index !== currentIndex) return
+  highlightSpokenWord(charIndex, length)
 }
 
 async function beginSession(
@@ -234,6 +264,9 @@ export function seekTo(index: number) {
   const total = sentences.length
   if (total === 0) return
   const clamped = Math.max(0, Math.min(Math.round(index), total - 1))
+  // A seek restarts the utterance from the sentence start, so any prior word
+  // highlight (incl. a replay of the same sentence) is stale — drop it now.
+  clearWordHighlight()
   // Highlight immediately for responsiveness; background confirms via broadcast.
   applySentenceIndex(clamped)
   notifyState('playing')

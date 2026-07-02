@@ -463,6 +463,21 @@ async function broadcastReadAloudState(tabId: number, state: ReadAloudState, ind
   }).catch(() => { })
 }
 
+// Lightweight, high-frequency word-position message for karaoke highlighting.
+// `index` identifies which sentence the offset belongs to so a stale word event
+// from a sentence we've already advanced past can't mis-highlight the new one.
+async function broadcastReadAloudWord(
+  tabId: number,
+  index: number,
+  charIndex: number,
+  length?: number,
+) {
+  await chrome.tabs.sendMessage(tabId, {
+    type: 'READ_ALOUD_WORD',
+    payload: { index, charIndex, length },
+  }).catch(() => { })
+}
+
 async function stopActiveSession() {
   const session = activeSession
   clearSpeakingWatchdog()
@@ -492,6 +507,20 @@ function handleTtsEvent(token: number, event: chrome.tts.TtsEvent) {
   if (event.type === 'resume') {
     session.state = 'playing'
     void broadcastReadAloudState(session.tabId, 'playing', session.currentIndex)
+    return
+  }
+
+  if (event.type === 'word') {
+    // Karaoke word highlighting. Only meaningful while actually playing.
+    // Many voices never emit 'word' — that's fine, the sentence highlight still works.
+    if (session.state !== 'playing') return
+    if (typeof event.charIndex !== 'number') return
+    void broadcastReadAloudWord(
+      session.tabId,
+      session.currentIndex,
+      event.charIndex,
+      typeof event.length === 'number' ? event.length : undefined,
+    )
     return
   }
 

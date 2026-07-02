@@ -204,6 +204,7 @@ export function showWidget() {
   if (host) return
 
   host = document.createElement('div')
+  host.className = 'cxt-player-host'
   shadow = host.attachShadow({ mode: 'open' })
 
   const style = document.createElement('style')
