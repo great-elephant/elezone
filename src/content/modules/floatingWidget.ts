@@ -158,8 +158,9 @@ const WIDGET_CSS = `
     font-size: 16px;
     cursor: pointer;
     padding: 4px 6px;
-    min-width: 30px;
-    height: 30px;
+    min-width: 32px;
+    min-height: 32px;
+    height: 32px;
     border-radius: 6px;
     line-height: 1;
     display: inline-flex;
@@ -216,11 +217,12 @@ const WIDGET_CSS = `
     color: #a8b0d8;
     background: #22223e;
     border: 1px solid #33335a;
-    height: 24px;
+    height: 28px;
+    min-height: 28px;
     min-width: 0;
     max-width: 100%;
-    padding: 0 8px;
-    border-radius: 12px;
+    padding: 0 10px;
+    border-radius: 14px;
     gap: 5px;
     justify-content: flex-start;
     overflow: hidden;
@@ -381,10 +383,11 @@ const WIDGET_CSS = `
     color: #a8b0d8;
     background: #22223e;
     border: 1px solid #33335a;
-    min-width: 44px;
-    height: 26px;
-    border-radius: 13px;
-    padding: 0 8px;
+    min-width: 46px;
+    height: 28px;
+    min-height: 28px;
+    border-radius: 14px;
+    padding: 0 10px;
     flex: 0 0 auto;
     font-variant-numeric: tabular-nums;
   }
@@ -392,13 +395,14 @@ const WIDGET_CSS = `
   button.repeat.active { color: #4ade80; border-color: #2f5a42; }
   button.save-current {
     flex: 1 1 auto;
-    height: 26px;
+    height: 28px;
+    min-height: 28px;
     font-size: 12px;
     font-weight: 600;
     color: #c8d0f0;
     background: #22223e;
     border: 1px solid #33335a;
-    border-radius: 13px;
+    border-radius: 14px;
     min-width: 0;
     padding: 0 10px;
     gap: 5px;
@@ -769,12 +773,50 @@ function onDocMouseDownForSleep(e: MouseEvent) {
   closeSleepMenu()
 }
 
+function getSleepOptionEls(): HTMLButtonElement[] {
+  if (!sleepMenu) return []
+  return Array.from(sleepMenu.querySelectorAll<HTMLButtonElement>('.sleep-option'))
+}
+
+// Keyboard navigation for the sleep-timer listbox (mirrors the voice menu):
+// Up/Down/Home/End move focus, Esc closes and returns focus to the button.
+function onSleepMenuKeydown(e: KeyboardEvent) {
+  const options = getSleepOptionEls()
+  if (options.length === 0) return
+  const activeEl = (shadow?.activeElement as HTMLButtonElement) ?? null
+  let idx = options.findIndex(o => o === activeEl)
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    idx = idx < 0 ? 0 : Math.min(idx + 1, options.length - 1)
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    idx = idx <= 0 ? 0 : idx - 1
+  } else if (e.key === 'Home') {
+    e.preventDefault()
+    idx = 0
+  } else if (e.key === 'End') {
+    e.preventDefault()
+    idx = options.length - 1
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    closeSleepMenu()
+    sleepBtn?.focus()
+    return
+  } else {
+    return
+  }
+
+  options[idx]?.focus()
+}
+
 function openSleepMenu() {
   if (!sleepBtn || !sleepBtn.parentElement) return
   sleepMenu = document.createElement('div')
   sleepMenu.className = 'sleep-menu'
   sleepMenu.setAttribute('role', 'listbox')
   sleepMenu.setAttribute('aria-label', 'Sleep timer')
+  sleepMenu.addEventListener('keydown', onSleepMenuKeydown)
 
   for (const opt of SLEEP_OPTIONS) {
     const el = document.createElement('button')
@@ -801,6 +843,11 @@ function openSleepMenu() {
   sleepBtn.parentElement.appendChild(sleepMenu)
   sleepBtn.setAttribute('aria-expanded', 'true')
   document.addEventListener('mousedown', onDocMouseDownForSleep, { capture: true })
+
+  // Move focus to the selected option (or the first) for keyboard users.
+  const options = getSleepOptionEls()
+  const selectedIdx = SLEEP_OPTIONS.findIndex(o => o.minutes === sleepMinutes)
+  options[selectedIdx >= 0 ? selectedIdx : 0]?.focus()
 }
 
 function renderProgress() {
@@ -1137,6 +1184,10 @@ export function showWidget() {
   pauseBtn = makeButton('play', '⏸', 'Pause', togglePause)
   const nextBtn = makeButton('next', '⏭', 'Next sentence', () => next())
 
+  // Play/pause is a two-state toggle; expose it to AT via aria-pressed
+  // (pressed = currently playing).
+  pauseBtn.setAttribute('aria-pressed', 'true')
+
   focusBtn = makeButton('focus', '🔦', 'Focus mode: off', toggleFocusMode)
 
   speedBtn = makeButton('speed', `${getSpeed()}x`, 'Playback speed', cycleSpeed)
@@ -1178,6 +1229,7 @@ export function updateWidgetState(state: 'playing' | 'paused' | 'idle') {
     pauseBtn.textContent = '⏸'
     pauseBtn.title = 'Pause'
     pauseBtn.setAttribute('aria-label', 'Pause')
+    pauseBtn.setAttribute('aria-pressed', 'true')
     // Resuming re-arms the sleep countdown from the remaining duration if a
     // positive timer was selected but is not currently ticking (F23).
     if (sleepMinutes > 0 && !sleepTimer) resumeSleepTimer()
@@ -1185,6 +1237,7 @@ export function updateWidgetState(state: 'playing' | 'paused' | 'idle') {
     pauseBtn.textContent = '▶'
     pauseBtn.title = 'Resume'
     pauseBtn.setAttribute('aria-label', 'Resume')
+    pauseBtn.setAttribute('aria-pressed', 'false')
     // Pause halts the countdown (task: clear on pause) but keeps the selection
     // so resume can continue from the time that was left.
     pauseSleepTimer()

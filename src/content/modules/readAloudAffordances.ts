@@ -124,6 +124,12 @@ const CHIP_CSS = `
   .wrap.resume .startover { display: inline-flex; }
   .startover:hover { background: #24244a; color: #c8d0f0; }
   .startover:focus-visible { outline: 2px solid #6b8aff; outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    .chip { transition: none; }
+    .chip:hover { transform: none; }
+    .chip:active { transform: none; }
+    .startover { transition: none; }
+  }
 `
 
 function estimatedMinutes(): number {
@@ -314,15 +320,15 @@ const HANDLE_CSS = `
     display: none;
     align-items: center;
     justify-content: center;
-    width: 22px;
-    height: 22px;
+    width: 28px;
+    height: 28px;
     padding: 0;
     background: #4f6ef7;
     color: #ffffff;
     border: none;
-    border-radius: 6px;
+    border-radius: 7px;
     font-family: system-ui, sans-serif;
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1;
     cursor: pointer;
     box-shadow: 0 2px 8px rgba(0,0,0,0.35);
@@ -380,7 +386,7 @@ function positionHandle(el: HTMLElement) {
   const rect = el.getBoundingClientRect()
   // Sit just left of the paragraph's first line, clamped into the viewport so
   // it stays reachable even for blocks flush against the left edge.
-  const left = Math.max(2, rect.left - 28)
+  const left = Math.max(2, rect.left - 34)
   const top = rect.top + 2
   handleButton.style.left = `${left}px`
   handleButton.style.top = `${top}px`

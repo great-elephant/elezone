@@ -758,11 +758,11 @@ export default function Popup() {
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
                   </button>
                   {readAloudState === 'playing' ? (
-                    <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('pause')} title="Pause" aria-label="Pause">
+                    <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('pause')} title="Pause" aria-label="Pause" aria-pressed={true}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
                     </button>
                   ) : (
-                    <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('resume')} title="Resume" aria-label="Resume">
+                    <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('resume')} title="Resume" aria-label="Resume" aria-pressed={false}>
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3" /></svg>
                     </button>
                   )}
