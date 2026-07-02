@@ -47,6 +47,9 @@ export interface ReadAloudSettings {
   languageVoices?: Record<string, string> // Maps language code to voiceName
   pitch: number
   volume: number
+  // H29 — shadowing mode: insert an intentional silent gap between sentences so
+  // the learner can repeat aloud. Persisted so the choice sticks across sessions.
+  shadowing?: boolean
 }
 
 export interface TranslationSettings {

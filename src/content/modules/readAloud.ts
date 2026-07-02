@@ -16,6 +16,15 @@ let sentences: string[] = []
 let sentenceRanges: Range[] = []
 let currentIndex = 0
 let currentSpeed = 1
+// H31 — how many times each sentence is spoken (mirrors settings.repetition).
+// Kept in sync with the background so the mini-player Repeat control shows the
+// live value.
+let currentRepetition = 1
+// H29 — whether shadowing mode (inter-sentence gap) is on for this session.
+let shadowingOn = false
+// True only while the background is sitting in the intentional inter-sentence
+// gap, so the mini-player can show a subtle "shadowing…" hint.
+let inShadowGap = false
 // Which sentence the anchor word index was last built for (-1 = none).
 let wordIndexSentence = -1
 // The voice + language the background is actually using for this session,
@@ -24,6 +33,9 @@ let currentVoice = ''
 let currentLang = ''
 let onStateChange: ((s: ReadAloudState) => void) | null = null
 let onVoiceInfoChange: (() => void) | null = null
+// Fires when the shadowing on/off flag, the repetition count, or the
+// intentional-gap flag changes so the mini-player controls/indicator refresh.
+let onShadowInfoChange: (() => void) | null = null
 // True only for the single idle transition that represents a *natural* finish
 // (reached the end, page repetitions exhausted — not a user stop). Read by the
 // state-change handler to decide between the Finished card and a plain hide (F22).
@@ -41,6 +53,26 @@ export function setOnVoiceInfoChange(cb: () => void) {
 
 export function getVoiceInfo(): { voice: string; lang: string } {
   return { voice: currentVoice, lang: currentLang }
+}
+
+// The mini-player registers here so its shadowing toggle, Repeat control, and
+// "shadowing…" indicator can refresh when the background reports new values.
+export function setOnShadowInfoChange(cb: () => void) {
+  onShadowInfoChange = cb
+}
+
+export function getShadowInfo(): { shadowing: boolean; repetition: number; inGap: boolean } {
+  return { shadowing: shadowingOn, repetition: currentRepetition, inGap: inShadowGap }
+}
+
+// The text + DOM range of the sentence currently being read. Used by the
+// mini-player's "＋ Save" button (H30) to save the current sentence to the
+// library without interrupting playback. Returns null when idle / out of range.
+export function getCurrentSentence(): { text: string; range: Range | null } | null {
+  if (state === 'idle') return null
+  const text = sentences[currentIndex]
+  if (typeof text !== 'string' || !text.trim()) return null
+  return { text, range: sentenceRanges[currentIndex] ?? null }
 }
 
 // Whether the most recent idle transition was a natural finish (F22). Only
@@ -120,6 +152,11 @@ async function beginSession(
   // No scary language-mismatch banner here anymore: the background auto-picks a
   // matching voice (D14) and reports it back for the calm voice chip (D16).
   currentSpeed = settings.speed
+  // Seed the shadowing/repetition controls from settings so the mini-player
+  // renders the right initial values before the first background broadcast.
+  currentRepetition = Math.max(1, Math.round(settings.repetition || 1))
+  shadowingOn = settings.shadowing === true
+  inShadowGap = false
 
   const response = await chrome.runtime.sendMessage({
     type: 'START_READ_ALOUD_SESSION',
@@ -352,6 +389,27 @@ export function getSpeed(): number {
   return currentSpeed
 }
 
+// H29 — toggle shadowing (inter-sentence gap) live. Optimistically flips the
+// local flag so the button responds instantly; the background persists the
+// choice and re-broadcasts to confirm. Allowed even when idle so it can be set
+// before the very first sentence (the background seeds from settings anyway).
+export function setShadowing(on: boolean) {
+  shadowingOn = on
+  onShadowInfoChange?.()
+  if (state === 'idle') return
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setShadowing', enabled: on } }).catch(() => {})
+}
+
+// H31 — set per-sentence repetition live (1..5). Takes effect from the next
+// sentence; the background persists it and re-broadcasts to confirm.
+export function setRepetition(count: number) {
+  const clamped = Math.max(1, Math.min(5, Math.round(count)))
+  currentRepetition = clamped
+  onShadowInfoChange?.()
+  if (state === 'idle') return
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setRepetition', count: clamped } }).catch(() => {})
+}
+
 export function getProgress(): { index: number; total: number } {
   return { index: currentIndex, total: sentences.length }
 }
@@ -363,6 +421,9 @@ export function syncRemoteState(
   voice?: string,
   lang?: string,
   finished?: boolean,
+  gap?: boolean,
+  shadowing?: boolean,
+  repetition?: number,
 ) {
   // Only meaningful on an idle transition; reset otherwise so a later plain stop
   // can't inherit a stale "finished" flag.
@@ -374,6 +435,20 @@ export function syncRemoteState(
 
   if (typeof speed === 'number' && Number.isFinite(speed)) {
     currentSpeed = speed
+  }
+
+  // H29/H31: keep the mini-player's shadowing toggle, Repeat control, and the
+  // "shadowing…" gap indicator in sync with the background's authoritative state.
+  let shadowInfoChanged = false
+  const nextGap = nextState === 'idle' ? false : gap === true
+  if (nextGap !== inShadowGap) { inShadowGap = nextGap; shadowInfoChanged = true }
+  if (typeof shadowing === 'boolean' && shadowing !== shadowingOn) {
+    shadowingOn = shadowing
+    shadowInfoChanged = true
+  }
+  if (typeof repetition === 'number' && Number.isFinite(repetition) && repetition !== currentRepetition) {
+    currentRepetition = Math.max(1, Math.round(repetition))
+    shadowInfoChanged = true
   }
 
   // The background reports the voice/language it actually resolved (incl. an
@@ -406,6 +481,7 @@ export function syncRemoteState(
 
   notifyState(nextState)
   if (voiceInfoChanged) onVoiceInfoChange?.()
+  if (shadowInfoChanged) onShadowInfoChange?.()
 }
 
 export function getState(): ReadAloudState {

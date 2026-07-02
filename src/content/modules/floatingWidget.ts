@@ -1,4 +1,4 @@
-import { pause, resume, stop, getState, next, prev, replay, seekTo, setSpeed, getSpeed, setVoice } from './readAloud'
+import { pause, resume, stop, getState, next, prev, replay, seekTo, setSpeed, getSpeed, setVoice, setShadowing, setRepetition } from './readAloud'
 import { setFocusMode, isFocusMode } from './readAloudOverlay'
 import { TtsVoiceInfo } from '../../shared/types'
 
@@ -15,6 +15,29 @@ let progressLabel: HTMLElement | null = null
 let progressFill: HTMLElement | null = null
 let progressTrack: HTMLElement | null = null
 let warningBanner: HTMLElement | null = null
+// H29/H30/H31 — learner controls.
+let shadowBtn: HTMLButtonElement | null = null
+let repeatBtn: HTMLButtonElement | null = null
+let saveBtn: HTMLButtonElement | null = null
+let shadowIndicator: HTMLElement | null = null
+// Live shadowing/repetition state mirrored from readAloud so the controls render
+// the right values.
+let curShadowing = false
+let curRepetition = 1
+let curInGap = false
+// Guards double-saves / resets the Save button label after feedback.
+let saveResetTimer: ReturnType<typeof setTimeout> | null = null
+
+// H30 — the content entry registers the actual save routine here (it needs
+// getCurrentSentence + anchor/highlight helpers). Returns whether the save
+// succeeded so the button can show "Saved ✓" or a brief error.
+let onSaveSentence: (() => Promise<boolean>) | null = null
+export function setOnSaveSentence(cb: () => Promise<boolean>) {
+  onSaveSentence = cb
+}
+
+// Per-sentence repetition presets shown by the Repeat control (H31).
+const REPEAT_STEPS = [1, 2, 3]
 
 // Finished card (F22) — a separate lightweight host so it doesn't entangle the
 // player refs; shown when reading ends naturally.
@@ -336,6 +359,82 @@ const WIDGET_CSS = `
   .sleep-option:hover { background: #2a2a4a; }
   .sleep-option[aria-selected="true"] { color: #ffd93d; }
   .sleep-option .so-check { flex: 0 0 auto; color: #ffd93d; font-size: 11px; width: 12px; }
+
+  /* ── Learner row (shadowing toggle, Repeat, Save) — H29/H30/H31 ── */
+  .learn-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  button.shadow-toggle {
+    font-size: 14px;
+    flex: 0 0 auto;
+  }
+  button.shadow-toggle.active {
+    color: #4ade80;
+    background: #21322a;
+  }
+  button.shadow-toggle.active:hover { background: #294032; }
+  button.repeat {
+    font-size: 11px;
+    font-weight: 700;
+    color: #a8b0d8;
+    background: #22223e;
+    border: 1px solid #33335a;
+    min-width: 44px;
+    height: 26px;
+    border-radius: 13px;
+    padding: 0 8px;
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+  }
+  button.repeat:hover { background: #2a2a4a; color: #c8d0f0; }
+  button.repeat.active { color: #4ade80; border-color: #2f5a42; }
+  button.save-current {
+    flex: 1 1 auto;
+    height: 26px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #c8d0f0;
+    background: #22223e;
+    border: 1px solid #33335a;
+    border-radius: 13px;
+    min-width: 0;
+    padding: 0 10px;
+    gap: 5px;
+    justify-content: center;
+  }
+  button.save-current:hover { background: #2a2a4a; color: #ffffff; }
+  button.save-current.saved {
+    color: #4ade80;
+    border-color: #2f5a42;
+    background: #21322a;
+  }
+  button.save-current:disabled { cursor: default; opacity: 0.9; }
+  /* Subtle "shadowing…" gap indicator (replaces the ● dot in the title). */
+  .title .shadow-hint {
+    color: #4ade80;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .title .shadow-hint .pulse {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #4ade80;
+    animation: cxt-shadow-pulse 1s ease-in-out infinite;
+  }
+  @keyframes cxt-shadow-pulse {
+    0%, 100% { opacity: 0.35; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1.15); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .title .shadow-hint .pulse { animation: none; opacity: 0.8; }
+  }
 `
 
 // The Finished card (F22) is its own tiny host with self-contained styles.
@@ -462,6 +561,111 @@ function refreshFocusButton() {
 function toggleFocusMode() {
   setFocusMode(!isFocusMode())
   refreshFocusButton()
+}
+
+// ── Learner controls (H29 shadowing, H31 repeat, H30 save) ────────────────────
+
+function refreshShadowButton() {
+  if (!shadowBtn) return
+  shadowBtn.classList.toggle('active', curShadowing)
+  const label = curShadowing ? 'Shadowing mode: on' : 'Shadowing mode: off'
+  shadowBtn.title = `${label}\nPauses between sentences so you can repeat aloud`
+  shadowBtn.setAttribute('aria-label', label)
+  shadowBtn.setAttribute('aria-pressed', String(curShadowing))
+}
+
+function toggleShadowing() {
+  curShadowing = !curShadowing
+  setShadowing(curShadowing)
+  refreshShadowButton()
+  // If shadowing is turned off, drop any lingering "shadowing…" indicator.
+  if (!curShadowing) { curInGap = false; refreshShadowIndicator() }
+}
+
+function refreshRepeatButton() {
+  if (!repeatBtn) return
+  repeatBtn.textContent = `↻ ${curRepetition}×`
+  repeatBtn.classList.toggle('active', curRepetition > 1)
+  const label = `Repeat each sentence ${curRepetition}×`
+  repeatBtn.title = `${label}\nClick to change`
+  repeatBtn.setAttribute('aria-label', label)
+}
+
+function cycleRepeat() {
+  // Advance to the next preset (wrapping), snapping the current value onto the
+  // nearest step first so an out-of-range value from settings still cycles cleanly.
+  let idx = REPEAT_STEPS.indexOf(curRepetition)
+  if (idx < 0) {
+    let bestDiff = Infinity
+    for (let i = 0; i < REPEAT_STEPS.length; i++) {
+      const d = Math.abs(REPEAT_STEPS[i] - curRepetition)
+      if (d < bestDiff) { bestDiff = d; idx = i }
+    }
+  }
+  curRepetition = REPEAT_STEPS[(idx + 1) % REPEAT_STEPS.length]
+  setRepetition(curRepetition)
+  refreshRepeatButton()
+}
+
+function refreshSaveButton() {
+  if (!saveBtn) return
+  // Only reset to the default label when not mid-feedback.
+  if (saveResetTimer) return
+  saveBtn.disabled = false
+  saveBtn.classList.remove('saved')
+  saveBtn.textContent = '＋ Save'
+  saveBtn.title = 'Save the current sentence to your library'
+  saveBtn.setAttribute('aria-label', 'Save the current sentence to your library')
+}
+
+async function onSaveClick() {
+  const btn = saveBtn
+  if (!btn || !onSaveSentence) return
+  if (btn.disabled) return
+  btn.disabled = true
+  btn.textContent = 'Saving…'
+
+  let ok = false
+  try {
+    ok = await onSaveSentence()
+  } catch {
+    ok = false
+  }
+
+  // The widget may have been torn down while we awaited (session ended).
+  if (saveBtn !== btn) return
+
+  if (saveResetTimer) { clearTimeout(saveResetTimer); saveResetTimer = null }
+
+  if (ok) {
+    btn.classList.add('saved')
+    btn.textContent = 'Saved ✓'
+  } else {
+    btn.classList.remove('saved')
+    btn.textContent = 'Try again'
+  }
+  // Revert to the default label so another sentence can be saved. Keep the
+  // button disabled only briefly on success to make the feedback readable.
+  saveResetTimer = setTimeout(() => {
+    saveResetTimer = null
+    refreshSaveButton()
+  }, 1400)
+}
+
+// Subtle "shadowing…" hint in the title, shown only during the intentional gap.
+function refreshShadowIndicator() {
+  if (!shadowIndicator) return
+  const show = curShadowing && curInGap
+  shadowIndicator.style.display = show ? 'inline-flex' : 'none'
+}
+
+export function updateWidgetShadowInfo(shadowing: boolean, repetition: number, inGap: boolean) {
+  if (typeof shadowing === 'boolean') curShadowing = shadowing
+  if (typeof repetition === 'number' && repetition >= 1) curRepetition = Math.round(repetition)
+  if (typeof inGap === 'boolean') curInGap = inGap
+  refreshShadowButton()
+  refreshRepeatButton()
+  refreshShadowIndicator()
 }
 
 // ── Sleep timer (F23) ─────────────────────────────────────────────────────────
@@ -863,7 +1067,17 @@ export function showWidget() {
   dot.textContent = '●'
   const titleText = document.createElement('span')
   titleText.textContent = 'Read Aloud'
-  title.append(dot, titleText)
+  // Subtle "shadowing…" indicator shown only during the intentional inter-
+  // sentence gap (H29). Hidden by default.
+  shadowIndicator = document.createElement('span')
+  shadowIndicator.className = 'shadow-hint'
+  shadowIndicator.style.display = 'none'
+  const pulse = document.createElement('span')
+  pulse.className = 'pulse'
+  const shadowHintText = document.createElement('span')
+  shadowHintText.textContent = 'shadowing…'
+  shadowIndicator.append(pulse, shadowHintText)
+  title.append(dot, titleText, shadowIndicator)
 
   // Sleep timer control lives in the header (right side) inside a positioned
   // wrapper so its dropdown anchors to the button.
@@ -929,7 +1143,20 @@ export function showWidget() {
 
   controls.append(prevBtn, replayBtn, pauseBtn, nextBtn, focusBtn, speedBtn)
 
-  player.append(header, progressRow, voiceRow, controls)
+  // ── Learner row (shadowing toggle · Repeat · Save) — H29/H30/H31 ────────
+  const learnRow = document.createElement('div')
+  learnRow.className = 'learn-row'
+
+  shadowBtn = makeButton('shadow-toggle', '🗣', 'Shadowing mode: off', toggleShadowing)
+  shadowBtn.setAttribute('aria-pressed', 'false')
+
+  repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', cycleRepeat)
+
+  saveBtn = makeButton('save-current', '＋ Save', 'Save the current sentence to your library', () => { void onSaveClick() })
+
+  learnRow.append(shadowBtn, repeatBtn, saveBtn)
+
+  player.append(header, progressRow, voiceRow, controls, learnRow)
   shadow.append(style, player)
   document.body.appendChild(host)
 
@@ -938,6 +1165,10 @@ export function showWidget() {
   refreshSpeedLabel()
   refreshFocusButton()
   refreshSleepButton()
+  refreshShadowButton()
+  refreshRepeatButton()
+  refreshSaveButton()
+  refreshShadowIndicator()
   makeDraggable(player, header)
 }
 
@@ -974,6 +1205,7 @@ export function hideWidget() {
   closeSleepMenu()
   // Drop any armed sleep timer + selection so the next session starts clean.
   resetSleepTimer()
+  if (saveResetTimer) { clearTimeout(saveResetTimer); saveResetTimer = null }
   host?.remove()
   host = null
   shadow = null
@@ -987,10 +1219,18 @@ export function hideWidget() {
   progressLabel = null
   progressFill = null
   progressTrack = null
+  shadowBtn = null
+  repeatBtn = null
+  saveBtn = null
+  shadowIndicator = null
   curIndex = 0
   curTotal = 0
   curVoice = ''
   curLang = ''
+  // Note: curShadowing / curRepetition are intentionally NOT reset here so the
+  // next session's mini-player renders the last-used values before the first
+  // background broadcast (they're re-seeded from settings on start anyway).
+  curInGap = false
   hideWarning()
 }
 

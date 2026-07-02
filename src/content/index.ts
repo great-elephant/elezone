@@ -1,6 +1,6 @@
-import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, getWordRangeAtPoint } from './modules/anchor'
-import { start, startFrom, startFromElement, startFromIndex, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally } from './modules/readAloud'
-import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
+import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, getWordRangeAtPoint, pulseHighlight } from './modules/anchor'
+import { start, startFrom, startFromElement, startFromIndex, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo, getCurrentSentence } from './modules/readAloud'
+import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, showFinishedCard, hideFinishedCard, setOnReplay, setOnSaveSentence } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
 import { initReadAloudAffordances, setEnabled as setAffordancesEnabled, setAffordanceSpeed, refreshResumeState, clearResumeState } from './modules/readAloudAffordances'
 import { installSpaNavigationGuard } from './modules/readAloudSpaGuard'
@@ -106,6 +106,8 @@ setOnStateChange(newState => {
     updateWidgetProgress(index, total)
     const { voice, lang } = getVoiceInfo()
     updateWidgetVoice(voice, lang)
+    const shadow = getShadowInfo()
+    updateWidgetShadowInfo(shadow.shadowing, shadow.repetition, shadow.inGap)
   }
 })
 
@@ -118,6 +120,69 @@ setOnVoiceInfoChange(() => {
   const { voice, lang } = getVoiceInfo()
   updateWidgetVoice(voice, lang)
 })
+
+// Refresh the shadowing toggle, Repeat control, and "shadowing…" indicator when
+// the background reports new values (H29/H31).
+setOnShadowInfoChange(() => {
+  const { shadowing, repetition, inGap } = getShadowInfo()
+  updateWidgetShadowInfo(shadowing, repetition, inGap)
+})
+
+// H30 — save the current sentence to the library from the mini-player without
+// interrupting playback. Builds a SavedItem from the current sentence + its DOM
+// range, mirrors the dictionary save (SAVE_ITEM + LOG_ACTIVITY), highlights it
+// on the page, and reports success/failure back so the button can flip to
+// "Saved ✓". Never sends any read-aloud control message.
+setOnSaveSentence(async () => {
+  const cur = getCurrentSentence()
+  if (!cur) return false
+  const text = cur.text.trim()
+  if (!text) return false
+
+  // Try to derive the source language from the sentence's DOM range (nearest
+  // [lang] ancestor); otherwise fall back to the document language. We store the
+  // sentence with empty prefix/suffix + occurrenceIndex 0: a full sentence is a
+  // reliable anchor on its own, and this avoids the extra window.find() scan +
+  // selection churn that computing real context would cost mid-playback.
+  const sourceLang = resolveRangeLang(cur.range) || document.documentElement.lang || undefined
+
+  const item: SavedItem = {
+    id: crypto.randomUUID(),
+    url: window.location.href,
+    text,
+    sourceLang,
+    prefix: '',
+    suffix: '',
+    occurrenceIndex: 0,
+    color: 'red',
+    createdAt: Date.now(),
+    orphaned: false,
+  }
+
+  try {
+    await chrome.runtime.sendMessage({ type: 'SAVE_ITEM', payload: item }).catch(() => {})
+    await chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'save' }).catch(() => {})
+    // Mark the saved sentence on the page + pulse it to tie the reward to it.
+    if (applyHighlight(item)) pulseHighlight(item.id, BOOKMARK_COLORS[item.color])
+    return true
+  } catch {
+    return false
+  }
+})
+
+// Walk up from a range's start container to the nearest element carrying a
+// `lang` attribute, so a saved sentence records the language it was read in.
+function resolveRangeLang(range: Range | null): string | undefined {
+  let node: Node | null = range?.startContainer ?? null
+  while (node && node !== document.body) {
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const l = (node as Element).getAttribute('lang')
+      if (l) return l
+    }
+    node = node.parentNode
+  }
+  return undefined
+}
 
 // Shared "start reading from the top" path, mirroring the popup's Start Reading:
 // pull settings, show the mini-player, kick off translation if enabled, then
@@ -547,8 +612,8 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
       return { ok: true }
 
     case 'READ_ALOUD_UPDATE': {
-      const { state, index, total, speed, voice, lang, finished } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number; total?: number; speed?: number; voice?: string; lang?: string; finished?: boolean }
-      syncRemoteState(state, index, speed, voice, lang, finished)
+      const { state, index, total, speed, voice, lang, finished, gap, shadowing, repetition } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number; total?: number; speed?: number; voice?: string; lang?: string; finished?: boolean; gap?: boolean; shadowing?: boolean; repetition?: number }
+      syncRemoteState(state, index, speed, voice, lang, finished, gap, shadowing, repetition)
       if (state !== 'idle') {
         const progress = getProgress()
         // Prefer content-side counts; fall back to the background's authoritative total.
