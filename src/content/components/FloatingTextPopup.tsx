@@ -103,6 +103,17 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     }, 1000);
   };
 
+  // NOTE (D17, deferred): This intentionally still uses window.speechSynthesis
+  // rather than routing through the background SPEAK_TEXT / chrome.tts path.
+  // The background chrome.tts engine is a single shared resource also used by
+  // the page read-aloud session; speaking OCR text through it would call
+  // chrome.tts.stop() and tear down an in-progress mini-player session. It also
+  // has no per-utterance onend callback back to this component, so the play/stop
+  // toggle here would be unreliable. To keep voice/speed consistent we still
+  // resolve rate/pitch/volume/voice from settings.readAloud below (mirroring the
+  // background resolver). The background SPEAK_TEXT handler was upgraded to use
+  // the same voice resolver so it's ready if this is revisited with a dedicated
+  // stop message + completion signalling.
   const handleReadAloud = async () => {
     if (isPlaying) {
       window.speechSynthesis.cancel();

@@ -1,6 +1,6 @@
 import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, getWordRangeAtPoint } from './modules/anchor'
-import { start, startFrom, startFromElement, setOnStateChange, getState, syncRemoteState, getProgress, handleWordEvent } from './modules/readAloud'
-import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, showWarning } from './modules/floatingWidget'
+import { start, startFrom, startFromElement, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent } from './modules/readAloud'
+import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
 import { initReadAloudAffordances, setEnabled as setAffordancesEnabled, setAffordanceSpeed } from './modules/readAloudAffordances'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
@@ -89,7 +89,16 @@ setOnStateChange(newState => {
     setAffordancesEnabled(false)
     const { index, total } = getProgress()
     updateWidgetProgress(index, total)
+    const { voice, lang } = getVoiceInfo()
+    updateWidgetVoice(voice, lang)
   }
+})
+
+// Refresh the mini-player voice chip whenever the background reports a new
+// resolved/auto-picked voice or language (D14/D16).
+setOnVoiceInfoChange(() => {
+  const { voice, lang } = getVoiceInfo()
+  updateWidgetVoice(voice, lang)
 })
 
 // Shared "start reading from the top" path, mirroring the popup's Start Reading:
@@ -104,7 +113,7 @@ async function startReadingFromTop() {
   if (settings.translation?.enabled) {
     await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
   }
-  await start(settings.readAloud, msg => showWarning(msg))
+  await start(settings.readAloud)
 }
 
 // Same as above but starts at a specific content paragraph (the ▶ handle).
@@ -116,7 +125,7 @@ async function startReadingFromElement(el: HTMLElement) {
   if (settings.translation?.enabled) {
     await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
   }
-  await startFromElement(settings.readAloud, el, msg => showWarning(msg))
+  await startFromElement(settings.readAloud, el)
 }
 
 // Keep the chip's "~N min" estimate in sync with the configured speed.
@@ -480,7 +489,7 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
         await enableTranslation(settings2.translation.defaultTargetLanguage, settings2.translation.mode)
       }
       const { selectedText } = msg.payload as { selectedText: string }
-      await startFrom(settings2.readAloud, selectedText, lastKnownSelection, m => showWarning(m))
+      await startFrom(settings2.readAloud, selectedText, lastKnownSelection)
       return { ok: true }
     }
 
@@ -489,8 +498,8 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
       return { ok: true }
 
     case 'READ_ALOUD_UPDATE': {
-      const { state, index, total, speed } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number; total?: number; speed?: number }
-      syncRemoteState(state, index, speed)
+      const { state, index, total, speed, voice, lang } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number; total?: number; speed?: number; voice?: string; lang?: string }
+      syncRemoteState(state, index, speed, voice, lang)
       if (state !== 'idle') {
         const progress = getProgress()
         // Prefer content-side counts; fall back to the background's authoritative total.

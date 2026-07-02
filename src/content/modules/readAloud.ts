@@ -17,10 +17,25 @@ let currentIndex = 0
 let currentSpeed = 1
 // Which sentence the anchor word index was last built for (-1 = none).
 let wordIndexSentence = -1
+// The voice + language the background is actually using for this session,
+// reported back via READ_ALOUD_UPDATE. Shown in the mini-player voice chip.
+let currentVoice = ''
+let currentLang = ''
 let onStateChange: ((s: ReadAloudState) => void) | null = null
+let onVoiceInfoChange: (() => void) | null = null
 
 export function setOnStateChange(cb: (s: ReadAloudState) => void) {
   onStateChange = cb
+}
+
+// The mini-player registers here so its voice chip can refresh when the
+// background reports the resolved voice/language.
+export function setOnVoiceInfoChange(cb: () => void) {
+  onVoiceInfoChange = cb
+}
+
+export function getVoiceInfo(): { voice: string; lang: string } {
+  return { voice: currentVoice, lang: currentLang }
 }
 
 function notifyState(nextState: ReadAloudState) {
@@ -43,40 +58,6 @@ export function extractSentences(): string[] {
   } catch {
     return text.split(/(?<=[.!?。！？])\s*/).filter(Boolean)
   }
-}
-
-function getVoice(name: string): SpeechSynthesisVoice | null {
-  if (!name) return null
-  return speechSynthesis.getVoices().find(v => v.name === name) ?? null
-}
-
-function checkLanguageMismatch(settings: ReadAloudSettings, pageLang: string): string | null {
-  if (!pageLang || pageLang === 'en') return null // Ignore warning for 'en' if no specific voice to avoid spamming
-  const shortLang = pageLang.split('-')[0]
-  
-  const specificVoiceName = settings.languageVoices?.[pageLang] || settings.languageVoices?.[shortLang]
-  
-  if (specificVoiceName) {
-    const voice = getVoice(specificVoiceName)
-    if (voice && voice.lang.split('-')[0] !== shortLang) {
-       return `Warning: Your configured voice for ${pageLang.toUpperCase()} is actually a ${voice.lang} voice.`
-    }
-    return null
-  }
-
-  // If no specific voice, check fallback voice
-  if (settings.voice) {
-    const fallbackVoice = getVoice(settings.voice)
-    if (fallbackVoice) {
-      const fallbackLang = fallbackVoice.lang.split('-')[0]
-      if (fallbackLang !== shortLang) {
-         return `Page is ${pageLang.toUpperCase()}, but your fallback voice is ${fallbackVoice.lang}. Consider adding a specific voice in Settings!`
-      }
-      return null // Fallback voice matches page language!
-    }
-  }
-
-  return `No specific voice configured for ${pageLang.toUpperCase()}. The system will try to auto-detect, but you should add one in Settings for the best experience!`
 }
 
 function clearLocalSession() {
@@ -118,11 +99,9 @@ async function beginSession(
   settings: ReadAloudSettings,
   startIndex: number,
   lang: string,
-  warning?: (msg: string) => void,
 ) {
-  const mismatch = checkLanguageMismatch(settings, lang)
-  if (mismatch && warning) warning(mismatch)
-
+  // No scary language-mismatch banner here anymore: the background auto-picks a
+  // matching voice (D14) and reports it back for the calm voice chip (D16).
   currentSpeed = settings.speed
 
   const response = await chrome.runtime.sendMessage({
@@ -152,14 +131,14 @@ function loadArticlePlan(): string {
   return lang
 }
 
-export async function start(settings: ReadAloudSettings, warning?: (msg: string) => void) {
+export async function start(settings: ReadAloudSettings) {
   if (state !== 'idle') return
 
   const lang = loadArticlePlan()
   if (sentences.length === 0) return
 
   currentIndex = 0
-  await beginSession(settings, 0, lang, warning)
+  await beginSession(settings, 0, lang)
 }
 
 function normTextFallback(s: string): string {
@@ -219,13 +198,12 @@ export async function startFrom(
   settings: ReadAloudSettings,
   selectedText: string,
   selRange: Range | null,
-  warning?: (msg: string) => void,
 ) {
   const lang = loadArticlePlan()
   if (sentences.length === 0) return
 
   currentIndex = findSentenceIndex(sentences, sentenceRanges, selectedText, selRange)
-  await beginSession(settings, currentIndex, lang, warning)
+  await beginSession(settings, currentIndex, lang)
 }
 
 // Find the first planned sentence whose range starts inside `el`. Used by the
@@ -250,7 +228,6 @@ function findElementSentenceIndex(el: HTMLElement): number {
 export async function startFromElement(
   settings: ReadAloudSettings,
   el: HTMLElement,
-  warning?: (msg: string) => void,
 ) {
   if (state !== 'idle') return
 
@@ -259,7 +236,7 @@ export async function startFromElement(
 
   const matched = findElementSentenceIndex(el)
   currentIndex = matched >= 0 ? matched : 0
-  await beginSession(settings, currentIndex, lang, warning)
+  await beginSession(settings, currentIndex, lang)
 }
 
 export function pause() {
@@ -319,6 +296,17 @@ export function setSpeed(rate: number) {
   chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setSpeed', speed: rate } }).catch(() => {})
 }
 
+// Switch the active voice live for the current language (D15). Mirrors setSpeed:
+// the background updates + persists the choice and re-speaks the current
+// sentence, then reports the resolved voice back via READ_ALOUD_UPDATE.
+export function setVoice(name: string) {
+  if (!name || state === 'idle') return
+  currentVoice = name
+  onVoiceInfoChange?.()
+  notifyState('playing')
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setVoice', voiceName: name } }).catch(() => {})
+}
+
 export function getSpeed(): number {
   return currentSpeed
 }
@@ -327,7 +315,13 @@ export function getProgress(): { index: number; total: number } {
   return { index: currentIndex, total: sentences.length }
 }
 
-export function syncRemoteState(nextState: ReadAloudState, index?: number, speed?: number) {
+export function syncRemoteState(
+  nextState: ReadAloudState,
+  index?: number,
+  speed?: number,
+  voice?: string,
+  lang?: string,
+) {
   if (typeof index === 'number') {
     applySentenceIndex(index)
   }
@@ -336,11 +330,24 @@ export function syncRemoteState(nextState: ReadAloudState, index?: number, speed
     currentSpeed = speed
   }
 
+  // The background reports the voice/language it actually resolved (incl. an
+  // auto-picked one) so the mini-player chip can show it.
+  let voiceInfoChanged = false
+  if (typeof voice === 'string' && voice !== currentVoice) {
+    currentVoice = voice
+    voiceInfoChanged = true
+  }
+  if (typeof lang === 'string' && lang !== currentLang) {
+    currentLang = lang
+    voiceInfoChanged = true
+  }
+
   if (nextState === 'idle') {
     clearLocalSession()
   }
 
   notifyState(nextState)
+  if (voiceInfoChanged) onVoiceInfoChange?.()
 }
 
 export function getState(): ReadAloudState {

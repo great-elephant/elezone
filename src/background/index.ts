@@ -57,6 +57,9 @@ type ActiveReadAloudSession = {
   state: ReadAloudState
   tabId: number
   token: number
+  // The voice name actually used for the current utterance (either configured
+  // or auto-picked in speakCurrentSentence). Surfaced to the mini-player chip.
+  resolvedVoice?: string
 }
 
 const COLORS = Object.keys(BOOKMARK_COLORS) as BookmarkColor[]
@@ -469,12 +472,15 @@ async function broadcastReadAloudState(tabId: number, state: ReadAloudState, ind
   if (state === 'idle') readAloudStateByTab.delete(tabId)
   else readAloudStateByTab.set(tabId, state)
 
-  const total = activeSession?.tabId === tabId ? activeSession.sentences.length : undefined
-  const speed = activeSession?.tabId === tabId ? activeSession.settings.speed : undefined
+  const forThisTab = activeSession?.tabId === tabId ? activeSession : undefined
+  const total = forThisTab?.sentences.length
+  const speed = forThisTab?.settings.speed
+  const voice = forThisTab?.resolvedVoice
+  const lang = forThisTab?.lang
 
   await chrome.tabs.sendMessage(tabId, {
     type: 'READ_ALOUD_UPDATE',
-    payload: { state, index, total, speed },
+    payload: { state, index, total, speed, voice, lang },
   }).catch(() => { })
 
   await chrome.runtime.sendMessage({
@@ -577,6 +583,83 @@ function handleTtsEvent(token: number, event: chrome.tts.TtsEvent) {
   }
 }
 
+// Cache the (fairly static) chrome.tts voice list so we don't re-query it on
+// every sentence. Refreshed lazily on first use; the list rarely changes within
+// a session, so a one-shot cache is plenty.
+let ttsVoiceCache: chrome.tts.TtsVoice[] | null = null
+
+function getTtsVoices(): Promise<chrome.tts.TtsVoice[]> {
+  if (ttsVoiceCache) return Promise.resolve(ttsVoiceCache)
+  return new Promise(resolve => {
+    chrome.tts.getVoices(voices => {
+      ttsVoiceCache = voices || []
+      resolve(ttsVoiceCache)
+    })
+  })
+}
+
+// Does `voiceName` exist and speak a language compatible with `lang`?
+function voiceMatchesLang(voiceName: string, lang: string, voices: chrome.tts.TtsVoice[]): boolean {
+  const shortLang = lang.split('-')[0]
+  const v = voices.find(vc => vc.voiceName === voiceName)
+  if (!v?.lang) return false
+  const vShort = v.lang.split('-')[0]
+  return v.lang === lang || vShort === shortLang
+}
+
+// Pick the best available chrome.tts voice for `lang`: exact lang match first,
+// then a short-code prefix match; within each tier prefer local (non-remote)
+// voices. Returns undefined when nothing matches (chrome.tts then auto-picks).
+function pickVoiceForLang(lang: string, voices: chrome.tts.TtsVoice[]): string | undefined {
+  if (!lang) return undefined
+  const shortLang = lang.split('-')[0]
+
+  const exact = voices.filter(v => v.lang === lang)
+  const prefix = voices.filter(v => v.lang && v.lang.split('-')[0] === shortLang && v.lang !== lang)
+
+  const preferLocal = (list: chrome.tts.TtsVoice[]) =>
+    list.find(v => v.remote !== true)?.voiceName ?? list[0]?.voiceName
+
+  return preferLocal(exact) ?? preferLocal(prefix)
+}
+
+// Resolve the voice to use for `lang` given the readAloud settings. Order:
+//  1. an exact/prefix entry in languageVoices for `lang`
+//  2. the fallback `voice` IF it actually speaks `lang`
+//  3. auto-pick the best chrome.tts voice for `lang` (D14)
+// Returns undefined only when no voice at all matches (chrome.tts auto-picks).
+// Shared by the page read-aloud session and the SPEAK_TEXT path (D17) so the
+// OCR popup and the page reader resolve voices identically.
+async function resolveVoiceForSettings(
+  settings: ReadAloudSettings,
+  lang?: string,
+): Promise<string | undefined> {
+  const configuredFallback = settings.voice || undefined
+
+  if (lang && settings.languageVoices) {
+    const exactMatch = settings.languageVoices[lang]
+    if (exactMatch) return exactMatch
+    const shortLang = lang.split('-')[0]
+    const prefixMatch = Object.entries(settings.languageVoices)
+      .find(([k]) => k.startsWith(shortLang) || shortLang.startsWith(k))
+    if (prefixMatch) return prefixMatch[1]
+  }
+
+  // No language-specific voice configured. If we don't know the language we
+  // can't do better than the configured fallback (or chrome.tts auto-pick).
+  if (!lang) return configuredFallback
+
+  const voices = await getTtsVoices()
+
+  // Keep the fallback voice only when it can actually speak this language.
+  if (configuredFallback && voiceMatchesLang(configuredFallback, lang, voices)) {
+    return configuredFallback
+  }
+
+  // D14: silently auto-pick a matching voice so read-aloud "just works".
+  return pickVoiceForLang(lang, voices) ?? configuredFallback
+}
+
 async function speakCurrentSentence(token: number) {
   const session = activeSession
   if (!session || session.token !== token) return
@@ -586,22 +669,13 @@ async function speakCurrentSentence(token: number) {
     return
   }
 
+  const resolvedVoice = await resolveVoiceForSettings(session.settings, session.lang)
+  // A late await above could have superseded this token; re-check before using.
+  if (!activeSession || activeSession.token !== token) return
+  session.resolvedVoice = resolvedVoice
+
   session.state = 'playing'
   await broadcastReadAloudState(session.tabId, 'playing', session.currentIndex)
-
-  let resolvedVoice = session.settings.voice || undefined
-  if (session.lang && session.settings.languageVoices) {
-    const exactMatch = session.settings.languageVoices[session.lang]
-    if (exactMatch) {
-      resolvedVoice = exactMatch
-    } else {
-      const shortLang = session.lang.split('-')[0]
-      const prefixMatch = Object.entries(session.settings.languageVoices).find(([k]) => k.startsWith(shortLang) || shortLang.startsWith(k))
-      if (prefixMatch) {
-        resolvedVoice = prefixMatch[1]
-      }
-    }
-  }
 
   chrome.tts.speak(session.sentences[session.currentIndex], {
     enqueue: false,
@@ -699,6 +773,41 @@ async function controlReadAloud(
 
   if (action === 'stop') {
     await stopActiveSession()
+    return { ok: true }
+  }
+
+  if (action === 'setVoice') {
+    const voiceName = (payload as { voiceName?: string }).voiceName
+    if (typeof voiceName !== 'string' || !voiceName) return { ok: false }
+    const session = activeSession
+    const lang = session.lang
+
+    // Set the active voice for the current language on the live session, and
+    // persist it to stored settings so the choice sticks next time (D15).
+    if (lang) {
+      const languageVoices = { ...(session.settings.languageVoices || {}), [lang]: voiceName }
+      session.settings = { ...session.settings, languageVoices }
+
+      const settings = await getSettings()
+      settings.readAloud = {
+        ...settings.readAloud,
+        languageVoices: { ...(settings.readAloud.languageVoices || {}), [lang]: voiceName },
+      }
+      await saveSettings(settings)
+    } else {
+      // Unknown page language — fall back to updating the plain fallback voice.
+      session.settings = { ...session.settings, voice: voiceName }
+      const settings = await getSettings()
+      settings.readAloud = { ...settings.readAloud, voice: voiceName }
+      await saveSettings(settings)
+    }
+
+    // Re-speak the current sentence with the new voice (token-bump pattern).
+    session.token = ++sessionCounter
+    session.state = 'playing'
+    chrome.tts.stop()
+    startSpeakingWatchdog(session.token)
+    await speakCurrentSentence(session.token)
     return { ok: true }
   }
 
@@ -893,34 +1002,50 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return startReadAloudSession(sender, msg.payload)
     case 'CONTROL_READ_ALOUD':
       return controlReadAloud(sender, msg.payload)
+    case 'GET_TTS_VOICES': {
+      // Return chrome.tts voices (available in the background, not content
+      // scripts). Optionally filter to a language; callers can request the full
+      // list as an "all languages" fallback. Cached in getTtsVoices().
+      const p = msg.payload as { lang?: string } | undefined
+      const voices = await getTtsVoices()
+      const mapped = voices.map(v => ({
+        voiceName: v.voiceName ?? '',
+        lang: v.lang ?? '',
+        remote: v.remote ?? false,
+      })).filter(v => v.voiceName)
+
+      if (p?.lang) {
+        const shortLang = p.lang.split('-')[0]
+        const filtered = mapped.filter(v => v.lang === p!.lang || v.lang.split('-')[0] === shortLang)
+        // If nothing matches the language, fall back to the full list so the
+        // picker is never empty.
+        return { voices: filtered.length > 0 ? filtered : mapped }
+      }
+      return { voices: mapped }
+    }
     case 'SPEAK_TEXT': {
+      // Speak arbitrary text via chrome.tts using the same readAloud settings +
+      // resolved voice as the page reader (D17). Used by the OCR popup so its
+      // voice/speed matches the page read-aloud. Speaking here (not a page
+      // session) does not touch activeSession.
       const payload = msg.payload as { text: string, lang?: string } | string
       const text = typeof payload === 'string' ? payload : payload.text
       const lang = typeof payload === 'string' ? undefined : payload.lang
+      if (!text) return { ok: false }
 
       const settings = await getSettings()
-      if (settings?.readAloud) {
-        chrome.tts.stop()
-        if (lang && settings.readAloud.languageVoices?.[lang]) {
-          chrome.tts.speak(text, {
-            pitch: settings.readAloud.pitch,
-            rate: settings.readAloud.speed,
-            lang: lang,
-            voiceName: settings.readAloud.languageVoices[lang],
-            volume: settings.readAloud.volume
-          })
-        } else if (settings.readAloud.voice) {
-          chrome.tts.speak(text, {
-            pitch: settings.readAloud.pitch,
-            rate: settings.readAloud.speed,
-            lang: lang,
-            voiceName: settings.readAloud.voice,
-            volume: settings.readAloud.volume
-          })
-        } else {
-          chrome.tts.speak(text, { lang })
-        }
-      }
+      if (!settings?.readAloud) return { ok: false }
+
+      const resolvedVoice = await resolveVoiceForSettings(settings.readAloud, lang)
+      chrome.tts.stop()
+      chrome.tts.speak(text, {
+        enqueue: false,
+        pitch: settings.readAloud.pitch,
+        rate: settings.readAloud.speed,
+        lang,
+        voiceName: resolvedVoice,
+        volume: settings.readAloud.volume,
+      })
       return { ok: true }
     }
     case 'GET_READ_ALOUD_STATE': {

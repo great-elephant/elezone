@@ -61,6 +61,13 @@ export interface TranslationSettings {
 
 export type ReadAloudState = 'idle' | 'playing' | 'paused'
 
+// A chrome.tts voice as surfaced to content scripts via GET_TTS_VOICES.
+export interface TtsVoiceInfo {
+  voiceName: string
+  lang: string
+  remote: boolean
+}
+
 export interface GamificationSettings {
   dailyGoalPoints: number
   pointsPerSave: number
@@ -228,6 +235,8 @@ export type MessageType =
   | 'GET_READ_ALOUD_STATE'
   | 'START_READ_ALOUD_SESSION'
   | 'CONTROL_READ_ALOUD'
+  | 'GET_TTS_VOICES'
+  | 'SPEAK_TEXT'
   | 'READ_ALOUD_UPDATE'
   | 'READ_ALOUD_WORD'
   | 'TOGGLE_TRANSLATION'
