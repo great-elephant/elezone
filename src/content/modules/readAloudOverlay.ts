@@ -215,10 +215,25 @@ function findTranslationForContentEl(range: Range, contentEl: HTMLElement | null
   const directSib = block.nextElementSibling
   if (directSib?.matches?.('[data-cxt-translation]')) return directSib as HTMLElement
 
+  // NOTE: this used to check `range.endContainer.compareDocumentPosition(overlay)
+  // & DOCUMENT_POSITION_FOLLOWING`, but that's a trap once `range` has been
+  // clipped back to end right before its own overlay (anchor.ts's
+  // clipBeforeTranslation does this via setEndBefore, which makes endContainer
+  // the overlay's *parent* — i.e. the same shared <p> that ALL of this
+  // paragraph's per-sentence overlays live in). compareDocumentPosition always
+  // reports FOLLOWING for any descendant of the reference node regardless of
+  // its actual position among siblings, so every overlay in the block matched
+  // and this always returned the very FIRST one (sentence 1's translation) no
+  // matter which sentence was actually playing. comparePoint compares the
+  // overlay's true document position against the range's extent instead, so it
+  // isn't fooled by the ancestor relationship.
   const overlays = block.querySelectorAll<HTMLElement>('[data-cxt-translation]')
   for (const overlay of overlays) {
-    const pos = range.endContainer.compareDocumentPosition(overlay)
-    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return overlay
+    try {
+      if (range.comparePoint(overlay, 0) >= 0) return overlay
+    } catch {
+      continue
+    }
   }
   return null
 }

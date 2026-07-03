@@ -119,6 +119,9 @@ export function getSelectionContext(searchString?: string): {
     acceptNode(node) {
       const el = node.parentElement
       if (!el) return NodeFilter.FILTER_REJECT
+      // See buildElementTextIndex — a <noscript>'s content is one literal text
+      // node holding raw markup source once scripting is enabled.
+      if (el.closest('noscript')) return NodeFilter.FILTER_REJECT
       const s = window.getComputedStyle(el)
       if (s.display === 'none' || s.visibility === 'hidden') return NodeFilter.FILTER_REJECT
       return NodeFilter.FILTER_ACCEPT
@@ -338,6 +341,13 @@ function buildElementTextIndex(root: HTMLElement): { entries: TextEntry[]; text:
     acceptNode(node) {
       const el = (node as Text).parentElement
       if (!el) return NodeFilter.FILTER_REJECT
+      // A <noscript>'s content is inert markup source, not real child elements,
+      // whenever scripting is enabled (i.e. always, in a browser running this
+      // extension) — the browser keeps it as one literal text node holding the
+      // raw "<div><time>...</time></div>" source. getComputedStyle(display)
+      // isn't a reliable enough guard against it in the wild (seen leaking
+      // through on real pages), so exclude it explicitly.
+      if (el.closest('noscript')) return NodeFilter.FILTER_REJECT
       const s = getComputedStyle(el)
       if (s.display === 'none' || s.visibility === 'hidden') return NodeFilter.FILTER_REJECT
       if (el.closest('[data-cxt-translation]')) return NodeFilter.FILTER_REJECT
@@ -390,6 +400,18 @@ function resolveOffset(
   }
   if (nodeOffset > (e.node.nodeValue?.length ?? 0)) return null
   return { node: e.node, nodeOffset }
+}
+
+// Range spanning every indexed text node, start to end — used as a fallback
+// when the precise regex-based match for a single-sentence element fails.
+function wholeEntriesRange(entries: TextEntry[]): Range | null {
+  if (entries.length === 0) return null
+  const first = entries[0]
+  const last = entries[entries.length - 1]
+  const range = new Range()
+  range.setStart(first.node, 0)
+  range.setEnd(last.node, last.node.nodeValue?.length ?? 0)
+  return range
 }
 
 /**
@@ -453,8 +475,28 @@ export function buildSentencePlan(
         // Regex construction failed — leave matchStart === -1
       }
 
+      // If this element boils down to a single "sentence" (the common case for
+      // short elements like list items — no internal terminal punctuation for
+      // Intl.Segmenter to split on), fall back to spanning the whole element
+      // rather than leaving it collapsed. An empty Range makes
+      // highlightSentenceRange silently skip painting anything for it, which
+      // looks like read-aloud "got stuck" on the previous sentence while the
+      // audio (driven by plain sentence strings, not Ranges) keeps going.
+      const wholeElementFallback = segments.length === 1 ? wholeEntriesRange(entries) : null
+
       if (matchStart === -1) {
-        plan.push({ text: sentence, range: new Range(), el })
+        plan.push({ text: sentence, range: wholeElementFallback ?? new Range(), el })
+        // BUG (found via user report): searchFrom used to stay put here, so a
+        // single failed match within a multi-sentence element would make every
+        // later sentence in that same element re-search from the SAME stale
+        // position. Since regex.exec just finds the next occurrence forward
+        // from there, a later sentence could end up matching a stretch of text
+        // that overlaps/duplicates an earlier sentence's own range — which
+        // looks exactly like "the highlight didn't move to the next sentence"
+        // even though a (wrong) Range genuinely got applied. Advance by the
+        // sentence's own length as a best-effort estimate so later sentences in
+        // the same element still search forward from roughly the right spot.
+        searchFrom += normText(sentence).length
         continue
       }
 
@@ -462,7 +504,11 @@ export function buildSentencePlan(
       const endPos = resolveOffset(entries, matchEnd, true)
 
       if (!startPos || !endPos) {
-        plan.push({ text: sentence, range: new Range(), el })
+        plan.push({ text: sentence, range: wholeElementFallback ?? new Range(), el })
+        // Unlike the matchStart === -1 case above, the regex DID succeed here
+        // (only DOM-position resolution failed) — matchEnd is a real, known
+        // position in the raw text, so use it exactly rather than guessing.
+        searchFrom = matchEnd
         continue
       }
 
@@ -487,18 +533,118 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 }
 
+// Many reading layouts (app shells with a fixed sidebar/header and an
+// independently-scrolling content pane) don't scroll the window at all — the
+// article sits inside its own `overflow: auto` container. Walk up from the
+// sentence to find the element that actually scrolls, so read-aloud can follow
+// along there too instead of silently no-op'ing on window.scrollTo.
+function findScrollContainer(el: Element | null): Element | null {
+  let node = el?.parentElement ?? null
+  while (node && node !== document.body && node !== document.documentElement) {
+    const style = getComputedStyle(node)
+    const canScrollY = (style.overflowY === 'auto' || style.overflowY === 'scroll')
+      && node.scrollHeight > node.clientHeight + 1
+    if (canScrollY) return node
+    node = node.parentElement
+  }
+  return null
+}
+
+// Defensive clip: on some sites a sentence Range can end up spanning over (part
+// of) the inline translation overlay injected right after it — not just when
+// the end boundary itself sits inside the overlay, but also when the range
+// simply overshoots past its own sentence and the overlay happens to sit
+// in between. CSS Custom Highlights paint a Range's full extent regardless of
+// what's "in between" the two boundary points, so any such overlay would get
+// painted too. Scan the range's own common ancestor (the smallest container
+// that could possibly hold anything the range intersects) for translation
+// overlays the range actually overlaps, and clip back to end right before the
+// earliest one — so the current-sentence text highlight/karaoke paint never
+// bleeds onto the translation, no matter the exact cause. The focus-mode
+// spotlight box is unaffected — it's meant to cover the translation too, it
+// just shouldn't tint its text like a selection.
+function clipBeforeTranslation(range: Range): Range {
+  const root = range.commonAncestorContainer
+  const scope = root.nodeType === Node.ELEMENT_NODE ? root as Element : root.parentElement
+  if (!scope) return range
+
+  let earliest: Element | null = null
+  for (const el of scope.querySelectorAll('[data-cxt-translation]')) {
+    try {
+      if (!range.intersectsNode(el)) continue
+    } catch {
+      continue
+    }
+    if (!earliest || (el.compareDocumentPosition(earliest) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+      earliest = el
+    }
+  }
+  if (!earliest) return range
+
+  try {
+    const clipped = range.cloneRange()
+    clipped.setEndBefore(earliest)
+    return clipped
+  } catch {
+    return range
+  }
+}
+
 export function highlightSentenceRange(range: Range, contentEl?: HTMLElement | null): void {
-  if (!range.toString()) return
-  CSS.highlights.set('cxt-speaking', new Highlight(range))
+  if (!range.toString()) {
+    // buildSentencePlan couldn't resolve this sentence to a real DOM position
+    // (falls back to an empty `new Range()`) — clear the previous sentence's
+    // highlight/marker/focus box instead of silently leaving them in place.
+    // Read-aloud itself doesn't depend on this (chrome.tts speaks the plain
+    // sentence string regardless), so without this the visuals would look
+    // "stuck" on the last successfully-highlighted sentence while playback
+    // audibly continues past it.
+    clearSentenceHighlight()
+    return
+  }
+  const ownRange = clipBeforeTranslation(range)
+  CSS.highlights.set('cxt-speaking', new Highlight(ownRange))
 
   // Keep the left "reading" marker + focus spotlight in sync with the sentence.
   // `contentEl` (the exact paragraph/content block this sentence came from, from
   // buildSentencePlan) lets the overlay find its translation deterministically
-  // instead of guessing via DOM-climbing from the sentence's own range.
-  updateReadingOverlays(range, contentEl ?? null)
+  // instead of guessing via DOM-climbing from the sentence's own range. Uses the
+  // clipped range (never overshoots past this sentence's own text) so the left
+  // marker bar can't stretch down into the translation, and the translation
+  // lookup starts from this sentence's true end instead of possibly landing
+  // past its own translation and grabbing the next sentence's instead — the
+  // focus box still unions in the translation rect separately, on purpose.
+  updateReadingOverlays(ownRange, contentEl ?? null)
 
   const rect = range.getBoundingClientRect()
   if (rect.height <= 0) return
+
+  const startEl = contentEl
+    ?? (range.startContainer.nodeType === Node.TEXT_NODE ? range.startContainer.parentElement : range.startContainer as Element | null)
+  const container = findScrollContainer(startEl)
+  const behavior = prefersReducedMotion() ? 'auto' : 'smooth'
+
+  if (container) {
+    const containerRect = container.getBoundingClientRect()
+    // Clip the container's own box to the window, in case it's partially
+    // offscreen itself — the "comfortable band" should only ever apply to the
+    // part of it actually visible.
+    const viewTop = Math.max(containerRect.top, 0)
+    const viewBottom = Math.min(containerRect.bottom, window.innerHeight)
+    const visibleHeight = viewBottom - viewTop
+    const tallerThanView = rect.height > visibleHeight - SCROLL_MARGIN_TOP - SCROLL_MARGIN_BOTTOM
+    const aboveBand = rect.top < viewTop + SCROLL_MARGIN_TOP
+    const belowBand = rect.bottom > viewBottom - SCROLL_MARGIN_BOTTOM
+
+    if (!aboveBand && !belowBand && !tallerThanView) return
+
+    container.scrollTo({
+      left: container.scrollLeft,
+      top: container.scrollTop + (rect.top - containerRect.top) - visibleHeight / 3,
+      behavior,
+    })
+    return
+  }
 
   const vh = window.innerHeight
   const tallerThanViewport = rect.height > vh - SCROLL_MARGIN_TOP - SCROLL_MARGIN_BOTTOM
@@ -512,7 +658,7 @@ export function highlightSentenceRange(range: Range, contentEl?: HTMLElement | n
     // Only vertical: keep the existing scrollX so we never pan horizontally.
     left: window.scrollX,
     top: window.scrollY + rect.top - vh / 3,
-    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    behavior,
   })
 }
 
@@ -547,12 +693,13 @@ let wordIndexRawText = ''
  * Safe to call with an empty / detached range — it simply produces an empty
  * index and word highlighting is skipped for that sentence.
  */
-export function prepareWordIndex(range: Range, ttsText: string): void {
+export function prepareWordIndex(rawRange: Range, ttsText: string): void {
   wordIndexEntries = []
   wordIndexTextOffset = 0
   wordIndexRawText = ''
 
-  if (!range || !range.startContainer || range.collapsed) return
+  if (!rawRange || !rawRange.startContainer || rawRange.collapsed) return
+  const range = clipBeforeTranslation(rawRange)
 
   const entries: WordIndexEntry[] = []
   const parts: string[] = []
