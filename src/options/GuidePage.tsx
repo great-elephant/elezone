@@ -308,7 +308,7 @@ export default function GuidePage() {
             <h2>Extract Words from Images</h2>
             <p>Reading a web manga or browsing social media? Don't let words trapped in images slow you down. Just bring up the right-click menu to launch our OCR tool, then seamlessly extract and translate the text. Turn your casual entertainment into a seamless learning experience.</p>
             <div className="instruction-box">
-              <strong>💡 How to use:</strong> Right-click anywhere on the page or on an image and select "Image to text(OCR)".
+              <strong>💡 How to use:</strong> Right-click anywhere on the page or on an image and select "Image to text(Alt + O)".
             </div>
           </div>
         </div>

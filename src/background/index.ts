@@ -186,19 +186,53 @@ async function startOcr(tab?: chrome.tabs.Tab | null) {
   }
 }
 
+// Tracks the standalone crop popup (PDF viewer / chrome:// fallback) so a
+// second trigger_ocr replaces it with a fresh capture instead of stacking
+// another window on top of the stale one.
+let ocrWindowId: number | null = null
+chrome.windows.onRemoved.addListener(id => {
+  if (id === ocrWindowId) ocrWindowId = null
+})
+
 async function openOcrWindow(tab: chrome.tabs.Tab) {
+  if (ocrWindowId != null) {
+    // Ignore the error if the user already closed it manually — either way
+    // we're back to "no crop window open", then fall through to open a fresh one.
+    try { await chrome.windows.remove(ocrWindowId) } catch { /* already gone */ }
+    ocrWindowId = null
+  }
+
   try {
     const winId = tab.windowId ?? chrome.windows.WINDOW_ID_CURRENT
     const dataUrl = await chrome.tabs.captureVisibleTab(winId, { format: 'png' })
     const settings = await getSettings()
     const lang = settings.ocr?.language || 'eng'
     await chrome.storage.session.set({ ocr_window_payload: { dataUrl, lang } })
-    await chrome.windows.create({
+
+    // Match the current window's bounds so the crop popup lands directly over
+    // the page it's capturing (PDF viewer / chrome:// — no in-page overlay is
+    // possible there) instead of appearing as an unrelated window elsewhere.
+    let bounds: Partial<chrome.windows.CreateData> = { width: 1000, height: 780 }
+    try {
+      const sourceWindow = await chrome.windows.get(winId)
+      if (sourceWindow.left != null && sourceWindow.top != null && sourceWindow.width && sourceWindow.height) {
+        bounds = {
+          left: sourceWindow.left,
+          top: sourceWindow.top,
+          width: sourceWindow.width,
+          height: sourceWindow.height,
+        }
+      }
+    } catch {
+      // Fall back to the default centered size above.
+    }
+
+    const win = await chrome.windows.create({
       url: chrome.runtime.getURL('src/crop/index.html'),
       type: 'popup',
-      width: 1000,
-      height: 780,
+      ...bounds,
     })
+    ocrWindowId = win?.id ?? null
   } catch (e) {
     console.error('Failed to open OCR window:', e)
   }
@@ -448,7 +482,7 @@ async function setupContextMenus() {
   const displayLang = ocrLangMap[ocrLang] || ocrLang.toUpperCase();
 
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: 'ocr', title: `Image to text(OCR) [${displayLang}]`, contexts: ['page', 'image', 'selection'] })
+    chrome.contextMenus.create({ id: 'ocr', title: `Image to text(Alt + O) [${displayLang}]`, contexts: ['page', 'image', 'selection'] })
     chrome.contextMenus.create({ id: 'read-from-here', title: 'Read from this sentence', contexts: ['selection'] })
     for (const color of order) {
       chrome.contextMenus.create({
@@ -1316,20 +1350,22 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return { ack: true }; // Respond immediately so channel doesn't die
     }
     case 'OCR_PROGRESS': {
-      const { tabId, status, progress, broadcast } = msg.payload as { tabId?: number; status: string; progress: number; broadcast?: boolean };
+      const { tabId, status, progress, broadcast, requestId } = msg.payload as { tabId?: number; status: string; progress: number; broadcast?: boolean; requestId?: number };
       if (broadcast) {
         chrome.runtime.sendMessage({ type: 'OCR_WINDOW_PROGRESS', payload: { status, progress } }).catch(() => {});
       } else if (tabId) {
-        chrome.tabs.sendMessage(tabId, { type: 'OCR_PROGRESS', payload: { status, progress } }).catch(() => {});
+        // requestId lets the in-page OcrManager drop this if a later Alt+O
+        // already replaced the session that kicked off this OCR run.
+        chrome.tabs.sendMessage(tabId, { type: 'OCR_PROGRESS', payload: { status, progress, requestId } }).catch(() => {});
       }
       return { ok: true };
     }
     case 'OCR_COMPLETE': {
-      const { tabId, text, error, broadcast } = msg.payload as { tabId?: number; text?: string; error?: string; broadcast?: boolean };
+      const { tabId, text, error, broadcast, requestId } = msg.payload as { tabId?: number; text?: string; error?: string; broadcast?: boolean; requestId?: number };
       if (broadcast) {
         chrome.runtime.sendMessage({ type: 'OCR_WINDOW_RESULT', payload: { text, error } }).catch(() => {});
       } else if (tabId) {
-        chrome.tabs.sendMessage(tabId, { type: 'OCR_COMPLETE', payload: { text, error } }).catch(() => {});
+        chrome.tabs.sendMessage(tabId, { type: 'OCR_COMPLETE', payload: { text, error, requestId } }).catch(() => {});
       }
       return { ok: true };
     }

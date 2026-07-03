@@ -119,13 +119,16 @@ export function CropWindow() {
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, background: '#111', overflow: 'auto', cursor: state === 'cropping' ? crosshair : 'default' }}
+      style={{ position: 'fixed', inset: 0, background: '#111', overflow: 'hidden', cursor: state === 'cropping' ? crosshair : 'default' }}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
     >
       {dataUrl && (
-        <img ref={imgRef} src={dataUrl} draggable={false} style={{ display: 'block', width: '100%', userSelect: 'none' }} />
+        // Fill the window exactly (independent x/y scale factors below still map
+        // clicks to the right source pixels) so a screenshot whose aspect ratio
+        // doesn't perfectly match the popup's viewport never forces a scrollbar.
+        <img ref={imgRef} src={dataUrl} draggable={false} style={{ display: 'block', width: '100%', height: '100%', objectFit: 'fill', userSelect: 'none' }} />
       )}
 
       {sel && state === 'cropping' && (

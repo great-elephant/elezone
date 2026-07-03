@@ -103,7 +103,13 @@ export const CropOverlay: React.FC<Props> = ({ screenshotDataUrl, onCropComplete
         inset: 0,
         zIndex: 2147483647,
         cursor: crosshairCursor,
-        overflow: 'hidden'
+        overflow: 'hidden',
+        // Paint the frozen screenshot over the live page so fast-moving content
+        // (video, animations) can't shift under the user mid-drag — what they
+        // see while selecting is exactly the pixels that get cropped.
+        backgroundImage: `url(${screenshotDataUrl})`,
+        backgroundSize: '100% 100%',
+        backgroundRepeat: 'no-repeat',
       }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}

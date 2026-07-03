@@ -315,12 +315,7 @@ export default function Popup() {
 
   const startDisabled = readable === false;
 
-  const ocrLangMap: Record<string, string> = {
-    eng: 'EN',
-    chi_sim: 'ZH-S',
-    chi_tra: 'ZH-T'
-  };
-  const displayLang = settings.ocr?.language ? (ocrLangMap[settings.ocr.language] || settings.ocr.language.toUpperCase()) : 'EN'; return (
+  return (
     <div style={styles.container}>
       <style>{`
         .premium-start-btn {
@@ -410,8 +405,8 @@ export default function Popup() {
             }}
             onMouseEnter={e => e.currentTarget.style.color = '#4ade80'}
             onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
-            title={`Image to Text (OCR) [${displayLang}] - Alt+O`}
-            aria-label={`Image to Text (OCR) [${displayLang}] - Alt+O`}
+            title={`Image to Text (Alt + O)`}
+            aria-label={`Image to Text (Alt + O)`}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>

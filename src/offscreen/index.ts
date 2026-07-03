@@ -503,24 +503,24 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
   }
 
   if (msg.type === 'RECOGNIZE_TEXT') {
-    const { imageBase64, lang, tabId, broadcast } = msg.payload as { imageBase64: string; lang: string; tabId?: number; broadcast?: boolean };
+    const { imageBase64, lang, tabId, broadcast, requestId } = msg.payload as { imageBase64: string; lang: string; tabId?: number; broadcast?: boolean; requestId?: number };
     // Don't use sendResponse for OCR — takes too long and kills the channel
     // Instead send OCR_COMPLETE via runtime message so background can forward to tab
     recognizeText(imageBase64, lang, (status, progress) => {
       chrome.runtime.sendMessage({
         type: 'OCR_PROGRESS',
-        payload: { status, progress, tabId, broadcast }
+        payload: { status, progress, tabId, broadcast, requestId }
       }).catch(() => { });
     }).then(text => {
       chrome.runtime.sendMessage({
         type: 'OCR_COMPLETE',
-        payload: { text, tabId, broadcast }
+        payload: { text, tabId, broadcast, requestId }
       }).catch(() => { });
     }).catch(err => {
       console.error('OCR Error:', err);
       chrome.runtime.sendMessage({
         type: 'OCR_COMPLETE',
-        payload: { error: err ? (err.message || err.toString()) : 'Unknown error', tabId, broadcast }
+        payload: { error: err ? (err.message || err.toString()) : 'Unknown error', tabId, broadcast, requestId }
       }).catch(() => { });
     });
     sendResponse({ ack: true }); // Respond immediately
