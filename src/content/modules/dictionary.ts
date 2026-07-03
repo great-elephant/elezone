@@ -27,6 +27,21 @@ const DICTIONARY_CSS = `
     font-weight: bold;
     font-size: 1.1em;
     color: #ffffff;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .speak-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85em;
+    padding: 0;
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+  .speak-btn:hover {
+    opacity: 1;
   }
   .context-hint {
     font-size: 0.82em;
@@ -351,7 +366,30 @@ async function showPopover(
 
   const header = document.createElement('div')
   header.className = 'word-header'
-  header.innerHTML = `${word} <span class="phonetics" style="color:#8888aa; font-weight:normal; font-size:0.85em; margin-left:6px"></span>`
+
+  const wordSpan = document.createElement('span')
+  wordSpan.textContent = word
+
+  const speakBtn = document.createElement('button')
+  speakBtn.type = 'button'
+  speakBtn.className = 'speak-btn'
+  speakBtn.textContent = '🔊'
+  speakBtn.title = 'Read aloud'
+  speakBtn.setAttribute('aria-label', 'Read aloud')
+  speakBtn.onclick = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    chrome.runtime.sendMessage({
+      type: 'SPEAK_TEXT',
+      payload: { text: word, lang: context?.sourceLang },
+    }).catch(() => { })
+  }
+
+  const phonetics = document.createElement('span')
+  phonetics.className = 'phonetics'
+  phonetics.style.cssText = 'color:#8888aa; font-weight:normal; font-size:0.85em; margin-left:6px'
+
+  header.append(wordSpan, speakBtn, phonetics)
 
   const loading = document.createElement('div')
   loading.className = 'loading'
