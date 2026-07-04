@@ -68,6 +68,22 @@ type ActiveReadAloudSession = {
   // watchdog is cleared for the gap, so this is mostly informational, but it lets
   // the mini-player show a subtle "shadowing…" indicator.
   inGap?: boolean
+  // Timestamp until which a same-utterance 'interrupted'/'cancelled'/'error' TTS
+  // event should be ignored rather than tearing the session down. Some TTS
+  // engines fire one of those as a side effect of chrome.tts.pause()/resume()
+  // itself (not a real interruption) — unlike every other control action,
+  // pause/resume don't bump `token` (they act on the still-live utterance rather
+  // than starting a new one), so that event would otherwise match and kill a
+  // session the user only meant to pause.
+  suppressStopUntil?: number
+  // Timestamp of the last chrome.tts.speak() call for this session. The
+  // watchdog gives isSpeaking() a grace period after this before trusting a
+  // `false` reading — some engines (especially remote/network voices) take a
+  // moment to actually start producing audio for the *next* utterance after
+  // the previous one's 'end' event fires, and a watchdog tick landing in that
+  // gap would otherwise read as a stall and kill a session that's actually
+  // fine, just about to speak (the "random" mid-article stop).
+  speakStartedAt?: number
 }
 
 const COLORS = Object.keys(BOOKMARK_COLORS) as BookmarkColor[]
@@ -526,13 +542,45 @@ function computeShadowingGapMs(sentence: string, speed: number): number {
   return Math.round(Math.max(GAP_MIN_MS, Math.min(GAP_MAX_MS, ms)))
 }
 
-// Schedule the shadowing gap before speaking the (already-advanced) current
-// sentence. The watchdog is stopped for the duration of the gap so an
-// intentional silence can't be mistaken for a stalled utterance and torn down;
-// it is re-armed right before we resume speaking. Everything is guarded by
-// `token`, and the whole thing is cancelled by clearShadowingGap() on any
-// stop/seek. `justSpoke` is the sentence that just finished — its length drives
-// the gap so the pause scales with what the learner needs to repeat.
+// Moves the session on to the next sentence (advancing currentIndex, handling
+// end-of-article page repetition, or finishing the session) and speaks it.
+// Split out from the TTS 'end' handler so the shadowing gap can defer this
+// until the gap actually elapses — currentIndex must keep pointing at the
+// sentence that was just spoken for the gap's duration, since that's the one
+// the learner is meant to repeat, not the upcoming one.
+function advanceToNextSentence(token: number) {
+  const session = activeSession
+  if (!session || session.token !== token) return
+
+  session.currentIndex += 1
+  if (session.currentIndex >= session.sentences.length) {
+    const pageRep = session.settings.pageRepetition || 1
+    session.currentPageRep = (session.currentPageRep || 1) + 1
+
+    if (session.currentPageRep <= pageRep) {
+      session.currentIndex = 0
+      void speakCurrentSentence(token)
+      return
+    }
+
+    // Natural end of the article (all page repetitions done) — surface the
+    // Finished card rather than a silent teardown (F22).
+    void finishActiveSession()
+    return
+  }
+
+  void speakCurrentSentence(token)
+}
+
+// Schedule the shadowing gap before advancing to the next sentence. The
+// watchdog is stopped for the duration of the gap so an intentional silence
+// can't be mistaken for a stalled utterance and torn down; it is re-armed
+// right before we resume speaking. Everything is guarded by `token`, and the
+// whole thing is cancelled by clearShadowingGap() on any stop/seek.
+// `justSpoke` is the sentence that just finished — its length drives the gap
+// so the pause scales with what the learner needs to repeat, and
+// session.currentIndex (still pointing at that same sentence) is what stays
+// highlighted for the duration of the gap.
 function scheduleShadowingGap(token: number, justSpoke: string) {
   const session = activeSession
   if (!session || session.token !== token) return
@@ -556,7 +604,7 @@ function scheduleShadowingGap(token: number, justSpoke: string) {
     s.inGap = false
     // Re-arm the watchdog before real speech resumes.
     startSpeakingWatchdog(token)
-    void speakCurrentSentence(token)
+    advanceToNextSentence(token)
   }, gapMs)
 }
 
@@ -577,9 +625,21 @@ function startSpeakingWatchdog(token: number) {
     if (session.inGap) return
 
     const isSpeaking = await isTtsSpeaking()
-    // Re-check inGap after the async isSpeaking hop: a gap may have started while
-    // we awaited, and an intentional silence must not be treated as a stall.
-    if (!isSpeaking && activeSession?.token === token && !activeSession.inGap) {
+    // Re-check token/inGap/state after the async isSpeaking hop: a gap may have
+    // started, or the user may have paused, while we awaited — in either case
+    // isSpeaking legitimately resolves false and must not be treated as a stall.
+    // (Re-checking `state` here is the fix: without it, a pause() that lands
+    // mid-await made chrome.tts.pause() itself the reason isSpeaking is false,
+    // and this would tear down a session the user only meant to pause.)
+    if (!isSpeaking && activeSession?.token === token && activeSession.state === 'playing' && !activeSession.inGap) {
+      // Grace window after the most recent speak() call: some engines (esp.
+      // remote/network voices) haven't actually started producing audio yet
+      // at this point, so isSpeaking() legitimately reads false for a beat.
+      // Without this, a watchdog tick landing in that beat looks identical to
+      // a real stall and kills a session that's actually fine — the
+      // random-seeming mid-article stop.
+      const since = activeSession.speakStartedAt ? Date.now() - activeSession.speakStartedAt : Infinity
+      if (since < 1500) return
       await stopActiveSession()
     }
   }, 1000)
@@ -707,34 +767,24 @@ function handleTtsEvent(token: number, event: chrome.tts.TtsEvent) {
     }
 
     session.currentRep = 0
-    session.currentIndex += 1
-    if (session.currentIndex >= session.sentences.length) {
-      const pageRep = session.settings.pageRepetition || 1
-      session.currentPageRep = (session.currentPageRep || 1) + 1
-
-      if (session.currentPageRep <= pageRep) {
-        session.currentIndex = 0
-        // H29: still honour the inter-sentence gap when looping back to the top.
-        if (session.shadowing) scheduleShadowingGap(token, justSpoke)
-        else void speakCurrentSentence(token)
-        return
-      }
-
-      // Natural end of the article (all page repetitions done) — surface the
-      // Finished card rather than a silent teardown (F22).
-      void finishActiveSession()
-      return
-    }
 
     // H29: shadowing inserts an intentional silent gap before the next sentence
-    // so the learner can repeat aloud. The watchdog is handled inside
-    // scheduleShadowingGap so the gap is never mistaken for a stall.
+    // so the learner can repeat the one that was just spoken aloud — so
+    // currentIndex must NOT advance yet (the gap's highlight should stay on
+    // justSpoke); advanceToNextSentence() moves it forward once the gap ends.
+    // The watchdog is handled inside scheduleShadowingGap so the gap is never
+    // mistaken for a stall.
     if (session.shadowing) scheduleShadowingGap(token, justSpoke)
-    else void speakCurrentSentence(token)
+    else advanceToNextSentence(token)
     return
   }
 
   if (event.type === 'interrupted' || event.type === 'cancelled' || event.type === 'error') {
+    // Ignore an artifact of our own pause()/resume() call (see the
+    // `suppressStopUntil` field doc) — a real interruption (tab closed, another
+    // extension/page speaking, engine failure) still tears the session down as
+    // soon as the short grace window passes.
+    if (session.suppressStopUntil && Date.now() < session.suppressStopUntil) return
     void stopActiveSession()
   }
 }
@@ -833,6 +883,9 @@ async function speakCurrentSentence(token: number) {
   // Real speech is (re)starting, so we're no longer in an intentional gap.
   session.inGap = false
   session.state = 'playing'
+  // Give the watchdog a grace window: some engines (esp. remote voices) take a
+  // moment after this call before isSpeaking() actually reports true.
+  session.speakStartedAt = Date.now()
   await broadcastReadAloudState(session.tabId, 'playing', session.currentIndex)
 
   chrome.tts.speak(session.sentences[session.currentIndex], {
@@ -923,6 +976,9 @@ async function controlReadAloud(
     // Pausing during the intentional gap: cancel the pending timer but keep the
     // inGap flag so resume re-arms the gap rather than jumping straight in.
     if (activeSession.inGap) clearShadowingGap()
+    // See the `suppressStopUntil` field doc: some TTS engines fire an
+    // 'interrupted'/'cancelled' event as a side effect of pause() itself.
+    activeSession.suppressStopUntil = Date.now() + 500
     chrome.tts.pause()
     await broadcastReadAloudState(tabId, 'paused', activeSession.currentIndex)
     return { ok: true }
@@ -930,6 +986,9 @@ async function controlReadAloud(
 
   if (action === 'resume' && activeSession.state === 'paused') {
     activeSession.state = 'playing'
+    // See the `suppressStopUntil` field doc: some TTS engines fire an
+    // 'interrupted'/'cancelled' event as a side effect of resume() itself.
+    activeSession.suppressStopUntil = Date.now() + 500
     if (activeSession.inGap) {
       // We were paused mid-gap; re-schedule the remaining gap using the sentence
       // we're about to speak (its length is a good proxy for the just-finished one).
@@ -1013,14 +1072,16 @@ async function controlReadAloud(
     await saveSettings(settings)
 
     if (!enabled && session.inGap) {
-      // Cancel the pending gap and continue reading right away.
+      // Cancel the pending gap and continue reading right away — the sentence
+      // at currentIndex was already fully spoken (that's what the gap was
+      // for), so this advances past it rather than re-speaking it.
       clearShadowingGap()
       session.inGap = false
       session.token = ++sessionCounter
       session.state = 'playing'
       chrome.tts.stop()
       startSpeakingWatchdog(session.token)
-      await speakCurrentSentence(session.token)
+      advanceToNextSentence(session.token)
       return { ok: true }
     }
 

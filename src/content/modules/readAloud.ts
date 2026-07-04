@@ -192,22 +192,6 @@ export async function start(settings: ReadAloudSettings) {
   await beginSession(settings, 0, lang)
 }
 
-/**
- * Resume reading at a saved sentence index (F24). Mirrors start() but begins at
- * `index`, clamped to the freshly-built plan (which may differ slightly if the
- * page changed). Falls back to the top when the index is out of range.
- */
-export async function startFromIndex(settings: ReadAloudSettings, index: number) {
-  if (state !== 'idle') return
-
-  const lang = loadArticlePlan()
-  if (sentences.length === 0) return
-
-  const clamped = Math.max(0, Math.min(Math.round(index), sentences.length - 1))
-  currentIndex = clamped
-  await beginSession(settings, clamped, lang)
-}
-
 function normTextFallback(s: string): string {
   return s
     .replace(/[‘’ʼ′]/g, "'")
@@ -306,18 +290,36 @@ export async function startFromElement(
   await beginSession(settings, currentIndex, lang)
 }
 
+// Sends a CONTROL_READ_ALOUD action and, if the background reports no matching
+// session (torn down by a race — e.g. a spurious TTS 'interrupted' event racing
+// a manual pause/resume — or a tabId mismatch), resyncs local state back to
+// idle. Without this, the optimistic notifyState() calls below leave `state`
+// stuck on 'playing'/'paused' with no live session behind it, and start()'s
+// `if (state !== 'idle') return` guard turns every later Play click into a
+// silent no-op.
+function sendControl(action: string, extra?: Record<string, unknown>) {
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action, ...extra } })
+    .then((res: { ok?: boolean } | undefined) => {
+      if (res?.ok === false && state !== 'idle') {
+        clearLocalSession()
+        notifyState('idle')
+      }
+    })
+    .catch(() => {})
+}
+
 export function pause() {
   if (state !== 'playing') return
   // Persist where we paused so the user can resume later (F24).
   void savePosition(currentIndex, sentences.length)
   notifyState('paused')
-  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'pause' } }).catch(() => {})
+  sendControl('pause')
 }
 
 export function resume() {
   if (state !== 'paused') return
   notifyState('playing')
-  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => {})
+  sendControl('resume')
 }
 
 export function stop() {
@@ -335,18 +337,13 @@ export function stop() {
 export function next() {
   if (state === 'idle') return
   notifyState('playing')
-  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'next' } }).catch(() => {})
+  sendControl('next')
 }
 
 export function prev() {
   if (state === 'idle') return
   notifyState('playing')
-  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'prev' } }).catch(() => {})
-}
-
-export function replay() {
-  if (state === 'idle') return
-  seekTo(currentIndex)
+  sendControl('prev')
 }
 
 export function seekTo(index: number) {
@@ -360,7 +357,7 @@ export function seekTo(index: number) {
   // Highlight immediately for responsiveness; background confirms via broadcast.
   applySentenceIndex(clamped)
   notifyState('playing')
-  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'seek', index: clamped } }).catch(() => {})
+  sendControl('seek', { index: clamped })
 }
 
 export function setSpeed(rate: number) {
@@ -368,7 +365,7 @@ export function setSpeed(rate: number) {
   currentSpeed = rate
   if (state === 'idle') return
   notifyState('playing')
-  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setSpeed', speed: rate } }).catch(() => {})
+  sendControl('setSpeed', { speed: rate })
 }
 
 // Switch the active voice live for the current language (D15). Mirrors setSpeed:
@@ -379,7 +376,7 @@ export function setVoice(name: string) {
   currentVoice = name
   onVoiceInfoChange?.()
   notifyState('playing')
-  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setVoice', voiceName: name } }).catch(() => {})
+  sendControl('setVoice', { voiceName: name })
 }
 
 export function getSpeed(): number {
