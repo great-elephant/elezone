@@ -1,6 +1,6 @@
-import { pause, resume, stop, getState, next, prev, replay, seekTo, setSpeed, getSpeed, setVoice, setShadowing, setRepetition } from './readAloud'
+import { pause, resume, stop, getState, next, prev, seekTo, setSpeed, getSpeed, setVoice, setShadowing, setRepetition } from './readAloud'
 import { setFocusMode, isFocusMode } from './readAloudOverlay'
-import { TtsVoiceInfo } from '../../shared/types'
+import { Settings, TtsVoiceInfo } from '../../shared/types'
 
 let host: HTMLElement | null = null
 let shadow: ShadowRoot | null = null
@@ -16,12 +16,28 @@ let warningBanner: HTMLElement | null = null
 // H29/H30/H31 — learner controls.
 let shadowBtn: HTMLButtonElement | null = null
 let repeatBtn: HTMLButtonElement | null = null
-let shadowIndicator: HTMLElement | null = null
+// Secondary controls (voice, shadowing, repeat, speed) live in a "⋯" overflow
+// popover instead of the always-visible player, so the main widget only shows
+// transport controls (prev/play/next), focus mode, + progress at rest.
+let overflowBtn: HTMLButtonElement | null = null
+let overflowMenu: HTMLElement | null = null
 // Live shadowing/repetition state mirrored from readAloud so the controls render
 // the right values.
 let curShadowing = false
 let curRepetition = 1
-let curInGap = false
+
+// Volume control — lives next to focus mode on the right of the transport row.
+// Unlike speed/shadowing/repetition, volume isn't part of the read-aloud
+// session broadcast loop (it only applies at session start or via a live
+// settings-triggered restart in the background), so it's read/written directly
+// against the Settings object rather than through readAloud.ts.
+let volumeBtn: HTMLButtonElement | null = null
+let volumeWrap: HTMLElement | null = null
+let volumePopover: HTMLElement | null = null
+let volumeSlider: HTMLInputElement | null = null
+let volumePctLabel: HTMLElement | null = null
+let cachedSettings: Settings | null = null
+let curVolume = 1
 
 // Per-sentence repetition presets shown by the Repeat control (H31).
 const REPEAT_STEPS = [1, 2, 3]
@@ -56,11 +72,11 @@ const WIDGET_CSS = `
     width: 260px;
     background: #1a1a2e;
     border: 1px solid #3a3a6a;
-    border-radius: 12px;
-    padding: 10px 12px;
+    border-radius: 10px;
+    padding: 9px 11px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 7px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     font-family: system-ui, sans-serif;
     color: #c0c0e0;
@@ -78,25 +94,27 @@ const WIDGET_CSS = `
     font-size: 12px;
     font-weight: 600;
     letter-spacing: 0.02em;
+    line-height: 1;
     color: #c0c0e0;
     display: flex;
     align-items: center;
     gap: 6px;
   }
-  .title .dot { color: #4ade80; font-size: 10px; line-height: 1; }
-  .progress-row {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
+  .title .logo { width: 14px; height: 14px; object-fit: contain; display: block; flex-shrink: 0; }
   .progress-label {
     font-size: 11px;
-    color: #8a8ab0;
+    font-weight: 700;
+    color: #a8b0d8;
+    background: #22223e;
+    border: 1px solid #33335a;
+    border-radius: 5px;
+    padding: 2px 6px;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
   .track {
     position: relative;
-    height: 6px;
+    height: 5px;
     border-radius: 3px;
     background: #2a2a4a;
     cursor: pointer;
@@ -116,18 +134,30 @@ const WIDGET_CSS = `
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 4px;
+    gap: 16px;
+  }
+  .controls-left, .controls-right {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .controls button {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    min-height: 28px;
+    font-size: 15px;
   }
   button {
     background: transparent;
     border: none;
     color: #c0c0e0;
-    font-size: 16px;
+    font-size: 15px;
     cursor: pointer;
-    padding: 4px 6px;
-    min-width: 32px;
-    min-height: 32px;
-    height: 32px;
+    padding: 3px 5px;
+    min-width: 28px;
+    min-height: 28px;
+    height: 28px;
     border-radius: 6px;
     line-height: 1;
     display: inline-flex;
@@ -139,10 +169,18 @@ const WIDGET_CSS = `
     outline: 2px solid #6b8aff;
     outline-offset: 2px;
   }
-  button.play {
-    color: #4ade80;
-    font-size: 20px;
+  svg.i { display: block; width: 15px; height: 15px; }
+  .controls button.play svg.i { width: 16px; height: 16px; }
+  .controls button.play {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    color: #ffffff;
+    background: #4f6ef7;
+    border-radius: 9px;
   }
+  .controls button.play:hover { background: #6b8aff; }
   button.speed {
     font-size: 12px;
     font-weight: 700;
@@ -151,11 +189,11 @@ const WIDGET_CSS = `
     font-variant-numeric: tabular-nums;
   }
   button.focus.active {
-    color: #ffd93d;
+    color: #ffffff;
     background: #2a2a4a;
   }
   button.focus.active:hover { background: #32325a; }
-  button.close { color: #9a9ac0; font-size: 16px; }
+  button.close { color: #9a9ac0; }
   button.close:hover { color: #ff8888; background: #2a1a1a; }
   .warning {
     position: fixed;
@@ -247,7 +285,7 @@ const WIDGET_CSS = `
     min-width: 0;
   }
   .voice-option:hover, .voice-option.focused { background: #2a2a4a; }
-  .voice-option[aria-selected="true"] { color: #4ade80; }
+  .voice-option[aria-selected="true"] { color: #4f6ef7; }
   .voice-option .vo-name {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -263,12 +301,72 @@ const WIDGET_CSS = `
     color: #7a7aa8;
     font-variant-numeric: tabular-nums;
   }
-  .voice-option .vo-check { flex: 0 0 auto; color: #4ade80; font-size: 11px; width: 12px; }
+  .voice-option .vo-check { flex: 0 0 auto; color: #4f6ef7; font-size: 11px; width: 12px; }
 
   .header-right {
+    position: relative;
     display: flex;
     align-items: center;
+    gap: 8px;
+  }
+  button.overflow-toggle { color: #9a9ac0; }
+  .overflow-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    right: 0;
+    z-index: 1;
+    box-sizing: border-box;
+    width: 208px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #16162a;
+    border: 1px solid #3a3a6a;
+    border-radius: 10px;
+    padding: 8px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+  }
+  .overflow-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
     gap: 4px;
+  }
+
+  .volume-wrap { position: relative; }
+  button.volume-toggle { color: #9a9ac0; }
+  .volume-popover {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    right: 0;
+    z-index: 1;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    background: #16162a;
+    border: 1px solid #3a3a6a;
+    border-radius: 10px;
+    padding: 8px 6px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+  }
+  .volume-popover .volume-pct {
+    font-size: 10px;
+    font-weight: 700;
+    color: #a8b0d8;
+    width: 30px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .volume-popover input[type="range"] {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: 6px;
+    height: 64px;
+    margin: 0;
+    accent-color: #4f6ef7;
+    cursor: pointer;
   }
 
   /* Shadowing toggle + Repeat controls (now in the header) — H29/H31 */
@@ -277,10 +375,10 @@ const WIDGET_CSS = `
     flex: 0 0 auto;
   }
   button.shadow-toggle.active {
-    color: #4ade80;
-    background: #21322a;
+    color: #4f6ef7;
+    background: #232c56;
   }
-  button.shadow-toggle.active:hover { background: #294032; }
+  button.shadow-toggle.active:hover { background: #2b3568; }
   button.repeat {
     font-size: 11px;
     font-weight: 700;
@@ -296,31 +394,7 @@ const WIDGET_CSS = `
     font-variant-numeric: tabular-nums;
   }
   button.repeat:hover { background: #2a2a4a; color: #c8d0f0; }
-  button.repeat.active { color: #4ade80; border-color: #2f5a42; }
-  /* Subtle "shadowing…" gap indicator (replaces the ● dot in the title). */
-  .title .shadow-hint {
-    color: #4ade80;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .title .shadow-hint .pulse {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #4ade80;
-    animation: cxt-shadow-pulse 1s ease-in-out infinite;
-  }
-  @keyframes cxt-shadow-pulse {
-    0%, 100% { opacity: 0.35; transform: scale(0.85); }
-    50% { opacity: 1; transform: scale(1.15); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .title .shadow-hint .pulse { animation: none; opacity: 0.8; }
-  }
+  button.repeat.active { color: #4f6ef7; border-color: #3d4d99; }
 `
 
 // The Finished card (F22) is its own tiny host with self-contained styles.
@@ -360,7 +434,7 @@ const FINISHED_CSS = `
     font-weight: 600;
     color: #c0c0e0;
   }
-  .done .check { color: #4ade80; font-size: 15px; line-height: 1; }
+  .done .check { color: #4f6ef7; font-size: 15px; line-height: 1; }
   .actions { display: flex; gap: 8px; }
   button {
     font-family: system-ui, sans-serif;
@@ -399,6 +473,32 @@ function makeButton(cls: string, label: string, aria: string, onClick: () => voi
   const btn = document.createElement('button')
   btn.className = cls
   btn.textContent = label
+  btn.title = aria
+  btn.setAttribute('aria-label', aria)
+  btn.onclick = onClick
+  return btn
+}
+
+// Emoji glyphs (⏮⏸⏭🔦⏹) render as full-color, platform-specific pictures that
+// clash with the widget's flat single-accent dark UI and look inconsistent
+// across OSes. These are fixed, hardcoded markup strings (no user input), so
+// building them via innerHTML is safe.
+const ICON_PREV = '<svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM19 5v14l-10-7z"/></svg>'
+const ICON_NEXT = '<svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5v14l10-7zM16 5h2v14h-2z"/></svg>'
+const ICON_PLAY = '<svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l11 7-11 7z"/></svg>'
+const ICON_PAUSE = '<svg class="i" viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>'
+const ICON_STOP = '<svg class="i" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>'
+// "Sun" — reads as light/illumination at a glance even at 15px, unlike a
+// flashlight/torch silhouette which turned out illegible that small.
+const ICON_FOCUS = '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="currentColor"/><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M5.6 18.4l1.6-1.6M16.8 7.2l1.6-1.6"/></g></svg>'
+const ICON_MORE = '<svg class="i" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>'
+const ICON_VOLUME = '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>'
+const ICON_VOLUME_MUTE = '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>'
+
+function makeIconButton(cls: string, icon: string, aria: string, onClick: () => void): HTMLButtonElement {
+  const btn = document.createElement('button')
+  btn.className = cls
+  btn.innerHTML = icon
   btn.title = aria
   btn.setAttribute('aria-label', aria)
   btn.onclick = onClick
@@ -464,8 +564,6 @@ function toggleShadowing() {
   curShadowing = !curShadowing
   setShadowing(curShadowing)
   refreshShadowButton()
-  // If shadowing is turned off, drop any lingering "shadowing…" indicator.
-  if (!curShadowing) { curInGap = false; refreshShadowIndicator() }
 }
 
 function refreshRepeatButton() {
@@ -493,27 +591,18 @@ function cycleRepeat() {
   refreshRepeatButton()
 }
 
-// Subtle "shadowing…" hint in the title, shown only during the intentional gap.
-function refreshShadowIndicator() {
-  if (!shadowIndicator) return
-  const show = curShadowing && curInGap
-  shadowIndicator.style.display = show ? 'inline-flex' : 'none'
-}
-
-export function updateWidgetShadowInfo(shadowing: boolean, repetition: number, inGap: boolean) {
+export function updateWidgetShadowInfo(shadowing: boolean, repetition: number) {
   if (typeof shadowing === 'boolean') curShadowing = shadowing
   if (typeof repetition === 'number' && repetition >= 1) curRepetition = Math.round(repetition)
-  if (typeof inGap === 'boolean') curInGap = inGap
   refreshShadowButton()
   refreshRepeatButton()
-  refreshShadowIndicator()
 }
 
 function renderProgress() {
   if (progressLabel) {
     progressLabel.textContent = curTotal > 0
-      ? `Sentence ${Math.min(curIndex + 1, curTotal)} / ${curTotal}`
-      : 'Sentence – / –'
+      ? `${Math.min(curIndex + 1, curTotal)} / ${curTotal}`
+      : '– / –'
   }
   if (progressFill) {
     const pct = curTotal > 1 ? (curIndex / (curTotal - 1)) * 100 : (curTotal === 1 ? 100 : 0)
@@ -597,9 +686,13 @@ function closeVoiceMenu() {
 }
 
 function onDocMouseDownForMenu(e: MouseEvent) {
-  // Clicks land on the shadow host from the document's perspective; close only
-  // when the click is truly outside our widget host.
-  if (host && e.composedPath().includes(host)) return
+  // Close on any click outside the menu itself and its own toggle (the chip) —
+  // not just clicks outside the whole widget — so e.g. clicking a different
+  // widget button while the list is open closes it too, rather than leaving
+  // it stuck open behind/alongside whatever the click just did.
+  const path = e.composedPath()
+  if (voiceChip && path.includes(voiceChip)) return
+  if (voiceMenu && path.includes(voiceMenu)) return
   closeVoiceMenu()
 }
 
@@ -737,6 +830,163 @@ function onVoiceMenuKeydown(e: KeyboardEvent) {
   options[idx]?.focus()
 }
 
+// ── Overflow ("⋯") popover — voice, shadowing, repeat, focus, speed, replay ──
+
+function toggleOverflowMenu() {
+  if (overflowMenu) closeOverflowMenu()
+  else openOverflowMenu()
+}
+
+function onDocMouseDownForOverflow(e: MouseEvent) {
+  // Same rationale as onDocMouseDownForMenu: bound to the popover + its own
+  // toggle, not the whole widget, so clicking another widget button (e.g.
+  // play/pause) while the popover is open closes it instead of leaving it
+  // floating over the rest of the interaction.
+  const path = e.composedPath()
+  if (overflowBtn && path.includes(overflowBtn)) return
+  if (overflowMenu && path.includes(overflowMenu)) return
+  closeOverflowMenu()
+}
+
+function closeOverflowMenu() {
+  // The voice submenu can be open nested inside; tear it down first so its own
+  // outside-click listener doesn't linger after we remove its parent.
+  closeVoiceMenu()
+  overflowMenu?.remove()
+  overflowMenu = null
+  voiceChip = null
+  shadowBtn = null
+  repeatBtn = null
+  speedBtn = null
+  overflowBtn?.setAttribute('aria-expanded', 'false')
+  document.removeEventListener('mousedown', onDocMouseDownForOverflow, { capture: true })
+}
+
+function openOverflowMenu() {
+  if (!overflowBtn || !overflowBtn.parentElement) return
+
+  overflowMenu = document.createElement('div')
+  overflowMenu.className = 'overflow-menu'
+
+  const voiceRow = document.createElement('div')
+  voiceRow.className = 'voice-row'
+  voiceChip = document.createElement('button')
+  voiceChip.className = 'voice-chip'
+  voiceChip.setAttribute('aria-haspopup', 'listbox')
+  voiceChip.setAttribute('aria-expanded', 'false')
+  voiceChip.onclick = toggleVoiceMenu
+  voiceRow.appendChild(voiceChip)
+
+  const row = document.createElement('div')
+  row.className = 'overflow-row'
+  shadowBtn = makeButton('shadow-toggle', '🗣', 'Shadowing mode: off', toggleShadowing)
+  shadowBtn.setAttribute('aria-pressed', 'false')
+  repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', cycleRepeat)
+  speedBtn = makeButton('speed', `${getSpeed()}x`, 'Playback speed', cycleSpeed)
+  row.append(shadowBtn, repeatBtn, speedBtn)
+
+  overflowMenu.append(voiceRow, row)
+  overflowBtn.parentElement.appendChild(overflowMenu)
+  overflowBtn.setAttribute('aria-expanded', 'true')
+  document.addEventListener('mousedown', onDocMouseDownForOverflow, { capture: true })
+
+  renderVoiceChip()
+  refreshSpeedLabel()
+  refreshShadowButton()
+  refreshRepeatButton()
+}
+
+// ── Volume popover ────────────────────────────────────────────────────────
+
+function refreshVolumeIcon() {
+  if (!volumeBtn) return
+  volumeBtn.innerHTML = curVolume <= 0 ? ICON_VOLUME_MUTE : ICON_VOLUME
+  const label = `Volume: ${Math.round(curVolume * 100)}%`
+  volumeBtn.title = label
+  volumeBtn.setAttribute('aria-label', label)
+}
+
+// Persists the live volume to settings so it survives across sessions, and
+// (via the background's SAVE_SETTINGS handler) live-restarts the current
+// utterance if reading is in progress.
+function persistVolume(vol: number) {
+  const base = cachedSettings
+  if (!base) return
+  cachedSettings = { ...base, updatedAt: Date.now(), readAloud: { ...base.readAloud, volume: vol } }
+  chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', payload: cachedSettings }).catch(() => { })
+}
+
+function setVolumeLive(vol: number) {
+  curVolume = Math.max(0, Math.min(1, vol))
+  refreshVolumeIcon()
+  if (volumeSlider) volumeSlider.value = String(curVolume)
+  if (volumePctLabel) volumePctLabel.textContent = `${Math.round(curVolume * 100)}%`
+  persistVolume(curVolume)
+}
+
+// Keep the widget's volume control in sync with changes made elsewhere (the
+// popup's own volume slider, or another tab) — without this, cachedSettings
+// only gets seeded once when the widget first shows, so it'd silently drift
+// from whatever the popup last saved and could stomp it on the next local
+// tweak.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes['settings']) return
+  const next = changes['settings'].newValue as Settings | undefined
+  if (!next) return
+  cachedSettings = next
+  const vol = next.readAloud?.volume ?? 1
+  if (vol === curVolume) return
+  curVolume = vol
+  refreshVolumeIcon()
+  if (volumeSlider) volumeSlider.value = String(curVolume)
+  if (volumePctLabel) volumePctLabel.textContent = `${Math.round(curVolume * 100)}%`
+})
+
+function toggleVolumePopover() {
+  if (volumePopover) closeVolumePopover()
+  else openVolumePopover()
+}
+
+function onDocMouseDownForVolume(e: MouseEvent) {
+  const path = e.composedPath()
+  if (volumeWrap && path.includes(volumeWrap)) return
+  closeVolumePopover()
+}
+
+function closeVolumePopover() {
+  volumePopover?.remove()
+  volumePopover = null
+  volumeSlider = null
+  volumePctLabel = null
+  volumeBtn?.setAttribute('aria-expanded', 'false')
+  document.removeEventListener('mousedown', onDocMouseDownForVolume, { capture: true })
+}
+
+function openVolumePopover() {
+  if (!volumeWrap) return
+
+  volumePopover = document.createElement('div')
+  volumePopover.className = 'volume-popover'
+
+  volumePctLabel = document.createElement('span')
+  volumePctLabel.className = 'volume-pct'
+  volumePctLabel.textContent = `${Math.round(curVolume * 100)}%`
+
+  volumeSlider = document.createElement('input')
+  volumeSlider.type = 'range'
+  volumeSlider.min = '0'
+  volumeSlider.max = '1'
+  volumeSlider.step = '0.05'
+  volumeSlider.value = String(curVolume)
+  volumeSlider.setAttribute('aria-label', 'Read-aloud volume')
+  volumeSlider.oninput = () => setVolumeLive(parseFloat(volumeSlider!.value))
+
+  volumePopover.append(volumePctLabel, volumeSlider)
+  volumeWrap.appendChild(volumePopover)
+  volumeBtn?.setAttribute('aria-expanded', 'true')
+  document.addEventListener('mousedown', onDocMouseDownForVolume, { capture: true })
+}
+
 function seekFromClientX(clientX: number) {
   if (!progressTrack || curTotal <= 0) return
   const rect = progressTrack.getBoundingClientRect()
@@ -768,42 +1018,34 @@ export function showWidget() {
 
   const title = document.createElement('div')
   title.className = 'title'
-  const dot = document.createElement('span')
-  dot.className = 'dot'
-  dot.textContent = '●'
+  const logo = document.createElement('img')
+  logo.className = 'logo'
+  logo.src = chrome.runtime.getURL('icons/logo.png')
+  logo.alt = ''
   const titleText = document.createElement('span')
   titleText.textContent = 'Read Aloud'
-  // Subtle "shadowing…" indicator shown only during the intentional inter-
-  // sentence gap (H29). Hidden by default.
-  shadowIndicator = document.createElement('span')
-  shadowIndicator.className = 'shadow-hint'
-  shadowIndicator.style.display = 'none'
-  const pulse = document.createElement('span')
-  pulse.className = 'pulse'
-  const shadowHintText = document.createElement('span')
-  shadowHintText.textContent = 'shadowing…'
-  shadowIndicator.append(pulse, shadowHintText)
-  title.append(dot, titleText, shadowIndicator)
 
-  shadowBtn = makeButton('shadow-toggle', '🗣', 'Shadowing mode: off', toggleShadowing)
-  shadowBtn.setAttribute('aria-pressed', 'false')
+  // The sentence counter sits right next to the title (not its own row), so
+  // the title/counter/overflow-menu toggle share a single draggable line and
+  // the seek track is the only thing left below it.
+  progressLabel = document.createElement('span')
+  progressLabel.className = 'progress-label'
 
-  repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', cycleRepeat)
+  title.append(logo, titleText, progressLabel)
 
-  const closeBtn = makeButton('close', '⏹', 'Stop', () => { stop(); hideWidget() })
+  overflowBtn = makeIconButton('overflow-toggle', ICON_MORE, 'More options', toggleOverflowMenu)
+  overflowBtn.setAttribute('aria-haspopup', 'true')
+  overflowBtn.setAttribute('aria-expanded', 'false')
 
   const headerRight = document.createElement('div')
   headerRight.className = 'header-right'
-  headerRight.append(shadowBtn, repeatBtn, closeBtn)
+  headerRight.append(overflowBtn)
 
   header.append(title, headerRight)
 
-  // ── Progress ──────────────────────────────────────────────────────────
+  // ── Progress (seek track only — the counter moved into the header) ─────
   const progressRow = document.createElement('div')
   progressRow.className = 'progress-row'
-
-  progressLabel = document.createElement('div')
-  progressLabel.className = 'progress-label'
 
   progressTrack = document.createElement('div')
   progressTrack.className = 'track'
@@ -817,61 +1059,75 @@ export function showWidget() {
 
   attachSeekHandlers(progressTrack)
 
-  progressRow.append(progressLabel, progressTrack)
+  progressRow.append(progressTrack)
 
-  // ── Voice chip (calm indicator + live picker) ─────────────────────────
-  const voiceRow = document.createElement('div')
-  voiceRow.className = 'voice-row'
-
-  voiceChip = document.createElement('button')
-  voiceChip.className = 'voice-chip'
-  voiceChip.setAttribute('aria-haspopup', 'listbox')
-  voiceChip.setAttribute('aria-expanded', 'false')
-  voiceChip.onclick = toggleVoiceMenu
-  voiceRow.appendChild(voiceChip)
-
-  // ── Controls ──────────────────────────────────────────────────────────
+  // ── Controls (transport + stop on the left; focus mode + volume on the
+  // right — voice/shadowing/repeat/speed live in the "⋯" overflow popover) ──
   const controls = document.createElement('div')
   controls.className = 'controls'
 
-  const prevBtn = makeButton('prev', '⏮', 'Previous sentence', () => prev())
-  const replayBtn = makeButton('replay', '↺', 'Replay current sentence', () => replay())
-  pauseBtn = makeButton('play', '⏸', 'Pause', togglePause)
-  const nextBtn = makeButton('next', '⏭', 'Next sentence', () => next())
+  const controlsLeft = document.createElement('div')
+  controlsLeft.className = 'controls-left'
+
+  const prevBtn = makeIconButton('prev', ICON_PREV, 'Previous sentence', () => prev())
+  pauseBtn = makeIconButton('play', ICON_PAUSE, 'Pause', togglePause)
+  const nextBtn = makeIconButton('next', ICON_NEXT, 'Next sentence', () => next())
 
   // Play/pause is a two-state toggle; expose it to AT via aria-pressed
   // (pressed = currently playing).
   pauseBtn.setAttribute('aria-pressed', 'true')
 
-  focusBtn = makeButton('focus', '🔦', 'Focus mode: off', toggleFocusMode)
+  const closeBtn = makeIconButton('close', ICON_STOP, 'Stop', () => { stop(); hideWidget() })
 
-  speedBtn = makeButton('speed', `${getSpeed()}x`, 'Playback speed', cycleSpeed)
+  controlsLeft.append(prevBtn, pauseBtn, nextBtn, closeBtn)
 
-  controls.append(prevBtn, replayBtn, pauseBtn, nextBtn, focusBtn, speedBtn)
+  const controlsRight = document.createElement('div')
+  controlsRight.className = 'controls-right'
 
-  player.append(header, progressRow, voiceRow, controls)
+  focusBtn = makeIconButton('focus', ICON_FOCUS, 'Focus mode: off', toggleFocusMode)
+
+  volumeWrap = document.createElement('div')
+  volumeWrap.className = 'volume-wrap'
+  volumeBtn = makeIconButton('volume-toggle', ICON_VOLUME, 'Volume', toggleVolumePopover)
+  volumeBtn.setAttribute('aria-haspopup', 'true')
+  volumeBtn.setAttribute('aria-expanded', 'false')
+  // Scroll-to-adjust while the popover is open, mirroring the popup's volume control.
+  volumeWrap.onwheel = (e) => {
+    if (!volumePopover) return
+    e.preventDefault()
+    setVolumeLive(curVolume + (e.deltaY < 0 ? 1 : -1) * 0.05)
+  }
+  volumeWrap.appendChild(volumeBtn)
+
+  controlsRight.append(focusBtn, volumeWrap)
+
+  controls.append(controlsLeft, controlsRight)
+
+  player.append(header, progressRow, controls)
   shadow.append(style, player)
   document.body.appendChild(host)
 
   renderProgress()
-  renderVoiceChip()
-  refreshSpeedLabel()
   refreshFocusButton()
-  refreshShadowButton()
-  refreshRepeatButton()
-  refreshShadowIndicator()
+  refreshVolumeIcon()
   makeDraggable(player, header)
+
+  chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).then((s: Settings) => {
+    cachedSettings = s
+    curVolume = s?.readAloud?.volume ?? 1
+    refreshVolumeIcon()
+  }).catch(() => { })
 }
 
 export function updateWidgetState(state: 'playing' | 'paused' | 'idle') {
   if (!pauseBtn) return
   if (state === 'playing') {
-    pauseBtn.textContent = '⏸'
+    pauseBtn.innerHTML = ICON_PAUSE
     pauseBtn.title = 'Pause'
     pauseBtn.setAttribute('aria-label', 'Pause')
     pauseBtn.setAttribute('aria-pressed', 'true')
   } else if (state === 'paused') {
-    pauseBtn.textContent = '▶'
+    pauseBtn.innerHTML = ICON_PLAY
     pauseBtn.title = 'Resume'
     pauseBtn.setAttribute('aria-label', 'Resume')
     pauseBtn.setAttribute('aria-pressed', 'false')
@@ -888,21 +1144,24 @@ export function updateWidgetProgress(index: number, total: number) {
 export function hideWidget() {
   // Reset focus mode so the next session starts with the spotlight off (default).
   setFocusMode(false)
-  closeVoiceMenu()
+  // Tears down the overflow popover (and any nested voice submenu), clearing
+  // their document-level outside-click listeners along with voiceChip/
+  // shadowBtn/repeatBtn/speedBtn.
+  closeOverflowMenu()
+  overflowBtn = null
+  // Tears down the volume popover + its own outside-click listener.
+  closeVolumePopover()
+  volumeBtn = null
+  volumeWrap = null
+  cachedSettings = null
   host?.remove()
   host = null
   shadow = null
   pauseBtn = null
   focusBtn = null
-  speedBtn = null
-  voiceChip = null
-  voiceMenu = null
   progressLabel = null
   progressFill = null
   progressTrack = null
-  shadowBtn = null
-  repeatBtn = null
-  shadowIndicator = null
   curIndex = 0
   curTotal = 0
   curVoice = ''
@@ -910,7 +1169,6 @@ export function hideWidget() {
   // Note: curShadowing / curRepetition are intentionally NOT reset here so the
   // next session's mini-player renders the last-used values before the first
   // background broadcast (they're re-seeded from settings on start anyway).
-  curInGap = false
   hideWarning()
 }
 
