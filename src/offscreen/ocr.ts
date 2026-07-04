@@ -43,7 +43,7 @@ export async function initOcr(
     }
   });
 
-  onProgress?.('OCR ready!', 1);
+  onProgress?.('Ready!', 1);
   worker = newWorker;
   currentLang = lang;
   return worker;

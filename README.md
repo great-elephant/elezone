@@ -6,12 +6,14 @@ EleZone is a powerful, privacy-first Chrome Extension designed to turn your casu
 
 ## 🌟 Key Features
 
-*   **Context-Aware Translation:** Highlight any word or phrase on any webpage to get AI-powered translations that understand the exact context of the sentence (Powered by Chrome's Built-in Prompt AI).
-*   **Immersive Read Aloud:** Turn any English article into a listening practice session with native pronunciation and side-by-side translation.
-*   **Image to Text (OCR):** Extract and translate text directly from images or manga on the web using our built-in OCR tool.
-*   **Focus & Breathe:** Integrated Pomodoro timer and Box Breathing techniques to reduce anxiety and improve memory retention during study sprints.
+*   **Context-Aware Translation:** Highlight any word or phrase on any webpage to get a translation that understands the sentence it's in — not just a generic dictionary guess.
+*   **Read Aloud:** Turn any English article into a listening session, with each sentence highlighted as it's spoken and an optional side-by-side translation.
+*   **Extract Text from Images:** Pull readable, translatable text out of pictures, comics, or manga panels right from the page.
+*   **Vocabulary Flashcards:** Save any word you look up and review it later with four practice modes — Passive, Typing, Listening, and Multiple Choice.
+*   **Smart Reminders:** Get a quiet notification right when you're about to forget a saved word, so a quick review keeps it in memory.
+*   **Focus & Breathe:** An integrated Pomodoro timer and guided box breathing to help you study in focused, low-stress sprints.
 *   **Gamification & Tough Love:** Earn "Sparks" and build daily streaks. But beware: if you slack off, the app will roast you!
-*   **Cloud Sync:** Securely sync your vocabulary, settings, and learning progress directly to your personal Google Drive.
+*   **Cloud Sync:** Your words, settings, and progress sync privately and directly to your own Google Drive.
 
 ## 🛠 Tech Stack
 

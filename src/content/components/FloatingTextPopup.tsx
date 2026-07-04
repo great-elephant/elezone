@@ -300,10 +300,10 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
         }}
       >
         <span style={{ fontSize: 13, fontWeight: 'bold', color: '#aab', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          OCR Result
+          Text from Image
           {displayLang && (
             <span
-              title={`Current OCR Language: ${fullNameLang}\n\nNote: If this doesn't match the actual language in the image, the recognized text will be inaccurate or gibberish.\nYou can change this in the Settings page.`}
+              title={`Detected language: ${fullNameLang}\n\nNote: If this doesn't match the actual language in the image, the recognized text will be inaccurate or gibberish.\nYou can change this in the Settings page.`}
               style={{ fontSize: 9, fontWeight: 700, background: '#3a3a6a', color: '#4ade80', padding: '2px 5px', borderRadius: 4, lineHeight: 1, whiteSpace: 'nowrap', cursor: 'help' }}
             >
               {displayLang}
@@ -332,7 +332,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
           <button
             onClick={onClose}
             title="Close"
-            aria-label="Close OCR result"
+            aria-label="Close extracted text"
             style={{
               background: 'none',
               border: 'none',

@@ -306,7 +306,7 @@ export default function GuidePage() {
           <div className="card" style={{ '--glow-color': '#b36bff' } as React.CSSProperties}>
             <div className="icon">📸</div>
             <h2>Extract Words from Images</h2>
-            <p>Reading a web manga or browsing social media? Don't let words trapped in images slow you down. Just bring up the right-click menu to launch our OCR tool, then seamlessly extract and translate the text. Turn your casual entertainment into a seamless learning experience.</p>
+            <p>Reading a web manga or browsing social media? Don't let words trapped in images slow you down. Just bring up the right-click menu to pull the text out of any image, then seamlessly extract and translate it. Turn your casual entertainment into a seamless learning experience.</p>
             <div className="instruction-box">
               <strong>💡 How to use:</strong> Right-click anywhere on the page or on an image and select "Image to text(Alt + O)".
             </div>
@@ -342,7 +342,7 @@ export default function GuidePage() {
           <div className="card" style={{ '--glow-color': '#ffeb3b' } as React.CSSProperties}>
             <div className="icon">🔔</div>
             <h2>Learn Without Opening the App</h2>
-            <p>Too busy to study? Our Spaced Repetition System (SRS) tracks when you're about to forget a word and sends a native system notification. Simply glance, guess the meaning, and click to reveal—all without interrupting your workflow.</p>
+            <p>Too busy to study? EleZone tracks when you're about to forget a saved word and sends a system notification right as that happens. Simply glance, guess the meaning, and click to reveal—all without interrupting your workflow.</p>
             <div className="instruction-box">
               <strong>💡 How to set up:</strong> Open the Options page, go to the "Settings" tab, and enable "Flashcard Notifications".
             </div>

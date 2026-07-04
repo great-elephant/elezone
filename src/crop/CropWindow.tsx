@@ -109,7 +109,7 @@ export function CropWindow() {
 
     setCropBox({ x, y, width, height })
     setProgress(0)
-    setStatus('Initializing OCR...')
+    setStatus('Reading text from image...')
     setState('processing')
     chrome.runtime.sendMessage({
       type: 'FORWARD_RECOGNIZE_TEXT',

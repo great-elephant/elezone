@@ -582,7 +582,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         <OnDeviceAi targetLang={tr.defaultTargetLanguage} onStatusChange={setAiStatus} onModelDownloaded={() => set('translation', 'disableAI', false)} />
       </CollapsibleSection>
 
-      <CollapsibleSection title="OCR">
+      <CollapsibleSection title="Image to Text">
         <Field label="Language Model">
           <select
             style={styles.select}
