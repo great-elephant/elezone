@@ -38,11 +38,6 @@ export default function Popup() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
 
   const [readable, setReadable] = useState<boolean | null>(null);
-  // Coarse on-device AI translation status for the active tab.
-  // null → not on a page where the content script runs (show nothing / neutral).
-  const [translatorStatus, setTranslatorStatus] = useState<
-    "available" | "downloadable" | "downloading" | "unavailable" | null
-  >(null);
   const [readAloudState, setReadAloudState] = useState<ReadAloudState>("idle");
   // Live progress/speed for the active tab's read-aloud session, mirrored from
   // the background so the popup can show the same info as the on-page player.
@@ -112,16 +107,6 @@ export default function Popup() {
         },
       );
 
-      chrome.tabs.sendMessage(
-        tab.id,
-        { type: "GET_TRANSLATOR_STATUS" },
-        (res: { status: "available" | "downloadable" | "downloading" | "unavailable" } | null) => {
-          void chrome.runtime.lastError; // suppress "no receiving end" errors
-          // On chrome://, extension, or non-injected pages there is no receiver:
-          // leave status null so the badge shows a neutral "unavailable on this page".
-          setTranslatorStatus(res?.status ?? null);
-        },
-      );
     });
 
     const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
@@ -629,12 +614,15 @@ export default function Popup() {
 
         </div>
 
-        {/* Translate Section */}
+        {/* Read Aloud Section — Translate is tucked into the top-right corner
+            of this same header (just its toggle) instead of owning its own
+            header/description row, since Read Aloud is the one whose original
+            look (own description line, full-width button) should stay as-is. */}
         <div style={styles.pomodoroBox}>
           <div style={styles.pomodoroHeader}>
-            <span>Translate</span>
+            <span>Read Aloud</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>On page</span>
+              <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>Translate</span>
               <button
                 style={{
                   ...styles.toggle,
@@ -654,38 +642,11 @@ export default function Popup() {
               </button>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: '#8a8ab0', marginTop: -6, marginBottom: settings.translation.enabled ? 8 : 0, lineHeight: 1.4 }}>
-            Translate website text on the fly.
-          </div>
-
-          {settings.translation.enabled && (() => {
-            const badges = {
-              available: { text: '🔒 On-device AI ready', color: '#4ade80' },
-              downloadable: { text: '🌐 Using Google (on-device AI not downloaded)', color: '#8888aa' },
-              downloading: { text: '⏳ Downloading on-device model…', color: '#facc15' },
-              unavailable: { text: '🌐 Using Google translation', color: '#8888aa' },
-            };
-            const badge = translatorStatus
-              ? badges[translatorStatus]
-              : { text: '🌐 Translation unavailable on this page', color: '#8a8ab0' };
-            return (
-              <div style={{ fontSize: 11, color: badge.color, marginTop: -4, lineHeight: 1.4 }}>
-                {badge.text}
-              </div>
-            );
-          })()}
-        </div>
-
-        {/* Read Aloud Section */}
-        <div style={styles.pomodoroBox}>
-          <div style={styles.pomodoroHeader}>
-            <span>Read Aloud</span>
-          </div>
           <div style={{ fontSize: 11, color: '#8a8ab0', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
             Listen to this page read out loud, sentence by sentence.
           </div>
 
-          {readAloudState === 'idle' ? (
+          {readAloudState === 'idle' && (
             <button
               className="premium-start-btn"
               onClick={startReadAloud}
@@ -695,7 +656,9 @@ export default function Popup() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
               Listen
             </button>
-          ) : (() => {
+          )}
+
+          {readAloudState !== 'idle' && (() => {
             // Progress mirrors the on-page mini-player: "Sentence X / N" and a
             // fill of index / (total - 1). Fields may be absent if the tab has
             // no live session (background couldn't source them) — degrade to
@@ -707,7 +670,7 @@ export default function Popup() {
               : 0;
             const speedLabel = readAloudSpeed != null ? nearestSpeedStep(readAloudSpeed) : null;
             return (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#2d4fd4', borderRadius: 8, padding: '8px 12px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#2d4fd4', borderRadius: 8, padding: '8px 12px', width: '100%' }}>
                 {/* Status + progress label */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: 3, backgroundColor: readAloudState === 'playing' ? '#4ade80' : '#facc15', flexShrink: 0 }} />
@@ -748,9 +711,6 @@ export default function Popup() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('prev')} title="Previous sentence" aria-label="Previous sentence">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20" /><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
-                  </button>
-                  <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('seek', { index: readAloudIndex ?? 0 })} title="Replay current sentence" aria-label="Replay current sentence">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
                   </button>
                   {readAloudState === 'playing' ? (
                     <button style={styles.readAloudCtrlBtn} onClick={() => controlReadAloud('pause')} title="Pause" aria-label="Pause" aria-pressed={true}>

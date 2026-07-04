@@ -1,8 +1,8 @@
 import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint } from './modules/anchor'
-import { start, startFrom, startFromElement, startFromIndex, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo } from './modules/readAloud'
+import { start, startFrom, startFromElement, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo } from './modules/readAloud'
 import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
-import { initReadAloudAffordances, setEnabled as setAffordancesEnabled, setAffordanceSpeed, refreshResumeState, clearResumeState } from './modules/readAloudAffordances'
+import { initReadAloudAffordances, setEnabled as setAffordancesEnabled } from './modules/readAloudAffordances'
 import { installSpaNavigationGuard } from './modules/readAloudSpaGuard'
 import { savePosition } from './modules/readAloudPosition'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
@@ -58,7 +58,18 @@ function injectHighlightStyles() {
 }
 
 async function reanchor(url: string) {
-  const items: SavedItem[] = await chrome.runtime.sendMessage({ type: 'GET_ITEMS' })
+  // The extension can reload/update while this tab's content script is still
+  // alive (dev rebuild, or a real auto-update in production) — any
+  // chrome.runtime call then rejects with "Extension context invalidated",
+  // and since every other chrome API call here would fail the same way,
+  // there's nothing to do but bail out quietly instead of leaving an
+  // unhandled rejection.
+  let items: SavedItem[]
+  try {
+    items = await chrome.runtime.sendMessage({ type: 'GET_ITEMS' })
+  } catch {
+    return
+  }
   const pageItems = items.filter(b => b.url === url && b.occurrenceIndex !== undefined)
   for (const item of pageItems) {
     const found = applyHighlight(item)
@@ -85,21 +96,15 @@ setOnStateChange(newState => {
     // Tear down the reading marker + focus spotlight hosts when reading stops.
     destroyReadingOverlays()
     // A natural finish shows the "Finished" card (F22); a user stop just hides.
-    // Reading finished/stopped — bring the idle "Listen" chip + ▶ handle back.
+    // Reading finished/stopped — bring the idle ▶ paragraph handle back.
     setAffordancesEnabled(true)
     if (finished) {
       showFinishedCard()
-      // Position was cleared on finish — force the chip to plain "Listen" now
-      // rather than reading storage (which could race the clear).
-      clearResumeState()
-    } else {
-      // A user stop saved a position — offer Resume (F24).
-      void refreshResumeState()
     }
   } else {
     // A new session started — dismiss any leftover Finished card.
     hideFinishedCard()
-    // Reading is active — hide the idle affordances so they don't overlap the
+    // Reading is active — hide the idle affordance so it doesn't overlap the
     // mini-player or the click-to-define flow.
     setAffordancesEnabled(false)
     const { index, total } = getProgress()
@@ -107,7 +112,7 @@ setOnStateChange(newState => {
     const { voice, lang } = getVoiceInfo()
     updateWidgetVoice(voice, lang)
     const shadow = getShadowInfo()
-    updateWidgetShadowInfo(shadow.shadowing, shadow.repetition, shadow.inGap)
+    updateWidgetShadowInfo(shadow.shadowing, shadow.repetition)
   }
 })
 
@@ -121,11 +126,11 @@ setOnVoiceInfoChange(() => {
   updateWidgetVoice(voice, lang)
 })
 
-// Refresh the shadowing toggle, Repeat control, and "shadowing…" indicator when
-// the background reports new values (H29/H31).
+// Refresh the shadowing toggle and Repeat control when the background reports
+// new values (H29/H31).
 setOnShadowInfoChange(() => {
-  const { shadowing, repetition, inGap } = getShadowInfo()
-  updateWidgetShadowInfo(shadowing, repetition, inGap)
+  const { shadowing, repetition } = getShadowInfo()
+  updateWidgetShadowInfo(shadowing, repetition)
 })
 
 // Shared "start reading from the top" path, mirroring the popup's Start Reading:
@@ -154,29 +159,6 @@ async function startReadingFromElement(el: HTMLElement) {
   }
   await startFromElement(settings.readAloud, el)
 }
-
-// Resume reading at a saved sentence index (F24). Mirrors the Start path.
-async function startReadingFromIndex(index: number) {
-  if (getState() !== 'idle') return
-  const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
-  if (!settings?.readAloud) return
-  showWidget()
-  if (settings.translation?.enabled) {
-    await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
-  }
-  await startFromIndex(settings.readAloud, index)
-}
-
-// Keep the chip's "~N min" estimate in sync with the configured speed.
-chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).then((s: Settings) => {
-  if (s?.readAloud?.speed) setAffordanceSpeed(s.readAloud.speed)
-}).catch(() => { })
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes['settings']) {
-    const speed = (changes['settings'].newValue as Settings)?.readAloud?.speed
-    if (speed) setAffordanceSpeed(speed)
-  }
-})
 
 // ── Bookmark delete tooltip ───────────────────────────────────────────────────
 
@@ -421,14 +403,9 @@ function protectFromSiteEvents(container: HTMLElement) {
 async function init() {
   initDictionary()
   initSelectionChip()
-  // Idle discoverability: "🎧 Listen" chip near the title + per-paragraph ▶.
-  // Only active while read-aloud is idle (toggled via the state-change handler).
-  // The chip becomes a "▶ Resume" when a saved position exists for this URL.
-  initReadAloudAffordances(
-    () => { void startReadingFromTop() },
-    (el) => { void startReadingFromElement(el) },
-    (index) => { void startReadingFromIndex(index) },
-  )
+  // Idle discoverability: per-paragraph ▶ handle. Only active while read-aloud
+  // is idle (toggled via the state-change handler).
+  initReadAloudAffordances((el) => { void startReadingFromElement(el) })
 
   // F25: on a soft (SPA) navigation the sentence ranges go stale — stop reading
   // cleanly and save the position so Resume works when the user returns. We do
@@ -461,7 +438,7 @@ async function init() {
   // It starts only when the user presses "Start Reading" with the toggle ON.
 }
 
-init()
+init().catch(() => { })
 
 chrome.runtime.onMessage.addListener(
   (msg: { type: string; payload?: unknown }, _sender, sendResponse) => {
