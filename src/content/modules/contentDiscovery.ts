@@ -1,5 +1,5 @@
 import { Readability } from '@mozilla/readability'
-import { CONTENT_BLOCK_SELECTORS, getContentRoot, getSiteProfile, getTitleElement } from './siteProfiles'
+import { CONTENT_BLOCK_SELECTORS, getContentRootCandidates, getSiteProfile, getTitleElement, type SiteProfile } from './siteProfiles'
 
 type ReadableArticle = {
   title: string
@@ -34,13 +34,115 @@ export function getElementContentText(el: HTMLElement): string {
 
 const CONTENT_BLOCK_QUERY = CONTENT_BLOCK_SELECTORS.join(', ')
 
+// Some sites (mostly custom Next.js/React blogs) render body paragraphs as a
+// plain `<div class="some-editorial-class">text</div>` instead of a semantic
+// `<p>` — e.g. fasterthannormal.co wraps every paragraph in `.editorial-p`.
+// None of CONTENT_BLOCK_SELECTORS match a bare div, so those paragraphs never
+// even become candidates. A div only stands in for a paragraph like this when
+// it's a genuine leaf: no nested block/container elements, just text and
+// inline markup (em/strong/a/...). Any div that fails this — a section
+// wrapper, a card, a list of paragraph-divs — still gets excluded, since its
+// job is layout, not prose.
+const NESTED_BLOCK_DISQUALIFIER_SELECTOR = [
+  'div', 'section', 'article', 'ul', 'ol', 'table',
+  'header', 'footer', 'nav', 'aside', 'figure', 'form',
+  'p', 'li', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'dt', 'dd', 'pre',
+].join(', ')
+
+function isLeafParagraphDiv(el: HTMLElement): boolean {
+  return el.tagName === 'DIV' && !el.querySelector(NESTED_BLOCK_DISQUALIFIER_SELECTOR)
+}
+
+const CANDIDATE_BLOCK_QUERY = [...CONTENT_BLOCK_SELECTORS, 'div'].join(', ')
+
 function getNestedContentBlockCount(el: HTMLElement): number {
   const ownCount = el.matches(CONTENT_BLOCK_QUERY) ? 1 : 0
   return ownCount + el.querySelectorAll(CONTENT_BLOCK_QUERY).length
 }
 
 function getCandidateContentBlocks(root: ParentNode): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>(CONTENT_BLOCK_QUERY)]
+  // Single combined query so results stay in document order — filtering divs
+  // down to leaf paragraphs afterward, rather than querying divs separately
+  // and concatenating, which would scramble the order callers rely on (e.g.
+  // the "first few elements" lead-position checks below).
+  return [...root.querySelectorAll<HTMLElement>(CANDIDATE_BLOCK_QUERY)].filter(el =>
+    el.tagName !== 'DIV' || isLeafParagraphDiv(el)
+  )
+}
+
+function scoreContentRootCandidate(candidate: HTMLElement, titleEl: HTMLElement | null): number {
+  const textLength = getElementContentText(candidate).length
+  const blockCount = getCandidateContentBlocks(candidate).length
+
+  let score = 0
+  score += Math.min(blockCount, 40) * 10
+  score += Math.min(textLength / 200, 80)
+
+  if (titleEl) {
+    if (candidate.contains(titleEl)) {
+      score += 300
+    } else {
+      const titleTop = window.scrollY + titleEl.getBoundingClientRect().top
+      const candidateTop = window.scrollY + candidate.getBoundingClientRect().top
+      const distance = Math.abs(candidateTop - titleTop)
+      score += Math.max(0, 120 - distance / 20)
+    }
+  }
+
+  return score
+}
+
+// Selector lists (contentRootSelectors) only work for markup patterns we
+// already know about. When none of them match — or match something that
+// isn't really the article (e.g. a `<main>` that also wraps a sidebar) — walk
+// up from the title itself and stop at the smallest ancestor that already
+// looks like it holds a real article: a handful of paragraph-shaped blocks
+// (leaf divs included, see isLeafParagraphDiv) and a meaningful amount of
+// text. This mirrors how a human would find "the article" from the headline
+// without needing to know the site's class names in advance. It's only a
+// fallback candidate, not an override — it still competes with the
+// selector-based candidates via scoreContentRootCandidate below, so a real
+// `[itemprop="articleBody"]` match still wins when one exists.
+const MIN_TITLE_CLIMB_BLOCK_COUNT = 3
+const MIN_TITLE_CLIMB_TEXT_LENGTH = 200
+const MAX_TITLE_CLIMB_DEPTH = 12
+
+function findContentRootByClimbingFromTitle(titleEl: HTMLElement | null): HTMLElement | null {
+  let node = titleEl?.parentElement ?? null
+
+  for (let depth = 0; node && node !== document.body && depth < MAX_TITLE_CLIMB_DEPTH; depth++, node = node.parentElement) {
+    if (node.closest('nav, header, footer, aside')) continue
+
+    const blockCount = getCandidateContentBlocks(node).length
+    const textLength = getElementContentText(node).length
+    if (blockCount >= MIN_TITLE_CLIMB_BLOCK_COUNT && textLength >= MIN_TITLE_CLIMB_TEXT_LENGTH) {
+      return node
+    }
+  }
+
+  return null
+}
+
+export function getContentRoot(profile: SiteProfile = getSiteProfile()): HTMLElement {
+  const titleEl = getTitleElement(profile)
+  const candidates = getContentRootCandidates(profile)
+  const climbed = findContentRootByClimbingFromTitle(titleEl)
+  if (climbed && !candidates.includes(climbed)) candidates.push(climbed)
+
+  if (candidates.length === 0) return climbed ?? document.body
+
+  let best = candidates[0]
+  let bestScore = Number.NEGATIVE_INFINITY
+
+  for (const candidate of candidates) {
+    const score = scoreContentRootCandidate(candidate, titleEl)
+    if (score > bestScore) {
+      best = candidate
+      bestScore = score
+    }
+  }
+
+  return best
 }
 
 // "Related/recommended articles" widgets are the most common way main-content
@@ -78,14 +180,6 @@ const NOISE_CONTAINER_SELECTOR = [
   '[class*="byline" i]', '[class*="dateline" i]', '[class*="timestamp" i]',
   '[data-component-name="byline"]', '[data-component-name="timestamp"]',
 ].join(', ')
-
-function getMinimumContentLength(el: HTMLElement): number {
-  if (el.matches('li, dt, dd')) return 6
-  if (el.matches('h2, h3, h4, h5, h6')) return 8
-  if (el.matches('blockquote, figcaption, time, address')) return 10
-  if (el.matches('div, span') && el.querySelector('time, address')) return 10
-  return 20
-}
 
 // Class/id names are useless on sites that build with CSS-in-JS or CSS
 // modules (React/Next.js apps — common on big news sites like the NYT or
@@ -133,7 +227,7 @@ function isMostlyLinkText(el: HTMLElement): boolean {
 
 function isVisibleContentElement(el: HTMLElement): boolean {
   const text = getElementContentText(el)
-  if (text.length < getMinimumContentLength(el)) return false
+  if (text.length === 0) return false
   if (el.closest('[data-cxt-translation]')) return false
   if (el.closest('nav, header, footer, aside')) return false
   if (el.closest(NOISE_CONTAINER_SELECTOR)) return false
@@ -298,7 +392,7 @@ export function getArticleLeadElements(): HTMLElement[] {
       if (contentBlockCount > 3 || text.length > 1500) break
 
       if (
-        text.length >= getMinimumContentLength(el) &&
+        text.length > 0 &&
         !el.getAttribute('data-cxt-translation') &&
         !el.closest('nav, header, footer, aside') &&
         !el.closest(NOISE_CONTAINER_SELECTOR) &&
@@ -317,31 +411,23 @@ export function getArticleLeadElements(): HTMLElement[] {
   return []
 }
 
-export function getContentParagraphs(readableArticleText = ''): HTMLElement[] {
+// Once getContentRoot() has scoped us to the real article container and
+// isVisibleContentElement has screened out structural noise (nav/header/
+// footer/aside, related-content widgets, byline/timestamp blocks, link-heavy
+// teaser cards), every remaining candidate block IS the article — there's no
+// need for a second opinion from Readability's separately-computed text, or
+// a "only the first few elements" position bypass for it. That extra gate
+// used to silently drop legitimate short blocks (headings, section dividers)
+// whenever Readability's own parse happened not to contain their exact text,
+// or they simply weren't among the first 3 candidates.
+export function getContentParagraphs(): HTMLElement[] {
   const profile = getSiteProfile()
   const root = getContentRoot(profile)
 
-  return getCandidateContentBlocks(root).filter((el, index) => {
-    if (!isVisibleContentElement(el)) return false
-
-    if (readableArticleText) {
-      const normalized = getElementContentText(el)
-      // The isLikelyArticleLead bypass exists for the case where Readability's
-      // own parse drops a genuine short lead/subtitle paragraph near the
-      // article's top. Without the `index <= 2` restriction (matching
-      // getArticleLeadElements' own cutoff), it would let ANY short,
-      // single-block blurb ANYWHERE on the page through unconditionally —
-      // including "related articles" teaser headings/blurbs deep in the page,
-      // which Readability correctly excludes but this bypass would readmit.
-      const looksLikeLead = index <= 2 && isLikelyArticleLead(el)
-      if (!looksLikeLead && !readableArticleText.includes(normalized)) return false
-    }
-
-    return true
-  })
+  return getCandidateContentBlocks(root).filter(el => isVisibleContentElement(el))
 }
 
-export function getContentElements(readableArticleText = ''): HTMLElement[] {
+export function getContentElements(): HTMLElement[] {
   const seen = new Set<HTMLElement>()
   const result: HTMLElement[] = []
   const add = (el: HTMLElement) => {
@@ -356,7 +442,7 @@ export function getContentElements(readableArticleText = ''): HTMLElement[] {
 
   for (const el of getTitleContextElements()) add(el)
   for (const el of getArticleLeadElements()) add(el)
-  for (const el of getContentParagraphs(readableArticleText)) add(el)
+  for (const el of getContentParagraphs()) add(el)
 
   return result
 }

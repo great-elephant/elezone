@@ -19,7 +19,7 @@
  * it surfaced on pages that aren't real articles, so it was removed.)
  */
 
-import { extractReadableArticle, getContentParagraphs } from './contentDiscovery'
+import { getContentParagraphs } from './contentDiscovery'
 
 type StartFromElement = (el: HTMLElement) => void
 
@@ -189,8 +189,7 @@ function onViewportChange() {
 // Recompute which elements count as content. Cheap enough to run when we
 // (re)enter idle; the hover listeners then just do WeakSet membership checks.
 function refreshContentSet() {
-  const readableText = extractReadableArticle()?.textContent ?? ''
-  const paras = getContentParagraphs(readableText)
+  const paras = getContentParagraphs()
   const set = new WeakSet<HTMLElement>()
   for (const el of paras) set.add(el)
   contentSet = set

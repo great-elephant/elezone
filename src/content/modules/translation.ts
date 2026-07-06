@@ -1,6 +1,5 @@
 import { buildSentencePlan } from './anchor'
 import {
-  extractReadableArticle,
   getArticleLeadElements,
   getContentParagraphs,
   getElementContentText,
@@ -12,7 +11,6 @@ let enabled = false
 let targetLang = 'en'
 let onDeviceTranslator: TranslatorInstance | null = null
 let observer: IntersectionObserver | null = null
-let articleText = '' // normalized Readability text content for filtering
 
 // ── On-device API (Chrome 138+ global `Translator`, not the removed window.ai) ──
 
@@ -241,9 +239,6 @@ export async function enable(tgt: string, mode: TranslationMode = 'paragraph', f
   const srcLang = document.documentElement.lang?.split('-')[0] || 'en'
   onDeviceTranslator = forceGoogle ? null : await initOnDevice(srcLang, tgt)
 
-  const article = extractReadableArticle()
-  if (article) articleText = article.textContent
-
   // Translate the page title immediately (not lazy)
   await injectTitleOverlay()
 
@@ -256,7 +251,7 @@ export async function enable(tgt: string, mode: TranslationMode = 'paragraph', f
     ;(mode === 'sentence' ? injectSentenceOverlay(el) : injectOverlay(el)).catch(() => {})
   }
 
-  const paragraphs = getContentParagraphs(articleText)
+  const paragraphs = getContentParagraphs()
   if (paragraphs.length === 0) return
 
   observer = new IntersectionObserver(entries => {
@@ -275,7 +270,6 @@ export async function enable(tgt: string, mode: TranslationMode = 'paragraph', f
 
 export function disable() {
   enabled = false
-  articleText = ''
   observer?.disconnect()
   observer = null
   onDeviceTranslator?.destroy()

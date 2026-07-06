@@ -174,8 +174,7 @@ async function beginSession(
 // start path (top / from-selection / from-element).
 function loadArticlePlan(): string {
   const lang = document.documentElement.lang || 'en'
-  const readableText = extractReadableArticle()?.textContent ?? ''
-  const plan = buildSentencePlan(getContentElements(readableText), lang)
+  const plan = buildSentencePlan(getContentElements(), lang)
   sentences = plan.map(p => p.text)
   sentenceRanges = plan.map(p => p.range)
   sentenceElements = plan.map(p => p.el)
