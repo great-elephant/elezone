@@ -14,14 +14,28 @@ const DICTIONARY_CSS = `
     background: #1a1a2e;
     border: 1px solid #3a3a6a;
     border-radius: 8px;
-    padding: 12px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     font-family: system-ui, sans-serif;
     color: #c0c0e0;
     width: 250px;
     display: flex;
     flex-direction: column;
+  }
+  .dict-header {
+    padding: 12px;
+    border-bottom: 1px solid #3a3a6a;
+    cursor: grab;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .dict-header.dragging { cursor: grabbing; }
+  .dict-content {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
     gap: 8px;
+    overflow-y: auto;
+    max-height: 60vh;
   }
   .word-header {
     font-weight: bold;
@@ -30,6 +44,7 @@ const DICTIONARY_CSS = `
     display: flex;
     align-items: center;
     gap: 6px;
+    width: 100%;
   }
   .speak-btn {
     background: none;
@@ -364,6 +379,9 @@ async function showPopover(
     popover.style.bottom = 'auto';
   }
 
+  const dragHeader = document.createElement('div')
+  dragHeader.className = 'dict-header'
+
   const header = document.createElement('div')
   header.className = 'word-header'
 
@@ -390,14 +408,21 @@ async function showPopover(
   phonetics.style.cssText = 'color:#8888aa; font-weight:normal; font-size:0.85em; margin-left:6px'
 
   header.append(wordSpan, speakBtn, phonetics)
+  dragHeader.appendChild(header)
+
+  const content = document.createElement('div')
+  content.className = 'dict-content'
 
   const loading = document.createElement('div')
   loading.className = 'loading'
   loading.textContent = 'Translating...'
 
-  popover.append(header, loading)
+  content.appendChild(loading)
+  popover.append(dragHeader, content)
   shadow.append(style, popover)
   document.body.appendChild(host)
+
+  setupDragHandler(popover, dragHeader)
 
   const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
   const targetLang = settings?.translation?.defaultTargetLanguage || 'en'
@@ -436,7 +461,7 @@ async function showPopover(
     const hint = document.createElement('div')
     hint.className = 'context-hint'
     hint.textContent = `💬 ${sentenceResult.text}`
-    popover.append(hint)
+    content.append(hint)
   }
 
   const input = document.createElement('input')
@@ -605,10 +630,17 @@ async function showPopover(
   }
 
   actions.append(cancelBtn, saveBtn)
-  popover.append(input)
-  if (sensesRow) popover.append(sensesRow)
-  popover.append(sourceBadge, deckRow, actions)
-  
+  content.append(input)
+  if (sensesRow) content.append(sensesRow)
+  content.append(sourceBadge, deckRow, actions)
+
+  const VIEWPORT_MARGIN = 10
+  const bounds = popover.getBoundingClientRect()
+  if (bounds.top < VIEWPORT_MARGIN) {
+    popover.style.top = `${VIEWPORT_MARGIN}px`
+    popover.style.bottom = 'auto'
+  }
+
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault()
@@ -616,4 +648,47 @@ async function showPopover(
     }
   })
   input.focus()
+}
+
+function setupDragHandler(popover: HTMLElement, header: HTMLElement) {
+  let isDragging = false
+  let offset = { x: 0, y: 0 }
+  let popoverWidth = 0
+  let popoverHeight = 0
+
+  const handleMouseMove = (e: MouseEvent) => {
+    if (!isDragging) return
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth
+    const scrollbarHeight = window.innerHeight - document.documentElement.clientHeight
+    const maxLeft = Math.floor(Math.max(0, (window.innerWidth - scrollbarWidth) - popoverWidth))
+    const maxTop = Math.floor(Math.max(0, (window.innerHeight - scrollbarHeight) - popoverHeight))
+    const newX = Math.round(Math.min(Math.max(e.clientX - offset.x, 0), maxLeft))
+    const newY = Math.round(Math.min(Math.max(e.clientY - offset.y, 0), maxTop))
+    popover.style.left = `${newX}px`
+    popover.style.top = `${newY}px`
+    popover.style.bottom = 'auto'
+  }
+
+  const handleMouseUp = () => {
+    isDragging = false
+    header.classList.remove('dragging')
+    document.removeEventListener('mousemove', handleMouseMove, { capture: true })
+    document.removeEventListener('mouseup', handleMouseUp, { capture: true })
+  }
+
+  header.addEventListener('mousedown', (e: MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return
+    e.preventDefault()
+    const rect = popover.getBoundingClientRect()
+    isDragging = true
+    offset = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    }
+    popoverWidth = rect.width
+    popoverHeight = rect.height
+    header.classList.add('dragging')
+    document.addEventListener('mousemove', handleMouseMove, { capture: true })
+    document.addEventListener('mouseup', handleMouseUp, { capture: true })
+  })
 }
