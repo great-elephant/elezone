@@ -230,10 +230,17 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   };
 
   const handleMouseMove = (e: MouseEvent) => {
-    if (isDragging) {
+    if (isDragging && popupRef.current) {
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      const scrollbarHeight = window.innerHeight - document.documentElement.clientHeight;
+      const rect = popupRef.current.getBoundingClientRect();
+      const maxX = Math.floor(Math.max(0, (window.innerWidth - scrollbarWidth) - rect.width));
+      const maxY = Math.floor(Math.max(0, (window.innerHeight - scrollbarHeight) - rect.height));
+      const newX = Math.round(Math.min(Math.max(e.clientX - dragStart.current.x, 0), maxX));
+      const newY = Math.round(Math.min(Math.max(e.clientY - dragStart.current.y, 0), maxY));
       setPosition({
-        x: e.clientX - dragStart.current.x,
-        y: e.clientY - dragStart.current.y
+        x: newX,
+        y: newY
       });
     }
   };

@@ -1314,11 +1314,21 @@ function makeDraggable(el: HTMLElement, handle: HTMLElement) {
     startX = e.clientX
     startY = e.clientY
 
+    const rect = el.getBoundingClientRect()
+    const elWidth = rect.width
+    const elHeight = rect.height
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth
+    const scrollbarHeight = window.innerHeight - document.documentElement.clientHeight
+    const availableWidth = window.innerWidth - scrollbarWidth
+    const availableHeight = window.innerHeight - scrollbarHeight
+    const maxRight = Math.max(0, availableWidth - elWidth)
+    const maxBottom = Math.max(0, availableHeight - elHeight)
+
     const onMove = (e: MouseEvent) => {
       const dx = e.clientX - startX
       const dy = e.clientY - startY
-      origRight = Math.max(0, origRight - dx)
-      origBottom = Math.max(0, origBottom - dy)
+      origRight = Math.max(0, Math.min(origRight - dx, maxRight))
+      origBottom = Math.max(0, Math.min(origBottom - dy, maxBottom))
       el.style.right = `${origRight}px`
       el.style.bottom = `${origBottom}px`
       startX = e.clientX
