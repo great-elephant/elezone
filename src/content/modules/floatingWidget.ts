@@ -545,8 +545,10 @@ function refreshFocusButton() {
 }
 
 function toggleFocusMode() {
-  setFocusMode(!isFocusMode())
+  const next = !isFocusMode()
+  setFocusMode(next)
   refreshFocusButton()
+  persistFocus(next)
 }
 
 // ── Learner controls (H29 shadowing, H31 repeat, H30 save) ────────────────────
@@ -916,6 +918,13 @@ function persistVolume(vol: number) {
   chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', payload: cachedSettings }).catch(() => { })
 }
 
+function persistFocus(enabled: boolean) {
+  const base = cachedSettings
+  if (!base) return
+  cachedSettings = { ...base, updatedAt: Date.now(), readAloud: { ...base.readAloud, focus: enabled } }
+  chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', payload: cachedSettings }).catch(() => { })
+}
+
 function setVolumeLive(vol: number) {
   curVolume = Math.max(0, Math.min(1, vol))
   refreshVolumeIcon()
@@ -1116,6 +1125,8 @@ export function showWidget() {
     cachedSettings = s
     curVolume = s?.readAloud?.volume ?? 1
     refreshVolumeIcon()
+    setFocusMode(s?.readAloud?.focus === true)
+    refreshFocusButton()
   }).catch(() => { })
 }
 
@@ -1142,7 +1153,8 @@ export function updateWidgetProgress(index: number, total: number) {
 }
 
 export function hideWidget() {
-  // Reset focus mode so the next session starts with the spotlight off (default).
+  // Clear the transient spotlight while the widget is torn down; the persisted
+  // focus setting (if on) is re-applied on next showWidget().
   setFocusMode(false)
   // Tears down the overflow popover (and any nested voice submenu), clearing
   // their document-level outside-click listeners along with voiceChip/

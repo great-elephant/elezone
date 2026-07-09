@@ -50,6 +50,9 @@ export interface ReadAloudSettings {
   // H29 — shadowing mode: insert an intentional silent gap between sentences so
   // the learner can repeat aloud. Persisted so the choice sticks across sessions.
   shadowing?: boolean
+  // H32 — focus/spotlight mode: dim the rest of the page and highlight the current
+  // sentence. Persisted so the choice sticks across sessions.
+  focus?: boolean
 }
 
 export interface TranslationSettings {
@@ -157,6 +160,7 @@ export const DEFAULT_SETTINGS: Settings = {
     voice: '',
     pitch: 1,
     volume: 1,
+    focus: false,
   },
   translation: {
     defaultTargetLanguage: 'vi',
