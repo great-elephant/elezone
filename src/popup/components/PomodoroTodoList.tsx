@@ -180,7 +180,7 @@ export function PomodoroTodoList({ tasks, doneTasks, dailyTasks, onTasksChange, 
                 });
                 if (added) onTasksChange(newTasks);
               }}
-              style={styles.clearBtn}
+              style={styles.addAllBtn}
               title="Add all to Todo"
             >
               Add All
@@ -339,6 +339,16 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'none',
     border: 'none',
     color: '#ef4444',
+    fontSize: '10px',
+    cursor: 'pointer',
+    padding: '2px 6px',
+    fontWeight: 'bold',
+    marginLeft: 'auto',
+  },
+  addAllBtn: {
+    background: 'none',
+    border: 'none',
+    color: '#4f6ef7',
     fontSize: '10px',
     cursor: 'pointer',
     padding: '2px 6px',
