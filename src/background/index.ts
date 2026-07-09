@@ -1311,9 +1311,10 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
     }
     case 'SPEAK_TEXT': {
       // Speak arbitrary text via chrome.tts using the same readAloud settings +
-      // resolved voice as the page reader (D17). Used by the OCR popup so its
-      // voice/speed matches the page read-aloud. Speaking here (not a page
-      // session) does not touch activeSession.
+      // resolved voice as the page reader (D17). Used by the OCR popup and
+      // dictionary so voice/speed matches the page read-aloud. If a mini-player
+      // session is active, pauses it, speaks the text, then resumes automatically
+      // when the utterance completes.
       const payload = msg.payload as { text: string, lang?: string } | string
       const text = typeof payload === 'string' ? payload : payload.text
       const lang = typeof payload === 'string' ? undefined : payload.lang
@@ -1322,8 +1323,15 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       const settings = await getSettings()
       if (!settings?.readAloud) return { ok: false }
 
+      const wasReading = activeSession?.state === 'playing'
+      if (wasReading && activeSession) {
+        activeSession.state = 'paused'
+        activeSession.suppressStopUntil = Date.now() + 500
+        await broadcastReadAloudState(activeSession.tabId, 'paused', activeSession.currentIndex)
+      }
+
       const resolvedVoice = await resolveVoiceForSettings(settings.readAloud, lang)
-      chrome.tts.stop()
+      const token = activeSession?.token
       chrome.tts.speak(text, {
         enqueue: false,
         pitch: settings.readAloud.pitch,
@@ -1331,6 +1339,16 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
         lang,
         voiceName: resolvedVoice,
         volume: settings.readAloud.volume,
+        onEvent: (event: chrome.tts.TtsEvent) => {
+          if (['end', 'interrupted', 'cancelled', 'error'].includes(event.type)) {
+            if (wasReading && activeSession && token === activeSession.token) {
+              activeSession.state = 'playing'
+              activeSession.suppressStopUntil = Date.now() + 500
+              void broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
+              void speakCurrentSentence(token)
+            }
+          }
+        }
       })
       return { ok: true }
     }
