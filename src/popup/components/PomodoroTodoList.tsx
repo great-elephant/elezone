@@ -29,6 +29,14 @@ interface Props {
   onStartFocus?: (id: string) => void;
 }
 
+const TASK_ITEM_HEIGHT = 36;
+const TASK_ITEM_GAP = 6;
+const MAX_VISIBLE_TASKS = 4;
+const MAX_VISIBLE_DONE_TASKS = MAX_VISIBLE_TASKS + 1;
+const taskListMaxHeight = (visibleTasks: number) => visibleTasks * TASK_ITEM_HEIGHT + (visibleTasks - 1) * TASK_ITEM_GAP;
+const TASK_LIST_MAX_HEIGHT = taskListMaxHeight(MAX_VISIBLE_TASKS);
+const DONE_LIST_MAX_HEIGHT = taskListMaxHeight(MAX_VISIBLE_DONE_TASKS);
+
 function formatTime(seconds: number): string {
   if (!seconds || seconds < 60) return '<1m';
   const h = Math.floor(seconds / 3600);
@@ -200,7 +208,7 @@ export function PomodoroTodoList({ tasks, doneTasks, dailyTasks, onTasksChange, 
           className="pomodoro-task-list"
           style={{
             ...styles.taskList,
-            maxHeight: activeTab === 'done' ? '162px' : '120px',
+            maxHeight: `${activeTab === 'done' ? DONE_LIST_MAX_HEIGHT : TASK_LIST_MAX_HEIGHT}px`,
           }}
         >
           {activeTab === 'todo' || activeTab === 'daily' ? (
