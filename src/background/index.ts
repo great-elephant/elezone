@@ -965,37 +965,48 @@ async function startReadAloudSession(
 async function controlReadAloud(
   sender: chrome.runtime.MessageSender,
   payload: unknown,
-): Promise<{ ok: boolean }> {
+): Promise<{ ok: boolean; wasPlaying?: boolean }> {
   const payloadObj = payload as { action?: string, tabId?: number } | undefined;
   const tabId = payloadObj?.tabId || sender.tab?.id;
   const action = payloadObj?.action;
   if (!tabId || activeSession?.tabId !== tabId || !action) return { ok: false }
 
-  if (action === 'pause' && activeSession.state === 'playing') {
-    activeSession.state = 'paused'
-    // Pausing during the intentional gap: cancel the pending timer but keep the
-    // inGap flag so resume re-arms the gap rather than jumping straight in.
-    if (activeSession.inGap) clearShadowingGap()
-    // See the `suppressStopUntil` field doc: some TTS engines fire an
-    // 'interrupted'/'cancelled' event as a side effect of pause() itself.
-    activeSession.suppressStopUntil = Date.now() + 500
-    chrome.tts.pause()
-    await broadcastReadAloudState(tabId, 'paused', activeSession.currentIndex)
-    return { ok: true }
+  if (action === 'pause') {
+    const wasPlaying = activeSession.state === 'playing'
+    // Always re-arm suppression, even if already paused, so an external
+    // speak call (OCR's window.speechSynthesis, or anything else that steals
+    // the shared TTS slot) doesn't tear the session down via a same-utterance
+    // interrupted/cancelled event. Extended window (3s) to cover OCR speech
+    // duration + message round-trip + resume's own grace period.
+    activeSession.suppressStopUntil = Date.now() + 3000
+    if (wasPlaying) {
+      activeSession.state = 'paused'
+      // Pausing during the intentional gap: cancel the pending timer but keep the
+      // inGap flag so resume re-arms the gap rather than jumping straight in.
+      if (activeSession.inGap) clearShadowingGap()
+      // Note: Don't call chrome.tts.pause() directly; it can fire interrupt events
+      // that might not be properly suppressed. Just changing state and broadcasting
+      // is enough; suppressStopUntil prevents session teardown during coordination.
+      await broadcastReadAloudState(tabId, 'paused', activeSession.currentIndex)
+    }
+    return { ok: true, wasPlaying }
   }
 
   if (action === 'resume' && activeSession.state === 'paused') {
     activeSession.state = 'playing'
     // See the `suppressStopUntil` field doc: some TTS engines fire an
     // 'interrupted'/'cancelled' event as a side effect of resume() itself.
-    activeSession.suppressStopUntil = Date.now() + 500
+    // Extended window (3s) for safety, consistent with pause grace period.
+    activeSession.suppressStopUntil = Date.now() + 3000
     if (activeSession.inGap) {
       // We were paused mid-gap; re-schedule the remaining gap using the sentence
       // we're about to speak (its length is a good proxy for the just-finished one).
       const idx = activeSession.currentIndex
       scheduleShadowingGap(activeSession.token, activeSession.sentences[idx] ?? '')
     } else {
-      chrome.tts.resume()
+      // Restart the current sentence rather than resuming (resume may not work reliably).
+      // This re-speaks the current sentence from its start, matching the pattern from 533bffd.
+      void speakCurrentSentence(activeSession.token)
     }
     await broadcastReadAloudState(tabId, 'playing', activeSession.currentIndex)
     return { ok: true }
@@ -1324,10 +1335,12 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       if (!settings?.readAloud) return { ok: false }
 
       const wasReading = activeSession?.state === 'playing'
-      if (wasReading && activeSession) {
-        activeSession.state = 'paused'
-        activeSession.suppressStopUntil = Date.now() + 500
-        await broadcastReadAloudState(activeSession.tabId, 'paused', activeSession.currentIndex)
+      if (activeSession) {
+        activeSession.suppressStopUntil = Date.now() + 3000
+        if (wasReading) {
+          activeSession.state = 'paused'
+          await broadcastReadAloudState(activeSession.tabId, 'paused', activeSession.currentIndex)
+        }
       }
 
       const resolvedVoice = await resolveVoiceForSettings(settings.readAloud, lang)

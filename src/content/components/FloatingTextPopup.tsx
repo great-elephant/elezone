@@ -54,6 +54,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   const textRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef({ x: 0, y: 0 });
   const translateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pausedMiniPlayerRef = useRef(false);
 
   // Shared translate call used by the initial effect, the debounced input
   // handler, and the Retry affordance — so a failed attempt can be re-run.
@@ -103,21 +104,22 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     }, 1000);
   };
 
-  // NOTE (D17, deferred): This intentionally still uses window.speechSynthesis
-  // rather than routing through the background SPEAK_TEXT / chrome.tts path.
-  // The background chrome.tts engine is a single shared resource also used by
-  // the page read-aloud session; speaking OCR text through it would call
-  // chrome.tts.stop() and tear down an in-progress mini-player session. It also
-  // has no per-utterance onend callback back to this component, so the play/stop
-  // toggle here would be unreliable. To keep voice/speed consistent we still
-  // resolve rate/pitch/volume/voice from settings.readAloud below (mirroring the
-  // background resolver). The background SPEAK_TEXT handler was upgraded to use
-  // the same voice resolver so it's ready if this is revisited with a dedicated
-  // stop message + completion signalling.
+  // NOTE (D17): This uses window.speechSynthesis directly instead of routing
+  // through chrome.tts to avoid conflicts with the mini-player's backend
+  // session (both APIs share the same underlying TTS engine slot on Chromium).
+  // To prevent interruption: pause the mini-player before speaking, resume when
+  // the OCR utterance completes, using the background's CONTROL_READ_ALOUD pause/resume
+  // actions. To keep voice/speed consistent we resolve rate/pitch/volume/voice
+  // from settings.readAloud (mirroring the background resolver).
   const handleReadAloud = async () => {
     if (isPlaying) {
       window.speechSynthesis.cancel();
       setIsPlaying(false);
+      // Resume mini-player if it was playing when we started OCR speech
+      if (pausedMiniPlayerRef.current) {
+        chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
+        pausedMiniPlayerRef.current = false
+      }
       return;
     }
 
@@ -125,6 +127,10 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     if (!currentText) return;
 
     try {
+      // Pause mini-player before speaking OCR text, and remember if it was playing
+      const pauseResult = await chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'pause' } })
+      pausedMiniPlayerRef.current = pauseResult?.wasPlaying === true
+
       const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
       const utterance = new SpeechSynthesisUtterance(currentText);
       utterance.lang = targetLang;
@@ -133,7 +139,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
         utterance.rate = settings.readAloud.speed || 1;
         utterance.pitch = settings.readAloud.pitch || 1;
         utterance.volume = settings.readAloud.volume || 1;
-        
+
         let resolvedVoiceName = settings.readAloud.voice || undefined;
         if (settings.readAloud.languageVoices) {
           const exactMatch = settings.readAloud.languageVoices[targetLang];
@@ -154,13 +160,32 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
           if (voice) utterance.voice = voice;
         }
       }
-      utterance.onend = () => setIsPlaying(false);
-      utterance.onerror = () => setIsPlaying(false);
+      utterance.onend = () => {
+        setIsPlaying(false);
+        // Resume mini-player when OCR speech completes
+        if (pausedMiniPlayerRef.current) {
+          chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
+          pausedMiniPlayerRef.current = false
+        }
+      };
+      utterance.onerror = () => {
+        setIsPlaying(false);
+        // Resume mini-player if OCR speech errors
+        if (pausedMiniPlayerRef.current) {
+          chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
+          pausedMiniPlayerRef.current = false
+        }
+      };
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utterance);
       setIsPlaying(true);
     } catch (err) {
       console.error('Failed to read aloud', err);
+      // Resume mini-player on exception
+      if (pausedMiniPlayerRef.current) {
+        chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
+        pausedMiniPlayerRef.current = false
+      }
     }
   };
 
