@@ -90,10 +90,10 @@ export function SortableTaskItem({ task, onDelete, onComplete, onEdit, onStartFo
           />
         ) : (
           <>
-            <span 
-              style={styles.taskText} 
-              onClick={() => setIsEditing(true)} 
-              title="Click to edit"
+            <span
+              style={styles.taskText}
+              onClick={() => setIsEditing(true)}
+              title={`${task.text}\n(Click to edit)`}
             >
               {task.text}
             </span>
