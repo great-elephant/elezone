@@ -989,9 +989,12 @@ async function controlReadAloud(
       // Pausing during the intentional gap: cancel the pending timer but keep the
       // inGap flag so resume re-arms the gap rather than jumping straight in.
       if (activeSession.inGap) clearShadowingGap()
-      // Note: Don't call chrome.tts.pause() directly; it can fire interrupt events
-      // that might not be properly suppressed. Just changing state and broadcasting
-      // is enough; suppressStopUntil prevents session teardown during coordination.
+      // Actually pause the audio so it stops mid-sentence instead of playing on
+      // to the end. Any interrupted/cancelled event this triggers is absorbed by
+      // suppressStopUntil above. Resume doesn't call chrome.tts.resume() (see
+      // below) — it restarts the sentence via speakCurrentSentence(), which works
+      // regardless of whether the previous utterance was paused or not.
+      chrome.tts.pause()
       await broadcastReadAloudState(tabId, 'paused', activeSession.currentIndex)
     }
     return { ok: true, wasPlaying }
@@ -1011,6 +1014,12 @@ async function controlReadAloud(
     } else {
       // Restart the current sentence rather than resuming (resume may not work reliably).
       // This re-speaks the current sentence from its start, matching the pattern from 533bffd.
+      // chrome.tts.pause() leaves the engine in a paused state that a plain speak()
+      // call doesn't reliably break out of (some engines silently drop it, which
+      // trips the lastError check in speakCurrentSentence and tears the session
+      // down) — stop() first to clear that state; any interrupted/cancelled event
+      // it triggers is absorbed by suppressStopUntil above.
+      chrome.tts.stop()
       void speakCurrentSentence(activeSession.token)
     }
     await broadcastReadAloudState(tabId, 'playing', activeSession.currentIndex)
