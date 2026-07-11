@@ -254,6 +254,27 @@ async function openOcrWindow(tab: chrome.tabs.Tab) {
   }
 }
 
+// If read-aloud is already running on `tab` (playing OR paused), stop it.
+// Otherwise kick off a fresh session exactly like the popup's "Start Reading".
+// Shared by the Alt+R shortcut and the "Listen" context menu item.
+async function toggleReadAloudForTab(tab: chrome.tabs.Tab) {
+  if (!tab?.id) return
+  const isActive = activeSession?.tabId === tab.id
+    || (readAloudStateByTab.get(tab.id) ?? 'idle') !== 'idle'
+  if (isActive) {
+    if (activeSession?.tabId === tab.id) {
+      await stopActiveSession()
+    } else {
+      // No live TTS session here, but the tab still thinks it's reading —
+      // tell it to reset so its mini-player/highlights tear down.
+      readAloudStateByTab.delete(tab.id)
+      chrome.tabs.sendMessage(tab.id, { type: 'STOP_READ_ALOUD' }).catch(() => { })
+    }
+  } else {
+    chrome.tabs.sendMessage(tab.id, { type: 'START_READ_ALOUD' }).catch(() => { })
+  }
+}
+
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === 'play_pause' && activeSession) {
     if (activeSession.state === 'playing') {
@@ -276,24 +297,7 @@ chrome.commands.onCommand.addListener(async (command) => {
     if (tabs[0]) await startOcr(tabs[0])
   } else if (command === 'toggle_read_aloud') {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
-    const tab = tabs[0]
-    if (!tab?.id) return
-    // If read-aloud is already running on this tab (playing OR paused), stop it.
-    // Otherwise kick off a fresh session exactly like the popup's "Start Reading".
-    const isActive = activeSession?.tabId === tab.id
-      || (readAloudStateByTab.get(tab.id) ?? 'idle') !== 'idle'
-    if (isActive) {
-      if (activeSession?.tabId === tab.id) {
-        await stopActiveSession()
-      } else {
-        // No live TTS session here, but the tab still thinks it's reading —
-        // tell it to reset so its mini-player/highlights tear down.
-        readAloudStateByTab.delete(tab.id)
-        chrome.tabs.sendMessage(tab.id, { type: 'STOP_READ_ALOUD' }).catch(() => { })
-      }
-    } else {
-      chrome.tabs.sendMessage(tab.id, { type: 'START_READ_ALOUD' }).catch(() => { })
-    }
+    if (tabs[0]) await toggleReadAloudForTab(tabs[0])
   }
 })
 
@@ -499,6 +503,7 @@ async function setupContextMenus() {
 
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: 'ocr', title: `Image to text(Alt + O) [${displayLang}]`, contexts: ['page', 'image', 'selection'] })
+    chrome.contextMenus.create({ id: 'listen', title: 'Listen (Alt + R)', contexts: ['page', 'selection'] })
     chrome.contextMenus.create({ id: 'read-from-here', title: 'Read from this sentence', contexts: ['selection'] })
     for (const color of order) {
       chrome.contextMenus.create({
@@ -1145,6 +1150,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
   if (info.menuItemId === 'ocr') {
     await startOcr(tab)
+    return
+  }
+
+  if (info.menuItemId === 'listen') {
+    await toggleReadAloudForTab(tab)
     return
   }
 
