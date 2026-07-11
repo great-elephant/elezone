@@ -15,29 +15,37 @@ const CHIP_CSS = `
   .chip {
     position: fixed;
     z-index: 2147483647;
+    width: 34px;
+    height: 34px;
     background: #1a1a2e;
     border: 1px solid #3a3a6a;
     border-radius: 8px;
-    padding: 5px 10px;
     box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-    font-family: system-ui, sans-serif;
-    font-size: 13px;
-    font-weight: 600;
-    color: #4ade80;
     cursor: pointer;
     user-select: none;
     display: flex;
     align-items: center;
-    gap: 5px;
-    white-space: nowrap;
+    justify-content: center;
+    transition: border-color 0.15s ease, background 0.15s ease;
   }
   .chip:hover {
     border-color: #4ade80;
     background: #222244;
   }
+  .chip:hover img {
+    transform: scale(1.1);
+  }
   .chip:focus-visible {
     outline: 2px solid #4ade80;
     outline-offset: 2px;
+  }
+  .chip img {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+    display: block;
+    pointer-events: none;
+    transition: transform 0.1s ease;
   }
 `
 
@@ -78,7 +86,7 @@ const TIP_CSS = `
   }
 `
 
-const CHIP_WIDTH = 80 // approximate width for clamping
+const CHIP_WIDTH = 34 // approximate width for clamping
 const CHIP_MARGIN = 8
 
 function removeChip() {
@@ -124,7 +132,10 @@ function showChip(rect: DOMRect) {
 
   const chip = document.createElement('div')
   chip.className = 'chip'
-  chip.innerHTML = '<span>＋</span><span>Save</span>'
+  const logo = document.createElement('img')
+  logo.src = chrome.runtime.getURL('icons/logo.png')
+  logo.alt = ''
+  chip.appendChild(logo)
   chip.setAttribute('role', 'button')
   chip.title = 'Save selection'
   chip.setAttribute('aria-label', 'Save selection')
