@@ -405,10 +405,10 @@ async function showPopover(
 
   const phonetics = document.createElement('span')
   phonetics.className = 'phonetics'
-  phonetics.style.cssText = 'color:#8888aa; font-weight:normal; font-size:0.85em; margin-left:6px'
+  phonetics.style.cssText = 'display:block; color:#8888aa; font-weight:normal; font-size:0.85em; margin-top:2px'
 
-  header.append(wordSpan, speakBtn, phonetics)
-  dragHeader.appendChild(header)
+  header.append(wordSpan, speakBtn)
+  dragHeader.append(header, phonetics)
 
   const content = document.createElement('div')
   content.className = 'dict-content'
