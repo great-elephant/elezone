@@ -1,8 +1,7 @@
 import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint } from './modules/anchor'
-import { start, startFrom, startFromElement, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo } from './modules/readAloud'
+import { start, startFrom, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo } from './modules/readAloud'
 import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
-import { initReadAloudAffordances, setEnabled as setAffordancesEnabled } from './modules/readAloudAffordances'
 import { installSpaNavigationGuard } from './modules/readAloudSpaGuard'
 import { savePosition } from './modules/readAloudPosition'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
@@ -96,17 +95,12 @@ setOnStateChange(newState => {
     // Tear down the reading marker + focus spotlight hosts when reading stops.
     destroyReadingOverlays()
     // A natural finish shows the "Finished" card (F22); a user stop just hides.
-    // Reading finished/stopped — bring the idle ▶ paragraph handle back.
-    setAffordancesEnabled(true)
     if (finished) {
       showFinishedCard()
     }
   } else {
     // A new session started — dismiss any leftover Finished card.
     hideFinishedCard()
-    // Reading is active — hide the idle affordance so it doesn't overlap the
-    // mini-player or the click-to-define flow.
-    setAffordancesEnabled(false)
     const { index, total } = getProgress()
     updateWidgetProgress(index, total)
     const { voice, lang } = getVoiceInfo()
@@ -146,18 +140,6 @@ async function startReadingFromTop() {
     await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
   }
   await start(settings.readAloud)
-}
-
-// Same as above but starts at a specific content paragraph (the ▶ handle).
-async function startReadingFromElement(el: HTMLElement) {
-  if (getState() !== 'idle') return
-  const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
-  if (!settings?.readAloud) return
-  showWidget()
-  if (settings.translation?.enabled) {
-    await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
-  }
-  await startFromElement(settings.readAloud, el)
 }
 
 // ── Bookmark delete tooltip ───────────────────────────────────────────────────
@@ -403,9 +385,6 @@ function protectFromSiteEvents(container: HTMLElement) {
 async function init() {
   initDictionary()
   initSelectionChip()
-  // Idle discoverability: per-paragraph ▶ handle. Only active while read-aloud
-  // is idle (toggled via the state-change handler).
-  initReadAloudAffordances((el) => { void startReadingFromElement(el) })
 
   // F25: on a soft (SPA) navigation the sentence ranges go stale — stop reading
   // cleanly and save the position so Resume works when the user returns. We do

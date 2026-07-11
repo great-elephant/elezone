@@ -256,39 +256,6 @@ export async function startFrom(
   await beginSession(settings, currentIndex, lang)
 }
 
-// Find the first planned sentence whose range starts inside `el`. Used by the
-// paragraph "▶ Read from here" affordance so we start exactly at the paragraph
-// the user pointed at, regardless of where its text falls in the plan.
-function findElementSentenceIndex(el: HTMLElement): number {
-  for (let i = 0; i < sentenceRanges.length; i++) {
-    const r = sentenceRanges[i]
-    const container = r?.startContainer
-    if (!container || container.nodeType === Node.DOCUMENT_NODE) continue
-    const node = container.nodeType === Node.TEXT_NODE ? container.parentElement : (container as Element)
-    if (node && el.contains(node)) return i
-  }
-  return -1
-}
-
-/**
- * Start reading from a specific content element (paragraph/heading). Builds the
- * article plan, locates the sentence that begins inside `el`, and starts there.
- * Falls back to the article top when the element can't be matched to a sentence.
- */
-export async function startFromElement(
-  settings: ReadAloudSettings,
-  el: HTMLElement,
-) {
-  if (state !== 'idle') return
-
-  const lang = loadArticlePlan()
-  if (sentences.length === 0) return
-
-  const matched = findElementSentenceIndex(el)
-  currentIndex = matched >= 0 ? matched : 0
-  await beginSession(settings, currentIndex, lang)
-}
-
 // Sends a CONTROL_READ_ALOUD action and, if the background reports no matching
 // session (torn down by a race — e.g. a spurious TTS 'interrupted' event racing
 // a manual pause/resume — or a tabId mismatch), resyncs local state back to
