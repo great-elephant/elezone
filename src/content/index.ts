@@ -490,9 +490,17 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
 
     case 'TOGGLE_TRANSLATION': {
       const { enabled } = msg.payload as { enabled: boolean }
-      // Turning OFF stops translation immediately; turning ON just saves the
-      // preference — translation will start on the next "Start Reading" press.
-      if (!enabled) disableTranslation()
+      // Applies immediately to the current page, independent of Read Aloud.
+      if (enabled) {
+        const settings2: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+        await enableTranslation(
+          settings2.translation.defaultTargetLanguage,
+          settings2.translation.mode,
+          settings2.translation.asideForceGoogle ?? true,
+        )
+      } else {
+        disableTranslation()
+      }
       return { ok: true }
     }
 
