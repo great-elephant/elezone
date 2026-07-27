@@ -11,6 +11,11 @@ let enabled = false
 let targetLang = 'en'
 let onDeviceTranslator: TranslatorInstance | null = null
 let observer: IntersectionObserver | null = null
+// Bumped on every enable()/disable() so a superseded enable() call — e.g. the
+// popup's Translate toggle flipped on/off again before the first call's
+// on-device translator finished initializing — can tell it's stale and bail
+// out instead of clobbering onDeviceTranslator/observer set up by a later call.
+let generation = 0
 
 // ── On-device API (Chrome 138+ global `Translator`, not the removed window.ai) ──
 
@@ -235,12 +240,20 @@ export async function enable(tgt: string, mode: TranslationMode = 'paragraph', f
   }
   enabled = true
   targetLang = tgt
+  const myGeneration = ++generation
 
   const srcLang = document.documentElement.lang?.split('-')[0] || 'en'
-  onDeviceTranslator = forceGoogle ? null : await initOnDevice(srcLang, tgt)
+  const translator = forceGoogle ? null : await initOnDevice(srcLang, tgt)
+  if (myGeneration !== generation) {
+    // Superseded by a later enable()/disable() while we awaited on-device init.
+    translator?.destroy()
+    return
+  }
+  onDeviceTranslator = translator
 
   // Translate the page title immediately (not lazy)
   await injectTitleOverlay()
+  if (myGeneration !== generation) return
 
   for (const el of getTitleContextElements()) {
     ;(mode === 'sentence' ? injectSentenceOverlay(el) : injectOverlay(el)).catch(() => {})
@@ -270,6 +283,7 @@ export async function enable(tgt: string, mode: TranslationMode = 'paragraph', f
 
 export function disable() {
   enabled = false
+  generation++
   observer?.disconnect()
   observer = null
   onDeviceTranslator?.destroy()

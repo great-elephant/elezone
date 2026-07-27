@@ -55,11 +55,16 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   const dragStart = useRef({ x: 0, y: 0 });
   const translateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pausedMiniPlayerRef = useRef(false);
+  // Guards against out-of-order responses: if the text changes again (new edit,
+  // or Retry) before an in-flight translate() resolves, a later request's result
+  // could otherwise be overwritten by an earlier, slower one finishing after it.
+  const translateRequestIdRef = useRef(0);
 
   // Shared translate call used by the initial effect, the debounced input
   // handler, and the Retry affordance — so a failed attempt can be re-run.
   const runTranslation = useCallback((rawText: string) => {
     const currentText = rawText.trim();
+    const requestId = ++translateRequestIdRef.current;
     if (!currentText) {
       setTranslatedText('');
       return;
@@ -70,8 +75,12 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
         const tgtLang = settings?.translation?.defaultTargetLanguage || 'en';
         return translate(currentText, tgtLang);
       })
-      .then(res => setTranslatedText(res.text))
+      .then(res => {
+        if (requestId !== translateRequestIdRef.current) return; // superseded
+        setTranslatedText(res.text);
+      })
       .catch(err => {
+        if (requestId !== translateRequestIdRef.current) return; // superseded
         console.error('Translation error:', err);
         setTranslatedText('⚠ Translation failed');
       });
@@ -188,6 +197,21 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
       }
     }
   };
+
+  // Closing this popup (or starting a new OCR session, which unmounts and
+  // remounts it) while OCR read-aloud is speaking otherwise leaves the
+  // utterance running with nothing left to stop it, and — worse — leaves the
+  // mini-player paused forever, since resuming it only happens in onend/
+  // onerror/the toggle-off click, none of which fire on unmount.
+  useEffect(() => {
+    return () => {
+      window.speechSynthesis.cancel();
+      if (pausedMiniPlayerRef.current) {
+        chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
+        pausedMiniPlayerRef.current = false;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {

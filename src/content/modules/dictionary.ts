@@ -424,7 +424,7 @@ async function showPopover(
 
   setupDragHandler(popover, dragHeader)
 
-  const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+  const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).catch(() => null)
   const targetLang = settings?.translation?.defaultTargetLanguage || 'en'
 
   const hasContext = !!(context?.prefix || context?.suffix)
@@ -452,8 +452,11 @@ async function showPopover(
   loading.remove()
 
   if (wordResult?.phonetics) {
-    const span = shadow?.querySelector('.phonetics') as HTMLElement
-    if (span) span.textContent = wordResult.phonetics
+    // Write into this call's own element, not the shared module-level `shadow` —
+    // a rapid re-selection can replace the popover (and reassign `shadow`)
+    // before this response arrives, which would otherwise write stale data
+    // into the NEW popover instead of the one that requested it.
+    phonetics.textContent = wordResult.phonetics
   }
 
   // Context hint — shown above the input when a sentence translation is available
@@ -639,6 +642,12 @@ async function showPopover(
   if (bounds.top < VIEWPORT_MARGIN) {
     popover.style.top = `${VIEWPORT_MARGIN}px`
     popover.style.bottom = 'auto'
+  } else if (bounds.bottom > window.innerHeight - VIEWPORT_MARGIN) {
+    // Mirrors the top clamp above — the "below selection" placement is chosen
+    // from an estimated height before content (senses chips, context hint, deck
+    // row) is filled in, so the real rendered box can still overflow the bottom.
+    popover.style.bottom = `${VIEWPORT_MARGIN}px`
+    popover.style.top = 'auto'
   }
 
   input.addEventListener('keydown', (e) => {

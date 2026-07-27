@@ -218,6 +218,11 @@ export function applyHighlight(bookmark: SavedItem): boolean {
   const range = findNthOccurrence(bookmark.text, bookmark.occurrenceIndex)
   if (!range) return false
 
+  // Re-applying for a bookmark that's already highlighted (e.g. REANCHOR firing
+  // more than once for the same URL on SPA soft navigation) must not leave the
+  // previous Range registered in CSS.highlights forever — Map.set below would
+  // silently orphan it otherwise, leaking a reference to (possibly detached) DOM.
+  removeHighlight(bookmark.id)
   bookmarkRanges.set(bookmark.id, range)
 
   const key = `cxt-${bookmark.color}`
