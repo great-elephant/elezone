@@ -831,7 +831,12 @@ function BreathingRing({ state, settings }: { state: PomodoroState, settings: Po
     if (h2 > 0) activePhases.push({ type: 'hold2', duration: h2, color: '#c084fc' });
 
     const numSegments = activePhases.length;
-    if (numSegments === 0) return;
+    if (numSegments === 0) {
+      // All breathing phases are disabled (0s) — clear any stale progress from a
+      // previous cycle instead of leaving the last-drawn segments frozen on screen.
+      setProgress({ currentPhaseIdx: 0, phaseProgress: 0, activePhases: [] });
+      return;
+    }
 
     function loop() {
       const elapsed = (Date.now() - state.breathStartTime!) / 1000;
