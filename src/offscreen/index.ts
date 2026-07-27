@@ -14,6 +14,7 @@ let timerInterval: number | null = null;
 let animationInterval: number | null = null;
 let breathStartTime = 0;
 let lastCycleTime = 0;
+let pausedAt = 0;
 
 // Audio context for chime
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -402,12 +403,17 @@ function tick() {
   }
 }
 
-function startTimer() {
+function startTimer(resumeBreath = false) {
   if (timerInterval) clearInterval(timerInterval);
   timerInterval = window.setInterval(tick, 1000);
 
   if (animationInterval) clearInterval(animationInterval);
-  breathStartTime = Date.now();
+  // On a resume, breathStartTime has already been shifted forward by the paused
+  // duration (see the 'resume' command) so the cycle continues from where it left
+  // off instead of jumping back to the start of inhale.
+  if (!resumeBreath || !breathStartTime) {
+    breathStartTime = Date.now();
+  }
   state.breathStartTime = breathStartTime;
   lastCycleTime = 0;
   animationInterval = window.setInterval(animateIcon, 50);
@@ -482,17 +488,25 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
         break;
       case 'pause':
         state.status = 'paused';
+        pausedAt = Date.now();
         stopTimer();
         break;
       case 'resume':
         if (state.phase !== 'idle' && state.timeRemaining > 0) {
           state.status = 'running';
-          startTimer();
+          if (pausedAt && breathStartTime) {
+            // Shift breathStartTime forward by however long we were paused so the
+            // breathing cycle resumes at the same point instead of restarting.
+            breathStartTime += Date.now() - pausedAt;
+          }
+          pausedAt = 0;
+          startTimer(true);
         }
         break;
       case 'stop':
         state.status = 'stopped';
         state.phase = 'idle';
+        pausedAt = 0;
         stopTimer();
         chrome.runtime.sendMessage({ type: 'UPDATE_ACTION_BADGE', payload: { text: '' } });
         break;
