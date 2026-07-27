@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { SavedItem, BOOKMARK_COLORS, Settings, StudyMode } from '../shared/types'
+import { updateSrsMetrics } from '../shared/library'
 
 interface StudyUIProps {
   items: SavedItem[]
@@ -130,9 +131,20 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   }
 
   function generateMcOptions(item: SavedItem, allItems: SavedItem[]) {
-    const otherItems = allItems.filter(i => i.id !== item.id && i.text)
-    const shuffled = [...otherItems].sort(() => 0.5 - Math.random())
-    const distractors = shuffled.slice(0, 3).map(i => i.text)
+    const shuffled = [...allItems].sort(() => 0.5 - Math.random())
+    // De-dupe by text (case-insensitive): two different SavedItems can share
+    // the same word (e.g. bookmarked from two different pages), which would
+    // otherwise put the same label on two buttons — one "correct", one "wrong".
+    const seenTexts = new Set([item.text.trim().toLowerCase()])
+    const distractors: string[] = []
+    for (const i of shuffled) {
+      if (i.id === item.id || !i.text) continue
+      const key = i.text.trim().toLowerCase()
+      if (seenTexts.has(key)) continue
+      seenTexts.add(key)
+      distractors.push(i.text)
+      if (distractors.length === 3) break
+    }
     const options = [item.text, ...distractors].sort(() => 0.5 - Math.random())
     setMcOptions(options)
   }
@@ -140,6 +152,14 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   function handleNext() {
     if (mode === 'passive' || earnedSpark) {
       chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'review' }).catch(() => {})
+    }
+    if (activeItem) {
+      // Passive mode has no correctness check — being shown counts as a pass.
+      // Every other mode only counts as a pass if the card was never answered
+      // wrong (and wasn't given up on) before moving on.
+      const passed = mode === 'passive' || !cardFailed
+      const updated = updateSrsMetrics(activeItem, passed)
+      chrome.runtime.sendMessage({ type: 'UPDATE_ITEM', payload: updated }).catch(() => {})
     }
     setEarnedSpark(false)
     setSessionQueue(prev => {
@@ -192,6 +212,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     setVerificationPassed(true)
     setShowAnswer(true)
     setCombo(0)
+    setCardFailed(true)
     setSessionScore(prev => ({ ...prev, giveUps: prev.giveUps + 1 }))
     if (activeItem) {
       speakText(activeItem.text, activeItem.sourceLang)
