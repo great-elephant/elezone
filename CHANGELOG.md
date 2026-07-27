@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.4.0](https://github.com/great-elephant/elezone/compare/0.3.0...0.4.0) (2026-07-27)
+
+### Features
+
+* **context-menu:** add Listen option next to Image to text ([81f1aa5](https://github.com/great-elephant/elezone/commit/81f1aa5e274864dc08e20df04649f7b7d8499816))
+* **pomodoro:** improve Focus & Breathe UX (settings shortcut, task access, clarity) ([a788c4d](https://github.com/great-elephant/elezone/commit/a788c4d99257eafbd5de528522ed628255fef1b5))
+* **read-aloud:** persist focus/spotlight mode to user settings ([8f08b50](https://github.com/great-elephant/elezone/commit/8f08b500cffcfc8a9acd16ff8f8f910d52edcccb))
+* **selection-chip:** replace + Save button with plain logo icon ([6a31b6e](https://github.com/great-elephant/elezone/commit/6a31b6ea5c6663999d19847aa26f3feabe955384))
+* **translation:** apply popup Translate toggle to the page immediately ([5bcd4f4](https://github.com/great-elephant/elezone/commit/5bcd4f4d5512e92426e8ba273c986f36a0f536bc))
+
+### Bug Fixes
+
+* **content-discovery:** detect div-based paragraphs and read main content fully ([f2081f2](https://github.com/great-elephant/elezone/commit/f2081f26538f77ff30ddbab0216ad3fae237eead))
+* **dictionary:** move IPA phonetics to its own line ([97f2821](https://github.com/great-elephant/elezone/commit/97f2821f5055bc59dcd8e09321e5cbdd7d8031b0))
+* **dictionary:** stop stale async responses from corrupting the popup/page ([c7336da](https://github.com/great-elephant/elezone/commit/c7336dac05faa9965e7919ccc3c1ad3d2485fb93))
+* **dragging:** account for scrollbar width on flying widget and OCR result ([3298902](https://github.com/great-elephant/elezone/commit/32989026ebe08195d637aa8e7b61bf06f164af8f))
+* **gamification:** guard divide-by-zero in level progress bar at max level ([e6db447](https://github.com/great-elephant/elezone/commit/e6db447943818d3cbaf9a2981fe3153e215b3c08))
+* **gamification:** serialize logActivity to stop lost Sparks updates ([ddf5c63](https://github.com/great-elephant/elezone/commit/ddf5c63b32d8e55527804dc7c176c82aec80d5d2))
+* **library:** clear stale orphaned flag once an item is anchorable again ([27caac1](https://github.com/great-elephant/elezone/commit/27caac1c67f4c1621babeb6200a1d97b9dd4df4e))
+* **ocr:** fix crop coordinate mapping when screenshot is scrollbar-trimmed ([9218b57](https://github.com/great-elephant/elezone/commit/9218b57c99e95a46c3faeb7af5d194f69a5e8f6f))
+* **ocr:** serialize offscreen recognize calls to stop progress cross-delivery ([d3ff7ef](https://github.com/great-elephant/elezone/commit/d3ff7efac25f360200c7efe47e913071c0f91944))
+* **pomodoro:** clear stale breathing ring when the cycle is set to all-zero ([b59f049](https://github.com/great-elephant/elezone/commit/b59f0498ef1810a3d040690d501548e91d5b35f3))
+* **pomodoro:** resuming a paused session no longer restarts the breathing cycle ([4337a92](https://github.com/great-elephant/elezone/commit/4337a92773912c7290234b07c888c74ca9127d42))
+* **popup:** show full task text on hover via tooltip ([a987c91](https://github.com/great-elephant/elezone/commit/a987c913a2ea32d6a2c3dfa29273b3dfd0750b7d))
+* **popup:** use accent color for Add All button instead of red ([6612277](https://github.com/great-elephant/elezone/commit/6612277f965bdd265f362a155b961ab65f2950a3))
+* **read-aloud:** dictionary speak no longer kills mini-player session ([533bffd](https://github.com/great-elephant/elezone/commit/533bffda99c80dd680747307b383f604493c8910))
+* **read-aloud:** media-key play/pause and volume restart could kill the session ([62b54f0](https://github.com/great-elephant/elezone/commit/62b54f0d7b51da3497cb5af24250c44cf40b9ea5))
+* **read-aloud:** pause stops audio immediately, resume no longer kills mini-player ([04c2b5d](https://github.com/great-elephant/elezone/commit/04c2b5de66a2153ce3fbc5fa266b32cb2d4c0854))
+* **read-aloud:** prevent OCR and highlight-tooltip speak from killing mini-player ([9e84862](https://github.com/great-elephant/elezone/commit/9e8486296d6bd73f17e5cb3073d454bc79238713))
+* **reminders:** clear stale notification on missing item, dedupe test path, prevent pileup ([6823cbf](https://github.com/great-elephant/elezone/commit/6823cbfa7aee37c3b391d59e4ec3c07d3eedd61d))
+* **reminders:** don't re-notify a due item that's already mid-answer ([d72d5b9](https://github.com/great-elephant/elezone/commit/d72d5b939c94a60a164abc6f65c1bc5d72580c29))
+* **roast:** don't count the still-in-progress day as a missed day ([40aded4](https://github.com/great-elephant/elezone/commit/40aded4e1b2f6791ec72b47849b9b77098e3cdc7))
+* **study:** persist SRS scheduling and dedupe multiple-choice options ([c255774](https://github.com/great-elephant/elezone/commit/c2557740912ab4af12c5a0296e4206ff1840a5f4))
+* **sync:** stop Drive sync from silently losing data on failed requests ([e5fb58a](https://github.com/great-elephant/elezone/commit/e5fb58af7f64b1f6524e36eaa982760370eb5658))
+* **translation-panel:** account for scrollbar width when clamping drag boundaries ([dcde6a5](https://github.com/great-elephant/elezone/commit/dcde6a5b94e749643b80891af9d32ee12c2c9007))
+
 ## [0.3.0](https://github.com/great-elephant/elezone/compare/0.2.0...0.3.0) (2026-07-04)
 
 ### Features
