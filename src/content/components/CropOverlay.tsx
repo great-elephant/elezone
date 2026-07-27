@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 type Point = { x: number; y: number };
 
@@ -14,6 +14,7 @@ export const CropOverlay: React.FC<Props> = ({ screenshotDataUrl, onCropComplete
   const [startPoint, setStartPoint] = useState<Point | null>(null);
   const [currentPoint, setCurrentPoint] = useState<Point | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -57,12 +58,20 @@ export const CropOverlay: React.FC<Props> = ({ screenshotDataUrl, onCropComplete
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      
-      // scale coordinates to match actual device pixels
-      const ratio = window.devicePixelRatio || 1;
+
+      // Map the on-screen selection to the screenshot's natural pixels using
+      // the container's actual rendered size (screenshotDataUrl may already
+      // be scrollbar-trimmed by the caller, so its natural resolution isn't
+      // reliably window.innerWidth * devicePixelRatio — see CropWindow.tsx's
+      // equivalent img.getBoundingClientRect()-based mapping).
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      const scaleX = containerRect && containerRect.width > 0 ? img.naturalWidth / containerRect.width : (window.devicePixelRatio || 1);
+      const scaleY = containerRect && containerRect.height > 0 ? img.naturalHeight / containerRect.height : (window.devicePixelRatio || 1);
+      const originX = containerRect?.left ?? 0;
+      const originY = containerRect?.top ?? 0;
       ctx.drawImage(
         img,
-        x * ratio, y * ratio, width * ratio, height * ratio,
+        (x - originX) * scaleX, (y - originY) * scaleY, width * scaleX, height * scaleY,
         0, 0, width, height
       );
       onCropComplete(canvas.toDataURL('image/png'), { x, y, width, height });
@@ -98,6 +107,7 @@ export const CropOverlay: React.FC<Props> = ({ screenshotDataUrl, onCropComplete
 
   return (
     <div
+      ref={containerRef}
       style={{
         position: 'fixed',
         inset: 0,
