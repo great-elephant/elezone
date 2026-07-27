@@ -361,7 +361,6 @@ export async function syncToDrive(interactive = false): Promise<{ ok: boolean; e
         if (logChanged) {
           await chrome.storage.local.set({ [ACTIVITY_KEY]: activityLog })
         }
-        await chrome.storage.local.set({ 'cxt_last_synced_activity_log': activityLog })
 
         if (driveSettings) {
           const localTime = localSettings.updatedAt || 0
@@ -392,6 +391,11 @@ export async function syncToDrive(interactive = false): Promise<{ ok: boolean; e
     } else {
       await createDriveFile(token, { version: 1, library, activityLog, settings: localSettings })
     }
+    // Only record this activity snapshot as "synced" once the remote write has
+    // actually succeeded. Doing this earlier (before the upload) would make the
+    // next sync think this delta was already pushed if the upload above throws,
+    // permanently dropping those points/reviews from ever reaching the cloud.
+    await chrome.storage.local.set({ 'cxt_last_synced_activity_log': activityLog })
     broadcastSyncStatus('success')
     setTimeout(() => broadcastSyncStatus('idle'), 2500)
     return { ok: true }
@@ -405,11 +409,38 @@ export async function syncToDrive(interactive = false): Promise<{ ok: boolean; e
   }
 }
 
-async function downloadDriveFile(token: string, fileId: string): Promise<any | null> {
+// Removes a stale/invalid cached token so the next sync (auto or manual)
+// requests a fresh one instead of retrying with the same rejected token
+// forever, which would otherwise look like a permanent auth failure.
+async function invalidateToken(token: string): Promise<void> {
+  await chrome.identity.removeCachedAuthToken({ token })
+}
+
+// Throws (rather than returning null/false) on any non-OK response so callers
+// can't mistake "the request failed" for "there is no remote data yet" — that
+// conflation previously caused a failed lookup/download to be treated as an
+// empty Drive, which either duplicated the remote file or blindly overwrote
+// it with an unmerged local snapshot.
+async function assertDriveResponseOk(res: Response, token: string, action: string): Promise<void> {
+  if (res.ok) return
+  if (res.status === 401) {
+    await invalidateToken(token)
+    throw new Error(`Google sign-in expired while trying to ${action}. Please sync again to reconnect.`)
+  }
+  throw new Error(`Failed to ${action} (Google Drive returned ${res.status}).`)
+}
+
+async function downloadDriveFile(token: string, fileId: string): Promise<any> {
   const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-  if (!res.ok) return null
-  return res.json()
+  await assertDriveResponseOk(res, token, 'download your synced data')
+  const text = await res.text()
+  if (!text) return {}
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error('Your synced data on Google Drive looks corrupted. Sync was aborted to avoid overwriting it.')
+  }
 }
 
 async function getAuthToken(interactive = false): Promise<string> {
@@ -431,7 +462,7 @@ async function getDriveFileId(token: string): Promise<string | null> {
   const url = `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive`
 
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-  if (!res.ok) return null
+  await assertDriveResponseOk(res, token, 'look up your synced file')
   const data = await res.json()
   return data.files && data.files.length > 0 ? data.files[0].id : null
 }
@@ -447,7 +478,7 @@ async function createDriveFile(token: string, data: any): Promise<void> {
     headers: { Authorization: `Bearer ${token}` },
     body: form
   })
-  if (!res.ok) throw new Error('Failed to create drive file')
+  await assertDriveResponseOk(res, token, 'create your synced file')
 }
 
 async function updateDriveFile(token: string, fileId: string, data: any): Promise<void> {
@@ -456,5 +487,5 @@ async function updateDriveFile(token: string, fileId: string, data: any): Promis
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   })
-  if (!res.ok) throw new Error('Failed to update drive file')
+  await assertDriveResponseOk(res, token, 'save your synced data')
 }
