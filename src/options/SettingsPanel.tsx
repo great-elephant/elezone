@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Settings, BookmarkColor, BOOKMARK_COLORS, DEFAULT_SETTINGS } from '../shared/types'
 import { RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
 import {
@@ -44,12 +44,23 @@ type TtsVoice = chrome.tts.TtsVoice
 interface Props {
   settings: Settings
   onChange: (s: Settings) => void
+  // One-off deep-link target (e.g. 'focusBreathe') consumed once on mount to
+  // auto-expand and scroll to a specific collapsible section. Not a generic
+  // deep-linking system — just enough to support the popup's settings shortcut.
+  initialExpandedSection?: string
 }
 
-export default function SettingsPanel({ settings, onChange }: Props) {
+export default function SettingsPanel({ settings, onChange, initialExpandedSection }: Props) {
   const [voices, setVoices] = useState<TtsVoice[]>([])
   const [testingVoice, setTestingVoice] = useState<string | null>(null)
   const [aiStatus, setAiStatus] = useState<AiStatus>('checking')
+  const focusBreatheRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (initialExpandedSection === 'focusBreathe') {
+      focusBreatheRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [initialExpandedSection])
 
   const deckOrder: BookmarkColor[] = settings.deckOrder?.length === ALL_COLORS.length
     ? settings.deckOrder
@@ -424,7 +435,8 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         </Field>
       </CollapsibleSection>
 
-      <CollapsibleSection title="Focus & Breathe">
+      <div ref={focusBreatheRef}>
+      <CollapsibleSection title="Focus & Breathe" defaultOpen={initialExpandedSection === 'focusBreathe'}>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
           <Field label="Focus (min)">
@@ -500,6 +512,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
           </div>
         )}
       </CollapsibleSection>
+      </div>
 
       <CollapsibleSection title="Translation">
 

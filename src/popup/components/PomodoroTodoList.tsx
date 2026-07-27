@@ -198,7 +198,11 @@ export function PomodoroTodoList({ tasks, doneTasks, dailyTasks, onTasksChange, 
               style={styles.input}
               autoFocus
             />
-            <button type="submit" style={styles.addBtn} disabled={!inputValue.trim()}>
+            <button
+              type="submit"
+              style={{ ...styles.addBtn, ...(!inputValue.trim() ? styles.addBtnDisabled : {}) }}
+              disabled={!inputValue.trim()}
+            >
               +
             </button>
           </form>
@@ -226,7 +230,7 @@ export function PomodoroTodoList({ tasks, doneTasks, dailyTasks, onTasksChange, 
                   items={(activeTab === 'todo' ? tasks : (dailyTasks || [])).map((t) => t.id)}
                   strategy={verticalListSortingStrategy}
                 >
-                  {(activeTab === 'todo' ? tasks : (dailyTasks || [])).map((task, index, arr) => (
+                  {(activeTab === 'todo' ? tasks : (dailyTasks || [])).map((task) => (
                     <SortableTaskItem
                       key={task.id}
                       task={task}
@@ -240,7 +244,6 @@ export function PomodoroTodoList({ tasks, doneTasks, dailyTasks, onTasksChange, 
                       }}
                       onEdit={handleEdit}
                       onStartFocus={onStartFocus}
-                      isLast={index === arr.length - 1}
                       variant={activeTab === 'todo' ? 'todo' : 'daily'}
                     />
                   ))}
@@ -386,6 +389,11 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     padding: 0,
     boxSizing: 'border-box',
+  },
+  addBtnDisabled: {
+    background: '#3a3a5a',
+    color: '#666688',
+    cursor: 'not-allowed',
   },
 
   taskList: {

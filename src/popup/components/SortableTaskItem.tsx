@@ -9,7 +9,6 @@ interface Props {
   onComplete: (id: string) => void;
   onEdit: (id: string, text: string) => void;
   onStartFocus?: (id: string) => void;
-  isLast?: boolean;
   variant?: 'todo' | 'daily';
 }
 
@@ -22,7 +21,7 @@ function formatTime(seconds?: number): string | null {
   return `${m}m`;
 }
 
-export function SortableTaskItem({ task, onDelete, onComplete, onEdit, onStartFocus, isLast, variant = 'todo' }: Props) {
+export function SortableTaskItem({ task, onDelete, onComplete, onEdit, onStartFocus, variant = 'todo' }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(task.text);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -60,7 +59,7 @@ export function SortableTaskItem({ task, onDelete, onComplete, onEdit, onStartFo
   };
 
   return (
-    <div ref={setNodeRef} style={{ ...style, ...styles.taskItem, ...(isLast ? { marginBottom: 0 } : {}) }}>
+    <div ref={setNodeRef} style={{ ...style, ...styles.taskItem }}>
       <div {...attributes} {...listeners} style={styles.dragHandle}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="9" cy="12" r="1"></circle>
@@ -71,7 +70,7 @@ export function SortableTaskItem({ task, onDelete, onComplete, onEdit, onStartFo
           <circle cx="15" cy="19" r="1"></circle>
         </svg>
       </div>
-      
+
       <div style={styles.taskContent}>
         {isEditing ? (
           <input
@@ -145,8 +144,9 @@ export function SortableTaskItem({ task, onDelete, onComplete, onEdit, onStartFo
           onClick={() => onDelete(task.id)}
           style={styles.actionBtn}
           title="Delete Task"
-          onMouseEnter={(e) => (e.currentTarget.style.color = '#ef4444')}
-          onMouseLeave={(e) => (e.currentTarget.style.color = '#8888aa')}
+          aria-label="Delete Task"
+          onMouseEnter={(e) => { e.currentTarget.style.color = '#ef4444'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = '#8888aa'; }}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="3 6 5 6 21 6"></polyline>

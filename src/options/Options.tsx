@@ -19,12 +19,32 @@ export default function Options() {
   const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "success">(
     "idle",
   );
+  // One-off deep-link target set by the popup (e.g. its Focus Zone settings
+  // shortcut) right before calling openOptionsPage(). Consumed (and cleared)
+  // once on mount below.
+  const [initialSettingsSection, setInitialSettingsSection] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     chrome.runtime.sendMessage({ type: "GET_SETTINGS" }, (s: Settings) => {
       if (s) setSettings(s);
     });
     loadItems();
+
+    chrome.storage.local.get("openOptionsTarget", (res) => {
+      const target = res?.openOptionsTarget as
+        | { tab?: string; section?: string }
+        | undefined;
+      if (!target) return;
+      chrome.storage.local.remove("openOptionsTarget");
+      if (target.tab === "dashboard" || target.tab === "library" || target.tab === "settings") {
+        setTab(target.tab);
+      }
+      if (target.section) {
+        setInitialSettingsSection(target.section);
+      }
+    });
 
     const handleMessage = (msg: any) => {
       if (msg.type === "SYNC_STATUS_UPDATE") {
@@ -238,7 +258,11 @@ export default function Options() {
         )}
 
         {tab === "settings" && (
-          <SettingsPanel settings={settings} onChange={saveSettings} />
+          <SettingsPanel
+            settings={settings}
+            onChange={saveSettings}
+            initialExpandedSection={initialSettingsSection ?? undefined}
+          />
         )}
       </main>
     </div>
