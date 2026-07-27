@@ -65,25 +65,40 @@ export function getLocalYMD(): string {
   return `${year}-${month}-${day}`
 }
 
+// Serializes logActivity()'s read-modify-write on the activity log. Without
+// this, two calls landing close together (e.g. saving a word right after
+// finishing a review) both read the same pre-update log before either writes
+// back, so one call's increment silently overwrites the other's instead of
+// adding to it.
+let activityLogQueue: Promise<void> = Promise.resolve()
+
 export async function logActivity(type: 'save' | 'review'): Promise<void> {
-  const settings = await getSettings()
-  const config = settings.gamification || DEFAULT_SETTINGS.gamification
-  const log = await getActivityLog()
-  const today = getLocalYMD()
+  const previous = activityLogQueue
+  let release!: () => void
+  activityLogQueue = new Promise<void>(resolve => { release = resolve })
+  await previous
+  try {
+    const settings = await getSettings()
+    const config = settings.gamification || DEFAULT_SETTINGS.gamification
+    const log = await getActivityLog()
+    const today = getLocalYMD()
 
-  if (!log[today]) {
-    log[today] = { saved: 0, reviewed: 0, points: 0 }
+    if (!log[today]) {
+      log[today] = { saved: 0, reviewed: 0, points: 0 }
+    }
+
+    if (type === 'save') {
+      log[today].saved += 1
+      log[today].points += config.pointsPerSave
+    } else if (type === 'review') {
+      log[today].reviewed += 1
+      log[today].points += config.pointsPerReview
+    }
+
+    await chrome.storage.local.set({ [ACTIVITY_KEY]: log })
+  } finally {
+    release()
   }
-
-  if (type === 'save') {
-    log[today].saved += 1
-    log[today].points += config.pointsPerSave
-  } else if (type === 'review') {
-    log[today].reviewed += 1
-    log[today].points += config.pointsPerReview
-  }
-
-  await chrome.storage.local.set({ [ACTIVITY_KEY]: log })
 }
 
 // ── Unified Library (SavedItems) ──────────────────────────────────────────────
