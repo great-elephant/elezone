@@ -49,13 +49,31 @@ export async function initOcr(
   return worker;
 }
 
+// Serializes recognizeText() calls on the shared worker. Without this, a
+// second call (e.g. a user re-triggering OCR before the first crop finished
+// recognizing) would overwrite `activeOnProgress` via initOcr() the instant
+// it's invoked — while the first call's recognize() is still executing — so
+// the first request's tail-end progress events would get delivered under the
+// second request's requestId/tabId instead of its own. Chaining onto `queue`
+// ensures a call only runs (and only switches activeOnProgress) once every
+// previous call's recognize() has fully settled.
+let queue: Promise<void> = Promise.resolve();
+
 export async function recognizeText(
   imageBase64: string,
   lang: string = 'chi_sim',
   onProgress?: (status: string, progress: number) => void
 ): Promise<string> {
-  const w = await initOcr(lang, onProgress);
-  onProgress?.('Recognizing text...', 0);
-  const { data: { text } } = await w.recognize(imageBase64);
-  return text.trim();
+  const previous = queue;
+  let release: () => void;
+  queue = new Promise<void>(resolve => { release = resolve; });
+  try {
+    await previous;
+    const w = await initOcr(lang, onProgress);
+    onProgress?.('Recognizing text...', 0);
+    const { data: { text } } = await w.recognize(imageBase64);
+    return text.trim();
+  } finally {
+    release!();
+  }
 }
