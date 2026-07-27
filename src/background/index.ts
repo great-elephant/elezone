@@ -154,24 +154,33 @@ async function triggerSrsNotification(testMode = false) {
 
   const items = await getAllItems()
   let dueItems = items.filter(i => !i.orphaned && i.text)
-  
-  if (!testMode) {
-    const strictlyDue = dueItems.filter(i => (i.nextReview || 0) <= Date.now())
-    if (strictlyDue.length > 0) {
-      dueItems = strictlyDue
-      dueItems.sort((a, b) => (a.nextReview || 0) - (b.nextReview || 0))
-    } else {
-      // Fallback: If no items are strictly due, just pick a random one to keep the user engaged!
-      dueItems.sort(() => Math.random() - 0.5)
-    }
+
+  // Same selection logic in test mode as the real tick (only the enabled/active-hours
+  // gating above is test-only) — otherwise the Test Notification button always takes
+  // the random-fallback branch and can never surface a bug in the due-item query.
+  const strictlyDue = dueItems.filter(i => (i.nextReview || 0) <= Date.now())
+  if (strictlyDue.length > 0) {
+    dueItems = strictlyDue
+    dueItems.sort((a, b) => (a.nextReview || 0) - (b.nextReview || 0))
   } else {
-    // Test mode: always random
+    // Fallback: If no items are strictly due, just pick a random one to keep the user engaged!
     dueItems.sort(() => Math.random() - 0.5)
   }
-  
+
   if (dueItems.length === 0) return
 
   const item = dueItems[0]
+
+  // Only one review prompt should ever be on screen at a time. Without this, an
+  // earlier tick's unanswered prompt for a *different* item (same-item repeats
+  // just replace via the matching notification id) is never dismissed, so
+  // requireInteraction notifications pile up in the tray tick after tick.
+  const existingIds: string[] = await new Promise(resolve => {
+    chrome.notifications.getAll(map => resolve(Object.keys(map || {})))
+  })
+  for (const id of existingIds) {
+    if (id.startsWith('srs-q-') && id !== `srs-q-${item.id}`) chrome.notifications.clear(id)
+  }
 
   chrome.notifications.create(`srs-q-${item.id}`, {
     type: 'basic',
@@ -419,10 +428,11 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
     const id = notificationId.replace('srs-q-', '')
     const items = await getAllItems()
     const item = items.find(i => i.id === id)
-    if (!item) return
-    
+
     chrome.notifications.clear(notificationId)
-    
+
+    if (!item) return
+
     let context = ''
     if (item.prefix || item.suffix) {
       context = `\n\nContext: ${item.prefix}${item.text}${item.suffix}`
