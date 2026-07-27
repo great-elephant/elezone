@@ -277,20 +277,15 @@ async function toggleReadAloudForTab(tab: chrome.tabs.Tab) {
 
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === 'play_pause' && activeSession) {
-    if (activeSession.state === 'playing') {
-      activeSession.state = 'paused'
-      if (activeSession.inGap) clearShadowingGap()
-      chrome.tts.pause()
-      await broadcastReadAloudState(activeSession.tabId, 'paused', activeSession.currentIndex)
-    } else if (activeSession.state === 'paused') {
-      activeSession.state = 'playing'
-      if (activeSession.inGap) {
-        const idx = activeSession.currentIndex
-        scheduleShadowingGap(activeSession.token, activeSession.sentences[idx] ?? '')
-      } else {
-        chrome.tts.resume()
-      }
-      await broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
+    // Delegate to controlReadAloud instead of re-implementing pause/resume here:
+    // that's the single source of truth for the suppressStopUntil grace window
+    // (a bare chrome.tts.pause()/resume() call can itself fire an
+    // interrupted/cancelled event on some engines, which would otherwise tear
+    // the session down — see 04c2b5d) and for the stop()+re-speak resume
+    // pattern (chrome.tts.resume() alone doesn't reliably un-pause every engine).
+    const action = activeSession.state === 'playing' ? 'pause' : activeSession.state === 'paused' ? 'resume' : null
+    if (action) {
+      await controlReadAloud({} as chrome.runtime.MessageSender, { action, tabId: activeSession.tabId })
     }
   } else if (command === 'trigger_ocr') {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
@@ -1298,10 +1293,19 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
         }
         if (activeSession.state === 'playing' && oldVolume !== (newSettings.readAloud.volume ?? 1)) {
           if (ttsRestartTimeout) clearTimeout(ttsRestartTimeout)
+          // Snapshot the token so this restart can't fire against a different
+          // session (e.g. this one was stopped and a new one started on another
+          // tab within the debounce window) — without this check it would bump
+          // a stranger session's token and cut off its current sentence.
+          const scheduledToken = activeSession.token
           ttsRestartTimeout = setTimeout(() => {
-            if (activeSession?.state === 'playing') {
-              activeSession.token = Date.now() // Prevent old 'interrupted' event from killing the session
+            if (activeSession?.token === scheduledToken && activeSession.state === 'playing') {
+              activeSession.token = ++sessionCounter // Prevent old 'interrupted' event from killing the session
               chrome.tts.stop()
+              // Re-arm the watchdog with the bumped token — without this it keeps
+              // watching for the old (now stale) token forever and silently stops
+              // detecting a stalled engine for the rest of the session.
+              startSpeakingWatchdog(activeSession.token)
               void speakCurrentSentence(activeSession.token)
             }
           }, 400)
