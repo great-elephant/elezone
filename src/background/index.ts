@@ -354,7 +354,10 @@ async function evaluateSlackingState(testMode = false) {
   firstDateObj.setHours(0, 0, 0, 0)
 
   let consecutiveMissedDays = 0
-  for (let i = 0; i < 30; i++) {
+  // Start from yesterday: today is still in progress and can't yet be judged
+  // "missed" (todayPoints is handled separately below), so counting it here
+  // would trigger the roast a full day earlier than `thresholdDays` implies.
+  for (let i = 1; i <= 30; i++) {
     const date = new Date()
     date.setDate(date.getDate() - i)
     date.setHours(0, 0, 0, 0)
