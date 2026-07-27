@@ -1313,9 +1313,15 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       }
       return { ok: true }
     }
-    case 'MARK_ORPHANED':
-      await markOrphaned(msg.payload as string)
+    case 'MARK_ORPHANED': {
+      const p = msg.payload as string | { id: string; orphaned?: boolean }
+      if (typeof p === 'string') {
+        await markOrphaned(p)
+      } else {
+        await markOrphaned(p.id, p.orphaned ?? true)
+      }
       return { ok: true }
+    }
     case 'TRANSLATE_IN_CONTEXT':
       return translateInContext(msg.payload as ContextTranslateRequest)
     case 'START_READ_ALOUD_SESSION':

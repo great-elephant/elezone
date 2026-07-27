@@ -141,11 +141,11 @@ export async function getItemsForUrl(url: string): Promise<SavedItem[]> {
   return all.filter(i => i.url === url)
 }
 
-export async function markOrphaned(id: string): Promise<void> {
+export async function markOrphaned(id: string, orphaned = true): Promise<void> {
   const library = await getRawItems()
   const item = library.find(i => i.id === id)
-  if (item) {
-    item.orphaned = true
+  if (item && item.orphaned !== orphaned) {
+    item.orphaned = orphaned
     item.updatedAt = Date.now()
     await chrome.storage.local.set({ [LIBRARY_KEY]: library })
     cachedLibrary = library

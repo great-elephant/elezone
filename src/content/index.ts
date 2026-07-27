@@ -73,7 +73,12 @@ async function reanchor(url: string) {
   for (const item of pageItems) {
     const found = applyHighlight(item)
     if (!found && !item.orphaned) {
-      chrome.runtime.sendMessage({ type: 'MARK_ORPHANED', payload: item.id }).catch(() => { })
+      chrome.runtime.sendMessage({ type: 'MARK_ORPHANED', payload: { id: item.id, orphaned: true } }).catch(() => { })
+    } else if (found && item.orphaned) {
+      // Text is anchorable again (e.g. dynamic content finished loading on a
+      // later visit) — clear the stale orphaned flag so it isn't permanently
+      // excluded from spaced-repetition review.
+      chrome.runtime.sendMessage({ type: 'MARK_ORPHANED', payload: { id: item.id, orphaned: false } }).catch(() => { })
     }
   }
 }
