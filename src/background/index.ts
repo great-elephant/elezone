@@ -182,6 +182,16 @@ async function triggerSrsNotification(testMode = false) {
     if (id.startsWith('srs-q-') && id !== `srs-q-${item.id}`) chrome.notifications.clear(id)
   }
 
+  // If the selected item is itself already mid-review (the user clicked "Show
+  // Answer" on an earlier tick's prompt and hasn't picked "I knew it"/"Forgot"
+  // yet), its nextReview hasn't moved, so it's still picked as the top due item
+  // here. Without this check we'd create a brand-new `srs-q-<id>` alongside the
+  // still-open `srs-a-<id>` — a different id, so the dedupe loop above (which
+  // only matches the `srs-q-` prefix) can't catch it — leaving two prompts for
+  // the same card on screen at once, which is exactly the pileup this function
+  // is supposed to prevent.
+  if (existingIds.includes(`srs-a-${item.id}`)) return
+
   chrome.notifications.create(`srs-q-${item.id}`, {
     type: 'basic',
     iconUrl: 'icons/icon128.png',
