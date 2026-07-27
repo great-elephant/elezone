@@ -20,7 +20,12 @@ function calculateLevel(xp: number) {
 
   const currentLevelXP = getXPForLevel(actualLevel);
   const nextLevelXP = getXPForLevel(actualLevel + 1);
-  const progress = Math.max(0, Math.min(100, ((xp - currentLevelXP) / (nextLevelXP - currentLevelXP)) * 100));
+  // At the max level, getXPForLevel(actualLevel + 1) clamps back to the same
+  // threshold as the current level, so the usual ratio would divide by zero.
+  const xpToNextLevel = nextLevelXP - currentLevelXP;
+  const progress = xpToNextLevel > 0
+    ? Math.max(0, Math.min(100, ((xp - currentLevelXP) / xpToNextLevel) * 100))
+    : 100;
 
   return {
     currentLevel: actualLevel,
