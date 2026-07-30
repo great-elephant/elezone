@@ -1,4 +1,4 @@
-import { ReadAloudSettings, ReadAloudState } from '../../shared/types'
+import { ReadAloudSettings, ReadAloudState, Settings } from '../../shared/types'
 import {
   buildSentencePlan,
   highlightSentenceRange,
@@ -14,6 +14,8 @@ import { savePosition, clearPosition, setSessionUrl, clearSessionUrl } from './r
 let state: ReadAloudState = 'idle'
 let sentences: string[] = []
 let sentenceRanges: Range[] = []
+let sentencePlanUsesShadowStops = false
+let sessionSettings: ReadAloudSettings | null = null
 // The exact content block (paragraph/heading) each sentence came from — lets
 // the focus-mode spotlight find the sentence's translation deterministically
 // instead of guessing via DOM-climbing (a paragraph mode overlay sits after the
@@ -104,6 +106,8 @@ function clearLocalSession() {
   sentences = []
   sentenceRanges = []
   sentenceElements = []
+  sentencePlanUsesShadowStops = false
+  sessionSettings = null
   currentIndex = 0
   wordIndexSentence = -1
 }
@@ -153,10 +157,11 @@ async function beginSession(
   currentRepetition = Math.max(1, Math.round(settings.repetition || 1))
   shadowingOn = settings.shadowing === true
   inShadowGap = false
+  sessionSettings = { ...settings, speed: currentSpeed, repetition: currentRepetition, shadowing: shadowingOn }
 
   const response = await chrome.runtime.sendMessage({
     type: 'START_READ_ALOUD_SESSION',
-    payload: { sentences, startIndex, settings: { ...settings, speed: currentSpeed }, lang },
+    payload: { sentences, startIndex, settings: sessionSettings, lang },
   }) as { ok?: boolean }
 
   if (!response?.ok) {
@@ -172,19 +177,20 @@ async function beginSession(
 // Build the sentence plan for the whole readable article and load it into the
 // module-level session buffers. Returns the language used. Shared by every
 // start path (top / from-selection / from-element).
-function loadArticlePlan(): string {
+function loadArticlePlan(splitAtShadowStops?: boolean): string {
   const lang = document.documentElement.lang || 'en'
-  const plan = buildSentencePlan(getContentElements(), lang)
+  const plan = buildSentencePlan(getContentElements(), lang, splitAtShadowStops)
   sentences = plan.map(p => p.text)
   sentenceRanges = plan.map(p => p.range)
   sentenceElements = plan.map(p => p.el)
+  sentencePlanUsesShadowStops = splitAtShadowStops === true
   return lang
 }
 
 export async function start(settings: ReadAloudSettings) {
   if (state !== 'idle') return
 
-  const lang = loadArticlePlan()
+  const lang = loadArticlePlan(settings.shadowing)
   if (sentences.length === 0) return
 
   currentIndex = 0
@@ -249,7 +255,7 @@ export async function startFrom(
   selectedText: string,
   selRange: Range | null,
 ) {
-  const lang = loadArticlePlan()
+  const lang = loadArticlePlan(settings.shadowing)
   if (sentences.length === 0) return
 
   currentIndex = findSentenceIndex(sentences, sentenceRanges, selectedText, selRange)
@@ -285,6 +291,10 @@ export function pause() {
 export function resume() {
   if (state !== 'paused') return
   notifyState('playing')
+  if (sentencePlanUsesShadowStops !== shadowingOn) {
+    void rebuildSessionForShadowing(shadowingOn)
+    return
+  }
   sendControl('resume')
 }
 
@@ -329,6 +339,7 @@ export function seekTo(index: number) {
 export function setSpeed(rate: number) {
   if (!Number.isFinite(rate) || rate <= 0) return
   currentSpeed = rate
+  if (sessionSettings) sessionSettings = { ...sessionSettings, speed: rate }
   if (state === 'idle') return
   notifyState('playing')
   sendControl('setSpeed', { speed: rate })
@@ -340,6 +351,7 @@ export function setSpeed(rate: number) {
 export function setVoice(name: string) {
   if (!name || state === 'idle') return
   currentVoice = name
+  if (sessionSettings) sessionSettings = { ...sessionSettings, voice: name }
   onVoiceInfoChange?.()
   notifyState('playing')
   sendControl('setVoice', { voiceName: name })
@@ -349,6 +361,56 @@ export function getSpeed(): number {
   return currentSpeed
 }
 
+async function saveShadowingPreference(on: boolean): Promise<ReadAloudSettings | null> {
+  let stored: Settings | undefined
+  try {
+    stored = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }) as Settings | undefined
+  } catch {
+    stored = undefined
+  }
+
+  const base = stored?.readAloud ?? sessionSettings
+  if (!base) return null
+
+  const nextReadAloud: ReadAloudSettings = {
+    ...base,
+    speed: currentSpeed,
+    repetition: currentRepetition,
+    shadowing: on,
+  }
+  sessionSettings = nextReadAloud
+
+  if (stored?.readAloud) {
+    await chrome.runtime.sendMessage({
+      type: 'SAVE_SETTINGS',
+      payload: { ...stored, updatedAt: Date.now(), readAloud: nextReadAloud },
+    }).catch(() => {})
+  }
+
+  return nextReadAloud
+}
+
+async function rebuildSessionForShadowing(on: boolean) {
+  const previousState = state
+  const previousText = sentences[currentIndex] ?? ''
+  const previousRange = sentenceRanges[currentIndex]?.cloneRange() ?? null
+  const settings = await saveShadowingPreference(on)
+
+  if (!settings || previousState === 'idle' || state === 'idle' || shadowingOn !== on) return
+  if (previousState === 'paused') return
+  if (sentencePlanUsesShadowStops === on) return
+
+  const lang = loadArticlePlan(on)
+  if (sentences.length === 0) {
+    clearLocalSession()
+    notifyState('idle')
+    return
+  }
+
+  const startIndex = findSentenceIndex(sentences, sentenceRanges, previousText, previousRange)
+  await beginSession(settings, startIndex, lang)
+}
+
 // H29 — toggle shadowing (inter-sentence gap) live. Optimistically flips the
 // local flag so the button responds instantly; the background persists the
 // choice and re-broadcasts to confirm. Allowed even when idle so it can be set
@@ -356,8 +418,7 @@ export function getSpeed(): number {
 export function setShadowing(on: boolean) {
   shadowingOn = on
   onShadowInfoChange?.()
-  if (state === 'idle') return
-  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setShadowing', enabled: on } }).catch(() => {})
+  void rebuildSessionForShadowing(on)
 }
 
 // H31 — set per-sentence repetition live (1..5). Takes effect from the next
@@ -365,6 +426,7 @@ export function setShadowing(on: boolean) {
 export function setRepetition(count: number) {
   const clamped = Math.max(1, Math.min(5, Math.round(count)))
   currentRepetition = clamped
+  if (sessionSettings) sessionSettings = { ...sessionSettings, repetition: clamped }
   onShadowInfoChange?.()
   if (state === 'idle') return
   chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setRepetition', count: clamped } }).catch(() => {})

@@ -552,11 +552,11 @@ function clearShadowingGap() {
 
 // H29 — estimate the silent gap (ms) to leave for the learner to repeat a
 // sentence aloud. Proportional to the sentence's estimated speaking time at the
-// current rate (~3 words/sec baseline), clamped to a sensible min/max so very
+// current rate (~2 words/sec baseline), clamped to a sensible min/max so very
 // short or very long sentences still feel predictable.
 const GAP_MIN_MS = 1200
 const GAP_MAX_MS = 8000
-const GAP_WORDS_PER_SEC = 3
+const GAP_WORDS_PER_SEC = 2
 function computeShadowingGapMs(sentence: string, speed: number): number {
   const words = sentence.trim().split(/\s+/).filter(Boolean).length || 1
   const rate = Number.isFinite(speed) && speed > 0 ? speed : 1
@@ -604,7 +604,7 @@ function advanceToNextSentence(token: number) {
 // so the pause scales with what the learner needs to repeat, and
 // session.currentIndex (still pointing at that same sentence) is what stays
 // highlighted for the duration of the gap.
-function scheduleShadowingGap(token: number, justSpoke: string) {
+function scheduleShadowingGap(token: number, justSpoke: string, onComplete: () => void) {
   const session = activeSession
   if (!session || session.token !== token) return
 
@@ -627,7 +627,7 @@ function scheduleShadowingGap(token: number, justSpoke: string) {
     s.inGap = false
     // Re-arm the watchdog before real speech resumes.
     startSpeakingWatchdog(token)
-    advanceToNextSentence(token)
+    onComplete()
   }, gapMs)
 }
 
@@ -784,8 +784,15 @@ function handleTtsEvent(token: number, event: chrome.tts.TtsEvent) {
     const justSpoke = session.sentences[session.currentIndex] ?? ''
     session.currentRep += 1
     if (session.currentRep < session.settings.repetition) {
-      // Per-sentence repetition: no gap between the repeats themselves.
-      void speakCurrentSentence(token)
+      if (session.shadowing) {
+        // When shadowing and repetition are both enabled, insert a shadowing gap between repetitions
+        scheduleShadowingGap(token, justSpoke, () => {
+          void speakCurrentSentence(token)
+        })
+      } else {
+        // Per-sentence repetition: no gap between the repeats themselves.
+        void speakCurrentSentence(token)
+      }
       return
     }
 
@@ -797,8 +804,13 @@ function handleTtsEvent(token: number, event: chrome.tts.TtsEvent) {
     // justSpoke); advanceToNextSentence() moves it forward once the gap ends.
     // The watchdog is handled inside scheduleShadowingGap so the gap is never
     // mistaken for a stall.
-    if (session.shadowing) scheduleShadowingGap(token, justSpoke)
-    else advanceToNextSentence(token)
+    if (session.shadowing) {
+      scheduleShadowingGap(token, justSpoke, () => {
+        advanceToNextSentence(token)
+      })
+    } else {
+      advanceToNextSentence(token)
+    }
     return
   }
 
@@ -1028,7 +1040,16 @@ async function controlReadAloud(
       // We were paused mid-gap; re-schedule the remaining gap using the sentence
       // we're about to speak (its length is a good proxy for the just-finished one).
       const idx = activeSession.currentIndex
-      scheduleShadowingGap(activeSession.token, activeSession.sentences[idx] ?? '')
+      const token = activeSession.token
+      scheduleShadowingGap(token, activeSession.sentences[idx] ?? '', () => {
+        const s = activeSession
+        if (!s || s.token !== token) return
+        if (s.currentRep === 0) {
+          advanceToNextSentence(token)
+        } else {
+          void speakCurrentSentence(token)
+        }
+      })
     } else {
       // Restart the current sentence rather than resuming (resume may not work reliably).
       // This re-speaks the current sentence from its start, matching the pattern from 533bffd.

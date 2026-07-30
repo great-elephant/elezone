@@ -381,6 +381,50 @@ function normText(s: string): string {
     .replace(/ /g, ' ')
 }
 
+const SHADOWING_DOT_ABBREVIATIONS = new Set(['mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st', 'vs', 'etc'])
+
+function isShadowingStop(text: string, index: number): boolean {
+  const ch = text[index]
+  if (!/[,.!?;:，。！？、；：]/.test(ch)) return false
+
+  // Keep numeric punctuation intact: "3.14" / "1,000" should not split.
+  if ((ch === '.' || ch === ',') && /\d/.test(text[index - 1] ?? '') && /\d/.test(text[index + 1] ?? '')) {
+    return false
+  }
+
+  if (ch === '.') {
+    const token = text.slice(0, index).match(/([A-Za-z]+)$/)?.[1]
+    const lower = token?.toLowerCase()
+    if (lower && SHADOWING_DOT_ABBREVIATIONS.has(lower)) return false
+    if (token?.length === 1 && token === token.toUpperCase()) return false
+    if (/[A-Za-z]\.[A-Za-z]/.test(text.slice(Math.max(0, index - 2), index + 2))) return false
+    if (/[A-Za-z]\.[A-Za-z]\.$/.test(text.slice(Math.max(0, index - 4), index + 1))) return false
+  }
+
+  return true
+}
+
+function splitSegmentAtShadowingStops(segment: string): string[] {
+  const parts: string[] = []
+  let start = 0
+
+  for (let i = 0; i < segment.length; i++) {
+    if (!isShadowingStop(segment, i)) continue
+
+    let end = i + 1
+    while (end < segment.length && /\s/.test(segment[end])) end += 1
+
+    const part = segment.slice(start, end).trim()
+    if (part) parts.push(part)
+    start = end
+  }
+
+  const rest = segment.slice(start).trim()
+  if (rest) parts.push(rest)
+
+  return parts.length > 0 ? parts : [segment]
+}
+
 // Binary-search for the text node that owns `absOffset`.
 // preferPrev: when offset lands exactly on a node boundary, use the END of the
 // previous node — keeps Range endpoints inside their originating text node so
@@ -436,6 +480,7 @@ function wholeEntriesRange(entries: TextEntry[]): Range | null {
 export function buildSentencePlan(
   elements: HTMLElement[],
   lang: string,
+  splitAtShadowStops?: boolean,
 ): Array<{ text: string; range: Range; el: HTMLElement }> {
   let segmenter: Intl.Segmenter
   try {
@@ -455,9 +500,18 @@ export function buildSentencePlan(
     // collapsed: whitespace collapsed — used for segmentation only
     const collapsed = normRaw.replace(/\s+/g, ' ').trim()
 
-    const segments = [...segmenter.segment(collapsed)]
+    const rawSegments = [...segmenter.segment(collapsed)]
       .map(s => s.segment.trim())
       .filter(s => s.length > 0)
+
+    const segments: string[] = []
+    for (const s of rawSegments) {
+      if (splitAtShadowStops) {
+        segments.push(...splitSegmentAtShadowingStops(s))
+      } else {
+        segments.push(s)
+      }
+    }
 
     let searchFrom = 0
     for (const sentence of segments) {
