@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 
-const SLIDES_COUNT = 9;
+const SLIDES_COUNT = 10;
 
 export default function GuidePage() {
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -301,7 +301,19 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 2: Screen OCR */}
+        {/* Slide 2: Video Mode */}
+        <div className="slide">
+          <div className="card" style={{ '--glow-color': '#ff5a5f' } as React.CSSProperties}>
+            <div className="icon">🎬</div>
+            <h2>Learn from Netflix &amp; YouTube</h2>
+            <p>Watch what you were going to watch anyway, and study it at the same time. Video Mode puts the whole transcript beside the picture and the spoken line — with its translation — under it. Click any word for a definition and the film waits for you; click any line in the transcript to jump straight back to it. Set a line to repeat, or to pause after every sentence so you can say it back.</p>
+            <div className="instruction-box">
+              <strong>💡 How to use:</strong> Open a Netflix title or a YouTube video with subtitles turned on. Use ⚙ on the dialogue panel to set repeats and pauses, or press <strong>A</strong> / <strong>D</strong> to step between lines and <strong>R</strong> to replay one.
+            </div>
+          </div>
+        </div>
+
+        {/* Slide 3: Screen OCR */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#b36bff' } as React.CSSProperties}>
             <div className="icon">📸</div>
@@ -313,7 +325,7 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 3: Immersive Read Aloud */}
+        {/* Slide 4: Immersive Read Aloud */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#ff6bd6' } as React.CSSProperties}>
             <div className="icon">🎧</div>
@@ -325,7 +337,7 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 4: Flashcards */}
+        {/* Slide 5: Flashcards */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#ffb36b' } as React.CSSProperties}>
             <div className="icon">🎴</div>
@@ -337,7 +349,7 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 5: Notifications */}
+        {/* Slide 6: Notifications */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#ffeb3b' } as React.CSSProperties}>
             <div className="icon">🔔</div>
@@ -349,7 +361,7 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 6: Pomodoro & Box Breathing */}
+        {/* Slide 7: Pomodoro & Box Breathing */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#4ade80' } as React.CSSProperties}>
             <div className="breathing-ring" />
@@ -361,7 +373,7 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 7: Gamification */}
+        {/* Slide 8: Gamification */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#46ff6a' } as React.CSSProperties}>
             <div className="icon">🔥</div>
@@ -373,7 +385,7 @@ export default function GuidePage() {
           </div>
         </div>
 
-        {/* Slide 8: Cloud Sync & Footer */}
+        {/* Slide 9: Cloud Sync & Footer */}
         <div className="slide">
           <div className="card" style={{ '--glow-color': '#ff6b6b' } as React.CSSProperties}>
             <div className="icon">☁️</div>
@@ -403,13 +415,14 @@ function getSlideColor(index: number) {
   switch (index) {
     case 0: return '#ffffff';
     case 1: return '#6bcfff';
-    case 2: return '#b36bff';
-    case 3: return '#ff6bd6';
-    case 4: return '#ffb36b';
-    case 5: return '#ffeb3b';
-    case 6: return '#4ade80';
-    case 7: return '#46ff6a';
-    case 8: return '#ff6b6b';
+    case 2: return '#ff5a5f';
+    case 3: return '#b36bff';
+    case 4: return '#ff6bd6';
+    case 5: return '#ffb36b';
+    case 6: return '#ffeb3b';
+    case 7: return '#4ade80';
+    case 8: return '#46ff6a';
+    case 9: return '#ff6b6b';
     default: return '#6bcfff';
   }
 }

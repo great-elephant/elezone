@@ -1,6 +1,7 @@
 import { translate } from './translation'
 import { getSelectionContext, applyHighlight, pulseHighlight } from './anchor'
 import { BookmarkColor, BOOKMARK_COLORS } from '../../shared/types'
+import type { SavedItem } from '../../shared/types'
 import type { ContextTranslateResult } from '../../background/aiTranslate'
 
 let host: HTMLElement | null = null
@@ -8,6 +9,19 @@ let shadow: ShadowRoot | null = null
 
 const DICTIONARY_CSS = `
   :host { all: initial; }
+  /* An invisible sheet over the page, under the popover, that catches the click
+     which dismisses it.
+     Without it the click that closes the popover also lands on whatever is
+     underneath — and on a video site what is underneath is the player, so
+     dismissing a definition paused or resumed the film as a side effect. The
+     click has to be absorbed by something, and a backdrop is the one thing that
+     can absorb it without knowing anything about the page. */
+  .dict-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483646;
+    background: transparent;
+  }
   .dict-popover {
     position: fixed;
     z-index: 2147483647;
@@ -218,12 +232,73 @@ const DICTIONARY_CSS = `
 
 export function initDictionary() {
   document.addEventListener('mousedown', handleClickOutside, { capture: true })
+  // Entering or leaving fullscreen changes which subtree gets painted, so an
+  // open popover has to move with it or it silently disappears.
+  document.addEventListener('fullscreenchange', () => {
+    // The toast is local to its own function and self-removes in a second or
+    // two, so only the popover is worth carrying across.
+    const root = overlayRoot()
+    if (host && host.parentElement !== root) root.appendChild(host)
+  })
+}
+
+// Video mode pauses playback while the popover is open, so it needs to know
+// when the popover goes away — via Cancel, Save, or a click outside.
+let onPopoverClosed: (() => void) | null = null
+
+export function setDictionaryCloseListener(cb: (() => void) | null): void {
+  onPopoverClosed = cb
+}
+
+// Saving from the popover writes straight to the background, so anything
+// holding its own copy of the library — Video Mode's subtitle strip and
+// sidebar — would keep showing the word as unsaved until the page reloaded.
+let onItemSaved: ((item: SavedItem) => void) | null = null
+
+export function setDictionarySaveListener(cb: ((item: SavedItem) => void) | null): void {
+  onItemSaved = cb
+}
+
+export function isDictionaryPopoverOpen(): boolean {
+  return host !== null
+}
+
+/**
+ * Where the word came from. `prefix`/`suffix` are the surrounding text used for
+ * re-anchoring on a page and for the sentence-level translation hint;
+ * `sourceContext`/`videoTimestamp` are set when the word came from a subtitle,
+ * where there is no page text to anchor to.
+ */
+export interface PopoverContext {
+  prefix: string
+  suffix: string
+  occurrenceIndex: number
+  sourceLang?: string
+  sourceContext?: string
+  videoTimestamp?: number
+  /** Permalink back to the video, and its title — see SavedItem. */
+  sourceUrl?: string
+  sourceTitle?: string
+}
+
+/**
+ * Where a floating overlay must be attached.
+ *
+ * In fullscreen the browser paints only the fullscreen element's subtree, so
+ * anything parented to <body> is simply not rendered — no z-index can rescue
+ * it. Netflix's Video Mode is watched fullscreen most of the time, which is
+ * exactly when looking a word up matters.
+ */
+function overlayRoot(): HTMLElement {
+  return (document.fullscreenElement as HTMLElement | null) ?? document.body
 }
 
 function hidePopover() {
+  const wasOpen = host !== null
   host?.remove()
   host = null
   shadow = null
+  if (wasOpen) onPopoverClosed?.()
 }
 
 // Brief, dismissible on-page hint (its own shadow-DOM host so page CSS can't
@@ -296,7 +371,7 @@ function showToast(message: string) {
 
   toast.append(msg, close)
   toastShadow.append(style, toast)
-  document.body.appendChild(toastHost)
+  overlayRoot().appendChild(toastHost)
 
   const timer = setTimeout(dismiss, 4000)
 }
@@ -338,7 +413,7 @@ async function showPopover(
   word: string,
   rect: DOMRect,
   color: BookmarkColor,
-  context: { prefix: string; suffix: string; occurrenceIndex: number; sourceLang?: string } | null
+  context: PopoverContext | null
 ) {
   hidePopover()
 
@@ -419,8 +494,27 @@ async function showPopover(
 
   content.appendChild(loading)
   popover.append(dragHeader, content)
-  shadow.append(style, popover)
-  document.body.appendChild(host)
+
+  const backdrop = document.createElement('div')
+  backdrop.className = 'dict-backdrop'
+  // Closed on pointerdown, matching the document-level handler this replaces —
+  // and stopped there, so the page never learns the click happened.
+  backdrop.addEventListener('pointerdown', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    hidePopover()
+  })
+  // A click event is dispatched separately from pointerdown, so it has to be
+  // stopped too or the page still receives one.
+  for (const type of ['mousedown', 'mouseup', 'click'] as const) {
+    backdrop.addEventListener(type, (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+    })
+  }
+
+  shadow.append(style, backdrop, popover)
+  overlayRoot().appendChild(host)
 
   setupDragHandler(popover, dragHeader)
 
@@ -583,6 +677,12 @@ async function showPopover(
       prefix: context?.prefix || '',
       suffix: context?.suffix || '',
       occurrenceIndex: context?.occurrenceIndex || 0,
+      // Subtitle lines have no counterpart in the page DOM, so the sentence is
+      // stored verbatim instead of being re-derived from prefix/suffix later.
+      ...(context?.sourceContext ? { sourceContext: context.sourceContext } : {}),
+      ...(context?.videoTimestamp !== undefined ? { videoTimestamp: context.videoTimestamp } : {}),
+      ...(context?.sourceUrl ? { sourceUrl: context.sourceUrl } : {}),
+      ...(context?.sourceTitle ? { sourceTitle: context.sourceTitle } : {}),
       color: selectedColor,
       createdAt: Date.now(),
       orphaned: false,
@@ -595,9 +695,18 @@ async function showPopover(
 
     await chrome.runtime.sendMessage({ type: 'SAVE_ITEM', payload: item }).catch(() => { })
     await chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'save' }).catch(() => { })
-    applyHighlight(item)
-    // Pulse the just-saved word on the page to tie the reward to it.
-    pulseHighlight(item.id, BOOKMARK_COLORS[selectedColor])
+    // Reuse this deck next time rather than making the learner re-pick it.
+    await chrome.runtime.sendMessage({
+      type: 'SAVE_LAST_BOOKMARK_COLOR', payload: { color: selectedColor },
+    }).catch(() => { })
+    onItemSaved?.(item as SavedItem)
+    // Only page selections have something on screen to highlight; a subtitle
+    // word would otherwise mark an unrelated occurrence in the Netflix chrome.
+    if (!context?.sourceContext) {
+      applyHighlight(item)
+      // Pulse the just-saved word on the page to tie the reward to it.
+      pulseHighlight(item.id, BOOKMARK_COLORS[selectedColor])
+    }
 
     saveBtn.textContent = 'Saved!'
 
@@ -700,4 +809,47 @@ function setupDragHandler(popover: HTMLElement, header: HTMLElement) {
     document.addEventListener('mousemove', handleMouseMove, { capture: true })
     document.addEventListener('mouseup', handleMouseUp, { capture: true })
   })
+}
+
+// ── Video-mode entry point: show popover for a word without a DOM selection ───
+
+/**
+ * Show the dictionary popover for a word clicked in the subtitle strip or the
+ * dialogue sidebar, where there is no DOM selection to anchor to.
+ */
+export async function showDictionaryPopoverForWord(
+  word: string,
+  sentenceContext?: string,
+  videoTimestamp?: number,
+  source?: { url?: string; title?: string },
+): Promise<void> {
+  const clean = word.trim()
+  if (!clean) return
+
+  // Synthetic rect at centre-bottom of the viewport.
+  const rect = new DOMRect(window.innerWidth / 2 - 125, window.innerHeight * 0.65, 250, 0)
+
+  // Words from a film have no selection colour to inherit, so carry over the
+  // deck used last time instead of always dropping them in yellow.
+  const stored = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).catch(() => null)
+  const color: BookmarkColor = stored?.lastBookmarkColor ?? 'yellow'
+
+  // Split the subtitle line around the word, so the popover gets the same
+  // prefix/suffix a page selection would — that is what drives the
+  // context-aware translation and the sentence hint.
+  let context: PopoverContext | null = null
+  if (sentenceContext) {
+    const at = sentenceContext.toLowerCase().indexOf(clean.toLowerCase())
+    context = {
+      prefix: at === -1 ? '' : sentenceContext.slice(0, at),
+      suffix: at === -1 ? '' : sentenceContext.slice(at + clean.length),
+      occurrenceIndex: 0,
+      sourceContext: sentenceContext,
+      videoTimestamp,
+      sourceUrl: source?.url,
+      sourceTitle: source?.title,
+    }
+  }
+
+  await showPopover(clean, rect, color, context)
 }

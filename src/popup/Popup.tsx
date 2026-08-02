@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { ReadAloudState, Settings, DEFAULT_SETTINGS, PomodoroState, PomodoroSettings, TodoTask } from "../shared/types";
+import { ReadAloudState, Settings, DEFAULT_SETTINGS, PomodoroState, PomodoroSettings, TodoTask, VideoModeSettings, normaliseVideoModeSettings } from "../shared/types";
 import { PomodoroTodoList } from "./components/PomodoroTodoList";
 
 function formatTime(seconds?: number): string | null {
@@ -53,6 +53,9 @@ export default function Popup() {
   // toggle) below — reset automatically when the session ends (phase goes
   // back to idle).
   const [showSessionTasks, setShowSessionTasks] = useState(false);
+  // Video Mode only makes sense on a supported streaming tab, so its section is
+  // hidden entirely elsewhere rather than shown disabled.
+  const [isVideoTab, setIsVideoTab] = useState(false);
   const todoListRef = useRef<HTMLDivElement>(null);
   const volumeControlRef = useRef<HTMLDivElement>(null);
   const readAloudVolumeControlRef = useRef<HTMLDivElement>(null);
@@ -98,6 +101,12 @@ export default function Popup() {
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
       if (!tab?.id || tab.id < 0) return;
       activeTabId = tab.id;
+
+      try {
+        setIsVideoTab(/(^|\.)(netflix\.com|youtube\.com)$/.test(new URL(tab.url ?? "").hostname));
+      } catch {
+        setIsVideoTab(false);
+      }
       chrome.runtime.sendMessage(
         { type: "GET_READ_ALOUD_STATE", payload: { tabId: tab.id } },
         (res: { state: ReadAloudState; index?: number; total?: number; speed?: number } | null) => {
@@ -174,6 +183,31 @@ export default function Popup() {
         })
         .catch(() => { });
     }
+  }
+
+  const videoMode: VideoModeSettings = normaliseVideoModeSettings(settings.videoMode);
+
+  // Persists the change, then tells the tab about it. Flipping `enabled` has to
+  // build/tear down the whole overlay (TOGGLE_VIDEO_MODE); the other switches
+  // are applied to the live overlay in place.
+  async function updateVideoMode(patch: Partial<VideoModeSettings>) {
+    const next: Settings = {
+      ...settings,
+      videoMode: { ...videoMode, ...patch },
+      updatedAt: Date.now(),
+    };
+    setSettings(next);
+    await chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
+
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || tab.id < 0) return;
+    const vm = next.videoMode!;
+    chrome.tabs
+      .sendMessage(tab.id, {
+        type: patch.enabled !== undefined ? "TOGGLE_VIDEO_MODE" : "APPLY_VIDEO_MODE_SETTINGS",
+        payload: { enabled: vm.enabled, settings: vm },
+      })
+      .catch(() => { });
   }
 
   async function startReadAloud() {
@@ -893,6 +927,29 @@ export default function Popup() {
             );
           })()}
         </div>
+
+        {/* Video Mode — only rendered on a supported video tab (Netflix, YouTube). */}
+        {isVideoTab && (
+          <div style={styles.pomodoroBox}>
+            <div style={styles.pomodoroHeader}>
+              <span>🎬 Video Mode</span>
+              <button
+                style={{ ...styles.toggle, ...(videoMode.enabled ? styles.toggleOn : {}) }}
+                onClick={() => updateVideoMode({ enabled: !videoMode.enabled })}
+                role="switch"
+                aria-label="Video Mode"
+                aria-pressed={videoMode.enabled}
+              >
+                <span style={{ ...styles.toggleThumb, ...(videoMode.enabled ? styles.toggleThumbOn : {}) }} />
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: '#8a8ab0', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>
+              Bilingual subtitles, a dialogue list, and click-to-save words while you watch.
+              {videoMode.enabled && ' Tune it with the \u2699 button on the subtitle bar.'}
+            </div>
+
+          </div>
+        )}
       </div>
     </div>
   );

@@ -5,9 +5,10 @@ import { destroyReadingOverlays } from './modules/readAloudOverlay'
 import { installSpaNavigationGuard } from './modules/readAloudSpaGuard'
 import { savePosition } from './modules/readAloudPosition'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
-import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor } from '../shared/types'
+import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor, VideoModeSettings, normaliseVideoModeSettings } from '../shared/types'
 import { initDictionary } from './modules/dictionary'
 import { initSelectionChip, maybeShowSelectionTip } from './modules/selectionChip'
+import { isVideoSite, playbackMediaKey, enableVideoMode, disableVideoMode, isVideoModeActive, applyVideoModeSettings, waitForVideo } from './modules/videoMode/index'
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import { OcrManager } from './components/OcrManager'
@@ -391,6 +392,11 @@ async function init() {
   initDictionary()
   initSelectionChip()
 
+  // ── Video Mode: auto-init on video sites (Netflix) ────────────────────────
+  // Kicked off before the awaits below so a failure in page re-anchoring (which
+  // init()'s catch swallows) can't silently take Video Mode down with it.
+  if (isVideoSite()) initVideoModeForPage()
+
   // F25: on a soft (SPA) navigation the sentence ranges go stale — stop reading
   // cleanly and save the position so Resume works when the user returns. We do
   // NOT try to auto-continue on the new page.
@@ -420,6 +426,62 @@ async function init() {
 
   // Translation is NOT auto-started on page load.
   // It starts only when the user presses "Start Reading" with the toggle ON.
+
+}
+
+// Video sites navigate between the player and the rest of the site without a
+// page load, so this has to keep watching for the whole life of the tab: turn
+// Video Mode on when the learner opens a title, and — just as important — off
+// again when they leave, since the strip and sidebar shrink the viewport and
+// would otherwise squash the browse grid.
+function initVideoModeForPage() {
+  // What was playing last time we looked. Keyed on the media rather than on
+  // "are we on a player page", so moving straight from one video to the next is
+  // still seen as a change — Video Mode may have stood itself down on the last
+  // one and has to be given the chance to start again.
+  let lastKey: string | null = null
+  // Bumped on every transition so a slow enable can tell it has been overtaken.
+  let generation = 0
+
+  const tick = () => {
+    const key = playbackMediaKey()
+    if (key === lastKey) return
+    const previous = lastKey
+    lastKey = key
+    const mine = ++generation
+
+    if (!key) {
+      if (isVideoModeActive()) disableVideoMode()
+      return
+    }
+    // One video to another with Video Mode still running: its own episode
+    // watcher swaps the cues in place, which keeps the sidebar's scroll and
+    // avoids a full teardown flash.
+    if (previous && isVideoModeActive()) return
+
+    void (async () => {
+      try {
+        if (!(await waitForVideo())) return
+        if (mine !== generation || isVideoModeActive()) return
+        const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+        const vmSettings = normaliseVideoModeSettings(settings.videoMode)
+        if (!vmSettings.enabled) return
+        const savedItems: SavedItem[] = await chrome.runtime.sendMessage({ type: 'GET_ITEMS' })
+        if (mine !== generation) return
+        await enableVideoMode(
+          vmSettings,
+          savedItems || [],
+          settings.translation?.defaultTargetLanguage || 'vi',
+          settings.translation?.learningLanguage || 'en',
+        )
+      } catch {
+        // Extension context not ready or navigating away
+      }
+    })()
+  }
+
+  tick()
+  window.setInterval(tick, 1000)
 }
 
 init().catch(() => { })
@@ -526,6 +588,36 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
       showPopoverFromSelection(selectedText, color)
       return { ok: true }
     }
+
+    case 'TOGGLE_VIDEO_MODE': {
+      const { enabled, settings: vmSettings } = (msg.payload ?? {}) as { enabled: boolean; settings?: VideoModeSettings }
+      if (enabled) {
+        try {
+          const settings2: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+          const resolved: VideoModeSettings = { ...normaliseVideoModeSettings(settings2.videoMode), ...(vmSettings ?? {}), enabled: true }
+          const savedItems: SavedItem[] = await chrome.runtime.sendMessage({ type: 'GET_ITEMS' })
+          await enableVideoMode(
+            resolved,
+            savedItems || [],
+            settings2.translation?.defaultTargetLanguage || 'vi',
+            settings2.translation?.learningLanguage || 'en',
+          )
+        } catch { /* ignore */ }
+      } else {
+        disableVideoMode()
+      }
+      return { ok: true, active: isVideoModeActive() }
+    }
+
+    // Live tweaks (IPA / auto-pause / sidebar) while video mode is already on.
+    case 'APPLY_VIDEO_MODE_SETTINGS': {
+      const { settings: vmSettings } = (msg.payload ?? {}) as { settings?: VideoModeSettings }
+      if (vmSettings) applyVideoModeSettings(normaliseVideoModeSettings(vmSettings))
+      return { ok: true, active: isVideoModeActive() }
+    }
+
+    case 'GET_VIDEO_MODE_STATE':
+      return { active: isVideoModeActive(), videoSite: isVideoSite() }
 
     default:
       return null

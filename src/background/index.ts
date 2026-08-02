@@ -15,6 +15,7 @@ import {
 import {
   SavedItem,
   BookmarkColor,
+  VideoModeSettings,
   BOOKMARK_COLORS,
   ReadAloudSettings,
   ReadAloudState,
@@ -1325,6 +1326,25 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return getActivityLog()
     case 'GET_SETTINGS':
       return getSettings()
+
+    // Video Mode's in-player panel edits one slice of the settings. Merging it
+    // here rather than having the content script send a whole Settings object
+    // avoids clobbering anything the popup or options page changed meanwhile.
+    case 'SAVE_VIDEO_MODE_SETTINGS': {
+      const { settings: videoMode } = (msg.payload ?? {}) as { settings?: VideoModeSettings }
+      if (!videoMode) return { ok: false }
+      const current = await getSettings()
+      await saveSettings({ ...current, videoMode, updatedAt: Date.now() })
+      return { ok: true }
+    }
+
+    case 'SAVE_LAST_BOOKMARK_COLOR': {
+      const { color } = (msg.payload ?? {}) as { color?: BookmarkColor }
+      if (!color) return { ok: false }
+      const current = await getSettings()
+      await saveSettings({ ...current, lastBookmarkColor: color, updatedAt: Date.now() })
+      return { ok: true }
+    }
     case 'SAVE_SETTINGS': {
       const newSettings = msg.payload as Settings
       await saveSettings(newSettings)

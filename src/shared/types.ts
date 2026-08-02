@@ -37,6 +37,17 @@ export interface SavedItem {
   interval?: number
   ease?: number
   repetitions?: number
+
+  // Video context (optional, only present when saved from a video subtitle)
+  videoTimestamp?: number  // seconds into the video when the word appeared
+  sourceContext?: string   // the full subtitle sentence containing the word
+  // Where to go back to. Stored without a timestamp so a review screen can
+  // append one in whatever form the platform wants ("&t=93s" on YouTube). Only
+  // written for platforms that have a stable permalink — a Netflix watch URL
+  // needs the right profile and can point at a title that has left the library,
+  // so a dead link is worse than none.
+  sourceUrl?: string
+  sourceTitle?: string     // video / episode name, for showing the link
 }
 
 export interface ReadAloudSettings {
@@ -57,6 +68,15 @@ export interface ReadAloudSettings {
 
 export interface TranslationSettings {
   defaultTargetLanguage: string
+  /**
+   * The language being studied — the one subtitles, lookups and Read Aloud are
+   * expected to be in. Everything before Video Mode simply assumed English,
+   * which held on Netflix because the learner chose the film. It does not hold
+   * on YouTube, where most of what turns up is in the learner's own language;
+   * without this, Video Mode would light up on a Vietnamese vlog and offer to
+   * "translate" it into Vietnamese.
+   */
+  learningLanguage?: string
   enabled: boolean
   mode: 'paragraph' | 'sentence'
   asideForceGoogle?: boolean   // translation overlay uses Google by default (skip on-device)
@@ -88,6 +108,50 @@ export interface OcrSettings {
   sentenceCase: boolean
   removeExtraSpaces: boolean
   language?: string
+}
+
+/**
+ * What happens when a subtitle line finishes. These three are mutually
+ * exclusive — pausing to wait for a keypress and pausing for a timed shadowing
+ * gap are two answers to the same question, so they are one setting, not two
+ * toggles that could both be on.
+ */
+export type EndOfLinePause = 'off' | 'manual' | 'shadowing'
+
+export type VideoTranslationSource = 'auto' | 'machine'
+
+export interface VideoModeSettings {
+  enabled: boolean
+
+  showTranslation: boolean
+  endOfLinePause: EndOfLinePause
+  pauseOnSavedWord: boolean
+  sidebarVisible: boolean
+  repeat: number               // times each line plays, 1 = no repeat
+
+  // ── Advanced ──
+  hideSoundEffects: boolean    // drop "[door opens]" style cues
+  subtitleFontSize: number     // px
+  translationSource: VideoTranslationSource
+  shadowGapFactor: number      // gap = cue duration × this
+  keyboardShortcuts: boolean
+
+  /**
+   * Where the learner dragged the subtitle overlay to, as a percentage of the
+   * player box — percentages rather than pixels so it survives a resize, going
+   * fullscreen, and a different screen tomorrow. Null means the default spot.
+   *
+   * `xPct` is the box's centre, so it stays put when the width changes. `yPct`
+   * is the gap between the bottom of the player and the bottom of the box:
+   * the box is anchored by its lower edge and grows upward, so a long line
+   * never pushes the dialogue down over the picture it belongs to.
+   *
+   * Only used where the strip floats over the picture (YouTube). On Netflix it
+   * is a band below a shrunken player and has nowhere to go.
+   */
+  stripPosition?: { xPct: number; yPct: number } | null
+  /** Width of that overlay as a percentage of the player. */
+  stripWidthPct?: number
 }
 
 export interface RoastSettings {
@@ -147,6 +211,61 @@ export interface Settings {
   tasks?: TodoTask[]
   doneTasks?: TodoTask[]
   dailyTasks?: TodoTask[]
+  videoMode?: VideoModeSettings
+  // Deck colour the learner last saved with, reused as the default next time.
+  lastBookmarkColor?: BookmarkColor
+}
+
+export const DEFAULT_VIDEO_MODE_SETTINGS: VideoModeSettings = {
+  enabled: true,
+  showTranslation: true,
+  endOfLinePause: 'off',
+  pauseOnSavedWord: false,
+  sidebarVisible: true,
+  repeat: 1,
+  hideSoundEffects: true,
+  subtitleFontSize: 28,
+  translationSource: 'auto',
+  shadowGapFactor: 1,
+  keyboardShortcuts: true,
+  stripPosition: null,
+  stripWidthPct: 90,
+}
+
+/**
+ * Merge stored Video Mode settings over the defaults, dropping fields from
+ * older shapes.
+ *
+ * Settings saved while the preset system existed can carry
+ * `showTranslation: false` — the old "Listening practice" preset turned it off.
+ * With presets gone there is no longer any way to tell that was deliberate, and
+ * a missing translation line reads as a bug, so that era's value is discarded.
+ */
+export function normaliseVideoModeSettings(
+  stored: (Partial<VideoModeSettings> & { preset?: string; maxLineChars?: number }) | undefined,
+): VideoModeSettings {
+  const raw = { ...(stored ?? {}) } as Record<string, unknown>
+  const fromPresetEra = 'preset' in raw
+  delete raw.preset
+  delete raw.maxLineChars
+
+  const merged: VideoModeSettings = { ...DEFAULT_VIDEO_MODE_SETTINGS, ...(raw as Partial<VideoModeSettings>) }
+  if (fromPresetEra) merged.showTranslation = DEFAULT_VIDEO_MODE_SETTINGS.showTranslation
+
+  // A stored position from a narrower window, or simply corrupt, would put the
+  // overlay somewhere it cannot be dragged back from.
+  const pos = merged.stripPosition
+  const sane = (n: unknown) => typeof n === 'number' && isFinite(n) && n >= 0 && n <= 100
+  merged.stripPosition = pos && sane(pos.xPct) && sane(pos.yPct) ? pos : null
+
+  // A width below this is too narrow to read a sentence in, and one above 100
+  // would hang off the picture.
+  const width = merged.stripWidthPct
+  merged.stripWidthPct = typeof width === 'number' && isFinite(width)
+    ? Math.min(100, Math.max(25, width))
+    : DEFAULT_VIDEO_MODE_SETTINGS.stripWidthPct
+
+  return merged
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -164,6 +283,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   translation: {
     defaultTargetLanguage: 'vi',
+    learningLanguage: 'en',
     enabled: true,
     mode: 'paragraph',
     disableAI: true,
@@ -229,6 +349,11 @@ export const BOOKMARK_COLORS: Record<BookmarkColor, string> = {
 export type MessageType =
   | 'SAVE_ITEM'
   | 'GET_ITEMS'
+  | 'TOGGLE_VIDEO_MODE'
+  | 'APPLY_VIDEO_MODE_SETTINGS'
+  | 'SAVE_VIDEO_MODE_SETTINGS'
+  | 'SAVE_LAST_BOOKMARK_COLOR'
+  | 'GET_VIDEO_MODE_STATE'
   | 'DELETE_ITEM'
   | 'UPDATE_ITEM'
   | 'SYNC_ITEMS'

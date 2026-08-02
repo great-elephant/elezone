@@ -7,6 +7,7 @@ EleZone is a powerful, privacy-first Chrome Extension designed to turn your casu
 ## 🌟 Key Features
 
 *   **Context-Aware Translation:** Highlight any word or phrase on any webpage to get a translation that understands the sentence it's in — not just a generic dictionary guess.
+*   **Video Mode (Netflix & YouTube):** Learn from what you were going to watch anyway — a full transcript beside the picture, dual subtitles under it, and every word one click from a definition. [See below](#-video-mode).
 *   **Read Aloud:** Turn any English article into a listening session, with each sentence highlighted as it's spoken and an optional side-by-side translation.
 *   **Extract Text from Images:** Pull readable, translatable text out of pictures, comics, or manga panels right from the page.
 *   **Vocabulary Flashcards:** Save any word you look up and review it later with four practice modes — Passive, Typing, Listening, and Multiple Choice.
@@ -14,6 +15,23 @@ EleZone is a powerful, privacy-first Chrome Extension designed to turn your casu
 *   **Focus & Breathe:** An integrated Pomodoro timer and guided box breathing to help you study in focused, low-stress sprints.
 *   **Gamification & Tough Love:** Earn "Sparks" and build daily streaks. But beware: if you slack off, the app will roast you!
 *   **Cloud Sync:** Your words, settings, and progress sync privately and directly to your own Google Drive.
+
+## 🎬 Video Mode
+
+Turns a Netflix title or a YouTube video into a study session, without leaving the player.
+
+*   **Dual subtitles.** The spoken line and its translation together. Where the site publishes a translation of its own — a Netflix subtitle track in your language, or a YouTube caption track — that is used in preference to machine translation, because a human one reads better. Machine translation fills the gap when there isn't one.
+*   **Full transcript sidebar.** Every line of the film, in order, with the current one highlighted and following along. Click any line to jump the video there.
+*   **Click a word, get a definition.** Anywhere in the dialogue or the transcript. Playback pauses while you read and picks up when you close it. Saved words are underlined everywhere they appear later in the film, and ones the review schedule says are due are marked more strongly — meeting a word in real dialogue exactly when you were about to forget it is the point.
+*   **Repeat and shadowing.** Play each line up to five times, or freeze after every line so you can say it back. The gap is as long as the line took to say. Same behaviour as Read Aloud, deliberately.
+*   **Auto-pause on a saved word.** Stop whenever a line contains something from your library.
+*   **Keyboard.** `A` / `D` previous and next line, `R` replay, `Z` toggle the translation, `Space` to move on from a pause. Chosen to avoid the keys each player already uses.
+
+Sentences, not fragments. Streaming subtitles are cut to fit the screen and to be read at a comfortable pace, not by where the sentence ends, so lines like "What the hell" / "are you made of?" are stitched back together before you see them. Auto-generated YouTube captions are grouped by where the speaker actually paused instead, since their timings mean something different.
+
+**Netflix** shrinks the picture and puts the dialogue in a band below it, so nothing is ever covered. **YouTube** leaves its page exactly as it is: the dialogue floats over the picture with no backdrop until you point at it, and you can drag it anywhere and resize it. In fullscreen both take the same shape.
+
+Video Mode needs subtitles to be switched on in the player. On YouTube it stays out of the way unless there are captions in the language you're learning — it will not light up over a video in your own language, and it never skips or blocks ads.
 
 ## 🛠 Tech Stack
 
