@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.0](https://github.com/great-elephant/elezone/compare/0.4.0...0.5.0) (2026-08-02)
+
+### Features
+
+* **video-mode:** add Netflix and YouTube study mode with dual subtitles and transcript ([d642ac8](https://github.com/great-elephant/elezone/commit/d642ac88110bb241580d1310bc9267847744c3d8))
+
+### Bug Fixes
+
+* **read-aloud:** split shadowing at punctuation ([0a094fb](https://github.com/great-elephant/elezone/commit/0a094fb2418bf0a037b22d46b845c2b1e9c64691))
+
 ## [0.4.0](https://github.com/great-elephant/elezone/compare/0.3.0...0.4.0) (2026-07-27)
 
 ### Features
