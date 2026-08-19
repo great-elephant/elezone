@@ -185,7 +185,19 @@ export interface PomodoroSettings {
 
 
 export interface Settings {
+  /**
+   * Newest of the per-section clocks below, excluding `sync`. Kept only so a
+   * device still running a build that compares one flat timestamp reads a sane
+   * value out of the shared file; nothing in this build merges on it.
+   */
   updatedAt?: number
+  /**
+   * When each section last actually changed, so sync can merge section by
+   * section instead of picking one whole settings document over the other.
+   * Absent on data written before per-section sync existed — readers seed it
+   * from `updatedAt`.
+   */
+  sectionUpdatedAt?: Partial<Record<SettingsSection, number>>
   defaultStudyMode?: StudyMode
   showHintInitially?: boolean
   // Show a floating "Save" chip near the selection to save a word (default enabled).
@@ -215,6 +227,43 @@ export interface Settings {
   // Deck colour the learner last saved with, reused as the default next time.
   lastBookmarkColor?: BookmarkColor
 }
+
+/**
+ * One independently synced slice of the settings: every top-level field except
+ * the clocks themselves. Sync compares and merges one section at a time, so a
+ * change to the reading voice on one machine can no longer discard a change to
+ * the translation language made on another.
+ */
+export type SettingsSection = Exclude<keyof Settings, 'updatedAt' | 'sectionUpdatedAt'>
+
+/**
+ * Spelled out as a Record rather than an array so the compiler rejects this the
+ * moment a field is added to Settings without deciding how it syncs — a section
+ * missing here would silently never be compared, and so never travel between
+ * machines.
+ */
+const SETTINGS_SECTION_KEYS: Record<SettingsSection, true> = {
+  defaultStudyMode: true,
+  showHintInitially: true,
+  selectionChipEnabled: true,
+  readAloud: true,
+  translation: true,
+  sync: true,
+  gamification: true,
+  ocr: true,
+  deckLabels: true,
+  deckOrder: true,
+  srsNotifications: true,
+  roast: true,
+  pomodoro: true,
+  tasks: true,
+  doneTasks: true,
+  dailyTasks: true,
+  videoMode: true,
+  lastBookmarkColor: true,
+}
+
+export const SETTINGS_SECTIONS = Object.keys(SETTINGS_SECTION_KEYS) as SettingsSection[]
 
 export const DEFAULT_VIDEO_MODE_SETTINGS: VideoModeSettings = {
   enabled: true,

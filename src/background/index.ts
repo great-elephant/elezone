@@ -126,7 +126,15 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes['settings']) {
     void setupContextMenus()
-    void setupSrsAlarm()
+    // Recreating the alarm resets its periodInMinutes countdown, so only do it
+    // when the srsNotifications config itself actually changed — not on every
+    // settings save (slider drags, deck edits, ...), which would otherwise keep
+    // pushing srs-tick's first fire further into the future indefinitely.
+    const oldSrs = (changes.settings.oldValue as Settings | undefined)?.srsNotifications
+    const newSrs = (changes.settings.newValue as Settings | undefined)?.srsNotifications
+    if (JSON.stringify(oldSrs) !== JSON.stringify(newSrs)) {
+      void setupSrsAlarm()
+    }
   }
 })
 
@@ -230,20 +238,46 @@ chrome.windows.onRemoved.addListener(id => {
   if (id === ocrWindowId) ocrWindowId = null
 })
 
+// Serializes concurrent openOcrWindow() calls: the ocrWindowId guard above is
+// only assigned once windows.create() resolves, so two trigger_ocr's fired in
+// quick succession would both sail past it while still awaiting
+// captureVisibleTab/getSettings/etc and each end up creating their own popup.
+// Locking synchronously (before the first await), same pattern as
+// setupOffscreenDocument's `creatingOffscreen`, makes the second call wait for
+// the first to finish (and inherit its window) instead of racing it.
+let openingOcrWindow: Promise<void> | null = null
+
+// Monotonic id for each standalone crop-window OCR run, handed to the popup
+// via ocr_window_payload and echoed back through OCR_WINDOW_PROGRESS/RESULT.
+// OCR_WINDOW_* messages are a runtime-wide broadcast rather than scoped to a
+// window, so without this a result from a job the user abandoned by closing
+// the popup mid-OCR can land in a freshly reopened popup and show a stale
+// answer.
+let ocrWindowRequestSeq = 0
+
 async function openOcrWindow(tab: chrome.tabs.Tab) {
-  if (ocrWindowId != null) {
-    // Ignore the error if the user already closed it manually — either way
-    // we're back to "no crop window open", then fall through to open a fresh one.
-    try { await chrome.windows.remove(ocrWindowId) } catch { /* already gone */ }
-    ocrWindowId = null
+  if (openingOcrWindow) {
+    await openingOcrWindow
+    return
   }
 
+  let releaseLock: () => void = () => { }
+  openingOcrWindow = new Promise(resolve => { releaseLock = resolve })
+
   try {
+    if (ocrWindowId != null) {
+      // Ignore the error if the user already closed it manually — either way
+      // we're back to "no crop window open", then fall through to open a fresh one.
+      try { await chrome.windows.remove(ocrWindowId) } catch { /* already gone */ }
+      ocrWindowId = null
+    }
+
     const winId = tab.windowId ?? chrome.windows.WINDOW_ID_CURRENT
     const dataUrl = await chrome.tabs.captureVisibleTab(winId, { format: 'png' })
     const settings = await getSettings()
     const lang = settings.ocr?.language || 'eng'
-    await chrome.storage.session.set({ ocr_window_payload: { dataUrl, lang } })
+    const requestId = ++ocrWindowRequestSeq
+    await chrome.storage.session.set({ ocr_window_payload: { dataUrl, lang, requestId } })
 
     // Match the current window's bounds so the crop popup lands directly over
     // the page it's capturing (PDF viewer / chrome:// — no in-page overlay is
@@ -271,6 +305,9 @@ async function openOcrWindow(tab: chrome.tabs.Tab) {
     ocrWindowId = win?.id ?? null
   } catch (e) {
     console.error('Failed to open OCR window:', e)
+  } finally {
+    openingOcrWindow = null
+    releaseLock()
   }
 }
 
@@ -1084,17 +1121,26 @@ async function controlReadAloud(
       session.settings = { ...session.settings, languageVoices }
 
       const settings = await getSettings()
+      // A stop (or a new session on this or another tab) may have landed while
+      // we awaited — don't mutate/broadcast a session that's no longer live.
+      // Still report ok: true, because the caller reads ok: false as "no
+      // session exists" and tears down its local sentence map; a real stop has
+      // already broadcast 'idle' by itself.
+      if (activeSession !== session) return { ok: true }
       settings.readAloud = {
         ...settings.readAloud,
         languageVoices: { ...(settings.readAloud.languageVoices || {}), [lang]: voiceName },
       }
       await saveSettings(settings)
+      if (activeSession !== session) return { ok: true }
     } else {
       // Unknown page language — fall back to updating the plain fallback voice.
       session.settings = { ...session.settings, voice: voiceName }
       const settings = await getSettings()
+      if (activeSession !== session) return { ok: true }
       settings.readAloud = { ...settings.readAloud, voice: voiceName }
       await saveSettings(settings)
+      if (activeSession !== session) return { ok: true }
     }
 
     // Re-speak the current sentence with the new voice (token-bump pattern).
@@ -1117,39 +1163,14 @@ async function controlReadAloud(
     session.settings = { ...session.settings, repetition: count }
 
     const settings = await getSettings()
+    // A stop (or a new session on another tab) may have landed while we
+    // awaited — don't mutate/broadcast a session that's no longer live.
+    if (activeSession !== session) return { ok: false }
     settings.readAloud = { ...settings.readAloud, repetition: count }
     await saveSettings(settings)
+    if (activeSession !== session) return { ok: false }
 
     // Reflect the new value in the mini-player without disturbing playback.
-    await broadcastReadAloudState(tabId, session.state, session.currentIndex, false, session.inGap)
-    return { ok: true }
-  }
-
-  if (action === 'setShadowing') {
-    // H29: toggle shadowing mode live. Persisted to stored settings so the
-    // choice sticks. Turning it OFF mid-gap resumes speaking immediately.
-    const enabled = (payload as { enabled?: boolean }).enabled === true
-    const session = activeSession
-    session.shadowing = enabled
-
-    const settings = await getSettings()
-    settings.readAloud = { ...settings.readAloud, shadowing: enabled }
-    await saveSettings(settings)
-
-    if (!enabled && session.inGap) {
-      // Cancel the pending gap and continue reading right away — the sentence
-      // at currentIndex was already fully spoken (that's what the gap was
-      // for), so this advances past it rather than re-speaking it.
-      clearShadowingGap()
-      session.inGap = false
-      session.token = ++sessionCounter
-      session.state = 'playing'
-      chrome.tts.stop()
-      startSpeakingWatchdog(session.token)
-      advanceToNextSentence(session.token)
-      return { ok: true }
-    }
-
     await broadcastReadAloudState(tabId, session.state, session.currentIndex, false, session.inGap)
     return { ok: true }
   }
@@ -1504,7 +1525,14 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
           focusTimeAccumulator += elapsedSec;
         }
         lastFocusTickAt = now;
-        if (focusTimeAccumulator >= 60) {
+        // Switching the active task mid-focus (still running+focus throughout)
+        // must flush whatever's accumulated against the OLD task first —
+        // flushFocusTimeAccumulator() reads the module-level lastPomodoroTaskId,
+        // which is still the old id here (it isn't reassigned until below), so
+        // this can't silently get credited to the task being switched to.
+        if (wasRunningFocus && state.activeTaskId !== lastPomodoroTaskId && focusTimeAccumulator > 0) {
+          await flushFocusTimeAccumulator();
+        } else if (focusTimeAccumulator >= 60) {
           await flushFocusTimeAccumulator();
         }
       }
@@ -1537,7 +1565,7 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
     case 'OCR_PROGRESS': {
       const { tabId, status, progress, broadcast, requestId } = msg.payload as { tabId?: number; status: string; progress: number; broadcast?: boolean; requestId?: number };
       if (broadcast) {
-        chrome.runtime.sendMessage({ type: 'OCR_WINDOW_PROGRESS', payload: { status, progress } }).catch(() => {});
+        chrome.runtime.sendMessage({ type: 'OCR_WINDOW_PROGRESS', payload: { status, progress, requestId } }).catch(() => {});
       } else if (tabId) {
         // requestId lets the in-page OcrManager drop this if a later Alt+O
         // already replaced the session that kicked off this OCR run.
@@ -1548,7 +1576,7 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
     case 'OCR_COMPLETE': {
       const { tabId, text, error, broadcast, requestId } = msg.payload as { tabId?: number; text?: string; error?: string; broadcast?: boolean; requestId?: number };
       if (broadcast) {
-        chrome.runtime.sendMessage({ type: 'OCR_WINDOW_RESULT', payload: { text, error } }).catch(() => {});
+        chrome.runtime.sendMessage({ type: 'OCR_WINDOW_RESULT', payload: { text, error, requestId } }).catch(() => {});
       } else if (tabId) {
         chrome.tabs.sendMessage(tabId, { type: 'OCR_COMPLETE', payload: { text, error, requestId } }).catch(() => {});
       }

@@ -13,8 +13,15 @@ type Props = {
 export const CropOverlay: React.FC<Props> = ({ screenshotDataUrl, onCropComplete, onCancel }) => {
   const [startPoint, setStartPoint] = useState<Point | null>(null);
   const [currentPoint, setCurrentPoint] = useState<Point | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // The drag bounds live in refs, not just state, because the window-level
+  // mouseup below runs on the same native event as the div's React onMouseUp
+  // (React 18 delegates to the root container, which is appended to
+  // document.body, so the event keeps bubbling up to window afterwards).
+  // Clearing the refs synchronously makes that second call early-return; a
+  // state guard would still see the pre-update value and crop twice.
+  const dragStartRef = useRef<Point | null>(null);
+  const dragCurrentRef = useRef<Point | null>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -25,24 +32,29 @@ export const CropOverlay: React.FC<Props> = ({ screenshotDataUrl, onCropComplete
   }, [onCancel]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    dragCurrentRef.current = { x: e.clientX, y: e.clientY };
     setStartPoint({ x: e.clientX, y: e.clientY });
     setCurrentPoint({ x: e.clientX, y: e.clientY });
-    setIsDragging(true);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
+    if (!dragStartRef.current) return;
+    dragCurrentRef.current = { x: e.clientX, y: e.clientY };
     setCurrentPoint({ x: e.clientX, y: e.clientY });
   };
 
   const handleMouseUp = () => {
-    if (!isDragging || !startPoint || !currentPoint) return;
-    setIsDragging(false);
+    const start = dragStartRef.current;
+    const current = dragCurrentRef.current;
+    if (!start || !current) return;
+    dragStartRef.current = null;
+    dragCurrentRef.current = null;
 
-    const x = Math.min(startPoint.x, currentPoint.x);
-    const y = Math.min(startPoint.y, currentPoint.y);
-    const width = Math.abs(currentPoint.x - startPoint.x);
-    const height = Math.abs(currentPoint.y - startPoint.y);
+    const x = Math.min(start.x, current.x);
+    const y = Math.min(start.y, current.y);
+    const width = Math.abs(current.x - start.x);
+    const height = Math.abs(current.y - start.y);
 
     if (width < 10 || height < 10) {
       setStartPoint(null);
@@ -78,6 +90,15 @@ export const CropOverlay: React.FC<Props> = ({ screenshotDataUrl, onCropComplete
     };
     img.src = screenshotDataUrl;
   };
+
+  // A drag released outside the viewport never reaches the overlay div's React
+  // onMouseUp, so the selection would never be completed. Mirror it at the
+  // window level, where the native mouseup still lands.
+  useEffect(() => {
+    const onWindowMouseUp = () => handleMouseUp();
+    window.addEventListener('mouseup', onWindowMouseUp);
+    return () => window.removeEventListener('mouseup', onWindowMouseUp);
+  });
 
   const selectionStyle: React.CSSProperties = {
     position: 'absolute',

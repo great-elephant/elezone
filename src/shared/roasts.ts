@@ -36,8 +36,11 @@ const POOLS: Record<Exclude<RoastIntensity, 'off'>, string[]> = {
   ],
 }
 
+const VALID_INTENSITIES: readonly RoastIntensity[] = ['off', 'gentle', 'playful', 'savage']
+
 function normalizeIntensity(intensity: RoastIntensity | undefined): RoastIntensity {
-  return intensity ?? DEFAULT_ROAST_INTENSITY
+  if (intensity && VALID_INTENSITIES.includes(intensity)) return intensity
+  return DEFAULT_ROAST_INTENSITY
 }
 
 // Pick a random roast for the given intensity. Returns null when roasting is

@@ -75,11 +75,20 @@ async function getLmSession(): Promise<LanguageModelSession | null> {
 }
 
 function cleanTranslation(raw: string): string {
-  return (raw.split('\n')[0] ?? '')
-    .trim()
-    .replace(/^["'`]+|["'`]+$/g, '')
-    .replace(/[.\s]+$/, '')
-    .trim()
+  let s = (raw.split('\n')[0] ?? '').trim()
+  // Strip quotes/backticks and trailing punctuation/whitespace repeatedly until
+  // stable — a single pass leaves quotes stranded when a trailing period comes
+  // after them (e.g. `"bank".` → stripping quotes first sees a trailing `.`,
+  // not a quote, so the quote around "bank" survives as `bank"`).
+  let prev: string
+  do {
+    prev = s
+    s = s
+      .replace(/^["'`]+|["'`]+$/g, '')
+      .replace(/[.\s]+$/, '')
+      .trim()
+  } while (s !== prev)
+  return s
 }
 
 async function aiTranslateInContext(word: string, sentence: string): Promise<string | null> {
@@ -134,12 +143,16 @@ function escapeRegex(s: string): string {
 async function googleContextTranslate(word: string, sentence: string, tgt: string): Promise<string | null> {
   if (!sentence || sentence === word) return null
 
+  // \b is \w-based (ASCII letter/digit/_ only), so it fails to bound words like
+  // "C++" or "C#" whose edges sit next to other non-word characters. Use
+  // unicode-aware lookaround boundaries instead so any word actually present
+  // in the sentence gets masked.
   const masked = sentence
-    .replace(new RegExp(`\\b${escapeRegex(word)}\\b`, 'gi'), ' ')
+    .replace(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(word)}(?![\\p{L}\\p{N}])`, 'giu'), ' ')
     .replace(/\s{2,}/g, ' ')
     .trim()
 
-  if (masked === sentence) return null // word not in sentence (shouldn't happen)
+  if (masked === sentence) return null // word not in sentence
 
   const [full, maskedTr] = await Promise.all([
     googleTranslate(sentence, tgt),

@@ -10,6 +10,10 @@ import {
 let enabled = false
 let targetLang = 'en'
 let onDeviceTranslator: TranslatorInstance | null = null
+// Target language onDeviceTranslator was created for — translate() must not
+// use onDeviceTranslator for a different tgtLang (e.g. Settings' default
+// target language changed after page translation was already enabled).
+let onDeviceTargetLang: string | null = null
 let observer: IntersectionObserver | null = null
 // Bumped on every enable()/disable() so a superseded enable() call — e.g. the
 // popup's Translate toggle flipped on/off again before the first call's
@@ -85,7 +89,7 @@ type Source = 'on-device' | 'google'
 type TranslationMode = 'paragraph' | 'sentence'
 
 export async function translate(text: string, tgtLang = targetLang): Promise<{ text: string; source: Source }> {
-  if (onDeviceTranslator) {
+  if (onDeviceTranslator && onDeviceTargetLang === tgtLang) {
     return { text: await onDeviceTranslator.translate(text), source: 'on-device' }
   }
   return { text: await googleTranslate(text, tgtLang), source: 'google' }
@@ -250,6 +254,7 @@ export async function enable(tgt: string, mode: TranslationMode = 'paragraph', f
     return
   }
   onDeviceTranslator = translator
+  onDeviceTargetLang = translator ? tgt : null
 
   // Translate the page title immediately (not lazy)
   await injectTitleOverlay()
@@ -288,6 +293,7 @@ export function disable() {
   observer = null
   onDeviceTranslator?.destroy()
   onDeviceTranslator = null
+  onDeviceTargetLang = null
   document.querySelectorAll('[data-cxt-translation]').forEach(el => el.remove())
   document.querySelectorAll<HTMLElement>('[data-cxt-done]').forEach(el => {
     delete el.dataset.cxtDone

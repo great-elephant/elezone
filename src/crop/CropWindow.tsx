@@ -23,15 +23,23 @@ export function CropWindow() {
 
   const imgRef = useRef<HTMLImageElement>(null)
   const dragStart = useRef<{ x: number; y: number } | null>(null)
+  // OCR_WINDOW_PROGRESS/RESULT are runtime-wide broadcasts, not scoped to this
+  // window — if the user closes the popup mid-OCR and reopens it, a late
+  // message from the abandoned job would otherwise be picked up by this fresh
+  // mount and show a stale result. requestId (assigned by the background per
+  // openOcrWindow() call, echoed back through FORWARD_RECOGNIZE_TEXT) lets us
+  // drop anything that doesn't belong to the crop this window actually sent.
+  const requestIdRef = useRef<number | undefined>(undefined)
 
   // Load the screenshot handed off by the background.
   useEffect(() => {
     chrome.storage.session.get('ocr_window_payload')
       .then(res => {
-        const p = res.ocr_window_payload as { dataUrl?: string; lang?: string } | undefined
+        const p = res.ocr_window_payload as { dataUrl?: string; lang?: string; requestId?: number } | undefined
         if (p?.dataUrl) {
           setDataUrl(p.dataUrl)
           setLang(p.lang || 'eng')
+          requestIdRef.current = p.requestId
           setState('cropping')
         } else {
           window.close()
@@ -42,11 +50,13 @@ export function CropWindow() {
 
   // Receive OCR progress/result routed from the background.
   useEffect(() => {
-    const handler = (msg: { type?: string; payload?: { status?: string; progress?: number; text?: string; error?: string } }) => {
+    const handler = (msg: { type?: string; payload?: { status?: string; progress?: number; text?: string; error?: string; requestId?: number } }) => {
       if (msg.type === 'OCR_WINDOW_PROGRESS') {
+        if (msg.payload?.requestId !== requestIdRef.current) return
         setStatus(msg.payload?.status || '')
         setProgress(msg.payload?.progress ?? 0)
       } else if (msg.type === 'OCR_WINDOW_RESULT') {
+        if (msg.payload?.requestId !== requestIdRef.current) return
         setOcrText(msg.payload?.error ? 'Error recognizing text.' : (msg.payload?.text || ''))
         setState('done')
       }
@@ -61,6 +71,15 @@ export function CropWindow() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  // A drag that ends outside the window (mouse released off-screen) never
+  // fires the div's onMouseUp, leaving dragStart armed and the next click
+  // treated as a continuation of the old drag. Mirror it at the window level.
+  useEffect(() => {
+    const onWindowMouseUp = (e: MouseEvent) => onMouseUp(e as unknown as React.MouseEvent)
+    window.addEventListener('mouseup', onWindowMouseUp)
+    return () => window.removeEventListener('mouseup', onWindowMouseUp)
+  })
 
   function onMouseDown(e: React.MouseEvent) {
     if (state !== 'cropping') return
@@ -113,7 +132,7 @@ export function CropWindow() {
     setState('processing')
     chrome.runtime.sendMessage({
       type: 'FORWARD_RECOGNIZE_TEXT',
-      payload: { imageBase64: cropped, lang, broadcast: true },
+      payload: { imageBase64: cropped, lang, broadcast: true, requestId: requestIdRef.current },
     }).catch(() => {})
   }
 

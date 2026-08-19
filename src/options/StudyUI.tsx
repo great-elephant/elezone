@@ -37,6 +37,10 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   const [sessionTotal, setSessionTotal] = useState(0)
   const [activeItem, setActiveItem] = useState<SavedItem | null>(null)
   const nextBtnRef = useRef<HTMLButtonElement>(null)
+  // Guards against double-click on "Next": without it two rapid calls could
+  // both read the same activeItem, double-submit SRS updates, and drop a
+  // card from the queue (slice(1) applied twice).
+  const isAdvancingRef = useRef(false)
 
   const [showAnswer, setShowAnswer] = useState(false)
   const [showHint, setShowHint] = useState(false)
@@ -76,10 +80,10 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     setMaxCombo(m => (combo > m ? combo : m))
   }, [combo])
 
-  function initSession() {
-    setSessionQueue(items)
-    setSessionTotal(items.length)
-    setActiveItem(items[0])
+  function initSession(sourceItems: SavedItem[] = items) {
+    setSessionQueue(sourceItems)
+    setSessionTotal(sourceItems.length)
+    setActiveItem(sourceItems[0])
     setShowAnswer(false)
     setShowHint(!!settings?.showHintInitially)
     setVerificationPassed(mode === 'passive')
@@ -92,10 +96,29 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     setCombo(0)
     setMaxCombo(0)
     setCardFailed(false)
-    if (mode === 'multiple_choice') generateMcOptions(items[0], items)
+    if (mode === 'multiple_choice') generateMcOptions(sourceItems[0], sourceItems)
     if (mode === 'listening') {
-      setTimeout(() => speakText((items[0].prefix || '') + items[0].text + (items[0].suffix || ''), items[0].sourceLang), 300)
+      setTimeout(() => speakText((sourceItems[0].prefix || '') + sourceItems[0].text + (sourceItems[0].suffix || ''), sourceItems[0].sourceLang), 300)
     }
+  }
+
+  // "Study again" must not replay the SRS baseline captured when the session
+  // first mounted: every card answered in the session just finished has
+  // already been persisted to storage via UPDATE_ITEM, so re-using the stale
+  // `items` prop would re-run updateSrsMetrics from the pre-session values
+  // and regress interval/repetitions instead of building on them. Re-fetch
+  // the latest copies from storage (same ids as this session) before restarting.
+  function handleRestart() {
+    if (items.length === 0) return
+    const ids = new Set(items.map(i => i.id))
+    chrome.runtime.sendMessage({ type: 'GET_ITEMS' }, (list: SavedItem[]) => {
+      if (chrome.runtime.lastError || !list) {
+        initSession()
+        return
+      }
+      const fresh = list.filter(i => ids.has(i.id))
+      initSession(fresh.length > 0 ? fresh : items)
+    })
   }
 
   useEffect(() => {
@@ -150,6 +173,8 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   }
 
   function handleNext() {
+    if (isAdvancingRef.current) return
+    isAdvancingRef.current = true
     if (mode === 'passive' || earnedSpark) {
       chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'review' }).catch(() => {})
     }
@@ -181,6 +206,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         setActiveItem(null)
         setShowSessionSummary(true)
       }
+      isAdvancingRef.current = false
       return nextQueue
     })
   }
@@ -230,7 +256,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         sparksEarned={sparksEarned}
         mode={mode}
         onClose={onClose}
-        onRestart={() => { if (items.length > 0) initSession() }}
+        onRestart={handleRestart}
       />
     )
   }

@@ -113,6 +113,16 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     }, 1000);
   };
 
+  // Cleanup the debounce timer on unmount so it can't fire setState after the
+  // popup has closed (e.g. user closes within 1s of typing).
+  useEffect(() => {
+    return () => {
+      if (translateTimerRef.current) {
+        clearTimeout(translateTimerRef.current);
+      }
+    };
+  }, []);
+
   // NOTE (D17): This uses window.speechSynthesis directly instead of routing
   // through chrome.tts to avoid conflicts with the mini-player's backend
   // session (both APIs share the same underlying TTS engine slot on Chromium).

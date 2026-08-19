@@ -69,6 +69,12 @@ export default function Options() {
         if (changes["settings"]) {
           setSettings(changes["settings"].newValue || DEFAULT_SETTINGS);
         }
+        if (changes["elezone_library"]) {
+          // Go through GET_ITEMS rather than using newValue directly: the raw
+          // stored array still holds soft-deleted tombstones and items without
+          // a color, which getAllItems() filters and defaults.
+          loadItems();
+        }
       }
     };
     chrome.storage.onChanged.addListener(handleStorageChange);

@@ -1,14 +1,100 @@
-import { Settings, DEFAULT_SETTINGS, SavedItem, ActivityLog } from './types'
+import { Settings, DEFAULT_SETTINGS, SavedItem, ActivityLog, SettingsSection, SETTINGS_SECTIONS } from './types'
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
+/** When each section was last changed, with no gaps — see readSectionClocks(). */
+type SectionClocks = Record<SettingsSection, number>
+
+/**
+ * Reads the per-section clocks off a settings document from anywhere (local
+ * storage, or the file on Drive), filling every section in.
+ *
+ * A document written before per-section sync existed only carries the flat
+ * `updatedAt`, so seed every section from it: that first merge then behaves
+ * exactly like the whole-document comparison that wrote it, and the sections
+ * drift apart from the next real edit onwards. Nothing an existing user has is
+ * lost on the way in.
+ */
+function readSectionClocks(saved: Partial<Settings> | undefined): SectionClocks {
+  const flat = saved?.updatedAt
+  const fallback = typeof flat === 'number' && Number.isFinite(flat) ? flat : 0
+  const stored = saved?.sectionUpdatedAt
+  const clocks = {} as SectionClocks
+  for (const section of SETTINGS_SECTIONS) {
+    const clock = stored?.[section]
+    clocks[section] = typeof clock === 'number' && Number.isFinite(clock) ? clock : fallback
+  }
+  return clocks
+}
+
+/**
+ * The flat `updatedAt` we publish alongside the clocks, for peers on a build
+ * that still compares one timestamp. `sync` is left out on purpose: it holds
+ * device configuration that never travels, so a machine that has done nothing
+ * but switch syncing on must not look newer than the cloud to those peers —
+ * that is exactly how a fresh install used to flatten everyone else's data.
+ */
+function newestSharedClock(clocks: SectionClocks): number {
+  let newest = 0
+  for (const section of SETTINGS_SECTIONS) {
+    if (section === 'sync') continue
+    if (clocks[section] > newest) newest = clocks[section]
+  }
+  return newest
+}
+
+/**
+ * Structural comparison of two section values. Undefined-valued keys are
+ * ignored so a section that has been through JSON (everything that comes back
+ * from Drive) still compares equal to the in-memory object it was written from.
+ */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((entry, i) => sameValue(entry, b[i]))
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const leftKeys = Object.keys(left).filter(key => left[key] !== undefined)
+  const rightKeys = Object.keys(right).filter(key => right[key] !== undefined)
+  if (leftKeys.length !== rightKeys.length) return false
+  return leftKeys.every(key => sameValue(left[key], right[key]))
+}
+
+/** Reads/writes sections off a settings object without widening Settings itself. */
+function sectionsOf(settings: Partial<Settings>): Record<SettingsSection, unknown> {
+  return settings as unknown as Record<SettingsSection, unknown>
+}
+
+/**
+ * Clock of the newest copy of each section this device has taken *from Drive*.
+ * Deliberately kept out of Settings and never uploaded: it is a record of what
+ * this machine has been handed, not part of what the user configured.
+ */
+const SETTINGS_PULLED_KEY = 'cxt_settings_pulled_at'
+
+async function readPulledClocks(): Promise<SectionClocks> {
+  const result = await chrome.storage.local.get(SETTINGS_PULLED_KEY)
+  const saved = (result[SETTINGS_PULLED_KEY] ?? {}) as Partial<Record<SettingsSection, number>>
+  const clocks = {} as SectionClocks
+  for (const section of SETTINGS_SECTIONS) {
+    const clock = saved[section]
+    clocks[section] = typeof clock === 'number' && Number.isFinite(clock) ? clock : 0
+  }
+  return clocks
+}
+
 export async function getSettings(): Promise<Settings> {
   const result = await chrome.storage.local.get('settings')
-  if (!result['settings']) return DEFAULT_SETTINGS
-  const saved = result['settings'] as Partial<Settings>
+  const saved = (result['settings'] ?? {}) as Partial<Settings>
   return {
     ...DEFAULT_SETTINGS,
     ...saved,
+    // After the spreads, so a document stored without the clocks (or with only
+    // some of them) still comes back with every section filled in.
+    sectionUpdatedAt: readSectionClocks(saved),
     readAloud: {
       ...DEFAULT_SETTINGS.readAloud,
       ...saved.readAloud,
@@ -41,11 +127,78 @@ export async function getSettings(): Promise<Settings> {
   }
 }
 
-export async function saveSettings(settings: Settings): Promise<void> {
-  // We no longer blindly update Date.now() here. The UI (SettingsPanel) decides if a user-facing setting was changed.
-  // This ensures that merely toggling "Sync enabled" doesn't falsely make the local settings appear "newer" than the cloud.
+/**
+ * Writes a settings document whose clocks are already final — the merge in
+ * syncToDrive(). Skips the change detection below, which would otherwise stamp
+ * the merged sections with "now" and lose the timestamps the next merge has to
+ * compare against.
+ */
+async function persistSettings(settings: Settings, scheduleSync: boolean): Promise<void> {
   await chrome.storage.local.set({ settings })
-  scheduleAutoSync()
+  if (scheduleSync) scheduleAutoSync()
+}
+
+/**
+ * Persists a settings document, working out for itself which sections actually
+ * changed rather than trusting the caller to say so.
+ *
+ * Callers hand over a whole settings object built by spreading the one they
+ * read, so what they changed is recoverable by comparing against what is in
+ * storage — and that is far more reliable than asking every call site to
+ * remember to stamp a clock. Two things fall out of it:
+ *
+ * - Switching syncing on only touches the `sync` section, so a machine that was
+ *   installed a minute ago does not claim its untouched defaults are newer than
+ *   the cloud's real data, and pulls that data down instead of erasing it.
+ * - The Pomodoro flush only touches `tasks`, so a minute of focus time recorded
+ *   on this machine no longer swallows a voice or translation change made on
+ *   another one.
+ *
+ * A caller can also be working from a snapshot that a sync has since overtaken:
+ * it read the settings, a merge then pulled a newer copy of that section down
+ * from Drive, and only afterwards did the write arrive — which is exactly the
+ * order the options page can produce, since switching syncing on fires the save
+ * and the sync off together. Sections older than the last pull are left as the
+ * merge left them; letting that write through would push the pre-merge values
+ * back out to every other machine.
+ */
+export async function saveSettings(
+  settings: Settings,
+  options?: { scheduleSync?: boolean }
+): Promise<void> {
+  const stored = await getSettings()
+  const storedClocks = readSectionClocks(stored)
+  const pulledClocks = await readPulledClocks()
+  // What the caller's copy knew when it was read. A caller that dropped the
+  // clocks entirely gets the benefit of the doubt (treated as up to date) —
+  // better than silently discarding a real edit.
+  const baseClocks = settings.sectionUpdatedAt ? readSectionClocks(settings) : storedClocks
+
+  const now = Date.now()
+  const next = { ...settings }
+  const nextSections = sectionsOf(next)
+  const storedSections = sectionsOf(stored)
+  const clocks = {} as SectionClocks
+
+  for (const section of SETTINGS_SECTIONS) {
+    if (sameValue(nextSections[section], storedSections[section])) {
+      clocks[section] = storedClocks[section]
+    } else if (baseClocks[section] < pulledClocks[section]) {
+      // Compared against the last *pull*, not against the stored clock: a page
+      // keeps the object it sent, not the clock the write ended up with, so its
+      // own previous save always looks "older" than storage. Measuring against
+      // pulls means a page's second edit in a row still lands, and only a write
+      // that predates data the cloud has since handed us is turned away.
+      nextSections[section] = storedSections[section]
+      clocks[section] = storedClocks[section]
+    } else {
+      clocks[section] = now
+    }
+  }
+
+  next.sectionUpdatedAt = clocks
+  next.updatedAt = newestSharedClock(clocks)
+  await persistSettings(next, options?.scheduleSync ?? true)
 }
 
 // ── Activity Log ─────────────────────────────────────────────────────────────
@@ -172,6 +325,16 @@ export async function markOrphaned(id: string, orphaned = true): Promise<void> {
 
 // ── Spaced Repetition (SRS) ──────────────────────────────────────────────────
 
+const EASE_MIN = 1.3
+const EASE_MAX = 3.0
+// Small bump applied to `ease` on a correct answer. The original SM-2 formula
+// (`ease + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02))`) evaluates to exactly 0
+// for a fixed quality of q=4, which is what "passed" was hardcoded to — so ease
+// could only ever go down (on "Forgot") and never recover. We don't collect a
+// finer-grained quality signal from the UI, so instead of reintroducing that
+// formula, apply a small flat bonus on every pass.
+const EASE_BONUS = 0.1
+
 export function updateSrsMetrics(item: SavedItem, passed: boolean): SavedItem {
   let ease = item.ease ?? 2.5
   let interval = item.interval ?? 0
@@ -186,13 +349,13 @@ export function updateSrsMetrics(item: SavedItem, passed: boolean): SavedItem {
     } else {
       interval = Math.round(interval * ease)
     }
-    // SM-2 Ease adjustment (quality = 4 for "I knew it")
-    ease = ease + (0.1 - (5 - 4) * (0.08 + (5 - 4) * 0.02))
+    // Ease adjustment on a correct answer.
+    ease = Math.min(EASE_MAX, ease + EASE_BONUS)
   } else {
     repetitions = 0
     interval = 1
     // SM-2 Ease adjustment (quality = 0 for "Forgot")
-    ease = Math.max(1.3, ease - 0.2)
+    ease = Math.max(EASE_MIN, ease - 0.2)
   }
 
   // Next review date calculation
@@ -277,13 +440,17 @@ export async function syncToDrive(interactive = false): Promise<{ ok: boolean; e
             merged.set(item.id, item)
           }
         }
-        // 3-day Garbage Collection for Tombstones
-        const THREE_DAYS = 3 * 24 * 60 * 60 * 1000;
+        // Garbage Collection for Tombstones. This must comfortably outlast how long a
+        // device can realistically stay offline between syncs — 3 days was too short:
+        // a device offline longer than that could merge back an item whose tombstone
+        // had already been GC'd off Drive by other, more frequently-syncing devices,
+        // resurrecting something the user deliberately deleted.
+        const TOMBSTONE_TTL = 30 * 24 * 60 * 60 * 1000;
         const now = Date.now();
 
         library = Array.from(merged.values()).filter(item => {
-          // Hard delete items that have been marked as deleted for more than 3 days
-          if (item.deleted && item.updatedAt && (now - item.updatedAt > THREE_DAYS)) {
+          // Hard delete items that have been marked as deleted for longer than the TTL
+          if (item.deleted && item.updatedAt && (now - item.updatedAt > TOMBSTONE_TTL)) {
             return false;
           }
           return true;
@@ -363,27 +530,60 @@ export async function syncToDrive(interactive = false): Promise<{ ok: boolean; e
         }
 
         if (driveSettings) {
-          const localTime = localSettings.updatedAt || 0
-          const remoteTime = driveSettings.updatedAt || 0
+          /**
+           * SETTINGS MERGE, ONE SECTION AT A TIME
+           *
+           * Comparing a single document-wide timestamp meant the loser's entire
+           * settings were thrown away: change the reading speed here, change the
+           * volume there five seconds later, and the first change was gone for
+           * good. Each section carries its own clock instead, so only genuinely
+           * competing edits — two machines changing the *same* section — can
+           * still overwrite one another.
+           */
+          const localClocks = readSectionClocks(localSettings)
+          const remoteClocks = readSectionClocks(driveSettings)
+          const mergedSettings: Settings = { ...localSettings }
+          const mergedSections = sectionsOf(mergedSettings)
+          const remoteSections = sectionsOf(driveSettings)
+          const mergedClocks = {} as SectionClocks
+          const pulledClocks = await readPulledClocks()
+          let pulledAnything = false
 
-          let mergedSettings: Settings
-          if (remoteTime > localTime) {
-            // Remote is newer, use remote but preserve local sync configuration
-            mergedSettings = {
-              ...localSettings,
-              ...driveSettings,
-              sync: localSettings.sync // Always keep local sync config
+          for (const section of SETTINGS_SECTIONS) {
+            // `sync` is this device's own configuration (whether syncing is on,
+            // how long to debounce), not shared state.
+            const shared = section !== 'sync'
+            // A section the remote file simply doesn't have yet — an older
+            // schema, or a machine that has never set it — must not blank out
+            // the copy we do have, however new the remote clock looks.
+            const present = section in driveSettings
+            if (shared && present && remoteClocks[section] > localClocks[section]) {
+              mergedSections[section] = remoteSections[section]
+              mergedClocks[section] = remoteClocks[section]
+              // Remembered so a write still in flight from a page that read this
+              // section before the pull can't undo it — see saveSettings().
+              pulledClocks[section] = Math.max(pulledClocks[section], remoteClocks[section])
+              pulledAnything = true
+            } else {
+              mergedClocks[section] = localClocks[section]
             }
-          } else {
-            // Local is newer (or equal), keep local settings entirely
-            mergedSettings = localSettings
           }
+          if (pulledAnything) await chrome.storage.local.set({ [SETTINGS_PULLED_KEY]: pulledClocks })
+
+          // Carry the winning side's clock for each section, so the next merge
+          // on this or any other machine compares against the right moment.
+          mergedSettings.sectionUpdatedAt = mergedClocks
+          mergedSettings.updatedAt = newestSharedClock(mergedClocks)
 
           // Also force gamification daily goal back to 100 if it was broken by an old backup
           if (mergedSettings.gamification && mergedSettings.gamification.dailyGoalPoints < 100) {
-            mergedSettings.gamification.dailyGoalPoints = 100
+            mergedSettings.gamification = { ...mergedSettings.gamification, dailyGoalPoints: 100 }
           }
-          await saveSettings(mergedSettings)
+          // The clocks above are the merge result, not a fresh user edit, so this
+          // goes straight to storage: re-running change detection would restamp
+          // every pulled section with "now". Auto-sync stays unscheduled too, or
+          // the debounce timer would re-arm itself forever off its own writes.
+          await persistSettings(mergedSettings, false)
           localSettings = mergedSettings
         }
       }

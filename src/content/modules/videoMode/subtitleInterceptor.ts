@@ -308,6 +308,11 @@ function isContinuation(prev: SubtitleCue, next: SubtitleCue, timing: CueTiming)
   if (STANDALONE.test(prev.text) || STANDALONE.test(next.text)) return false
   if (prev.text.length + next.text.length > MAX_MERGED_CHARS) return false
 
+  // Negative — the cues overlap — is a normal gap here, not a disqualifier:
+  // YouTube's auto-captions roll up two lines at a time, so a line stays on
+  // screen through the whole of the next one, and their duration is time on
+  // screen rather than time spoken. Overlap depth says nothing about whether
+  // two cues belong together; the punctuation and length tests below do.
   const gap = next.startTime - prev.endTime
 
   if (timing === 'spoken') {
@@ -344,9 +349,19 @@ export function mergeSentenceCues(cues: SubtitleCue[], timing: CueTiming = 'read
       prev.endTime = Math.max(prev.endTime, cue.endTime)
       continue
     }
+    // Two cues that start together are on screen together — Netflix positions
+    // simultaneous speakers as separate cues. The syncer's current cue is "the
+    // last one that started", so the earlier of the two could never become
+    // current: it would sit in the sidebar and never light up. They are one
+    // moment, so make them one row whatever the punctuation says.
+    if (prev && cue.startTime <= prev.startTime) {
+      prev.text = `${prev.text} ${cue.text}`
+      prev.endTime = Math.max(prev.endTime, cue.endTime)
+      continue
+    }
     if (prev && isContinuation(prev, cue, timing)) {
       prev.text = `${prev.text} ${cue.text}`
-      prev.endTime = cue.endTime  // the row now spans the whole sentence
+      prev.endTime = Math.max(prev.endTime, cue.endTime)  // the row now spans the whole sentence
       continue
     }
     merged.push({ ...cue })
@@ -355,8 +370,14 @@ export function mergeSentenceCues(cues: SubtitleCue[], timing: CueTiming = 'read
   // treats the current cue as "the last one that started", so an overlap would
   // hand the next cue the current slot before this one's end is ever reached —
   // and its end drives repeat and the shadowing gap. Clamp so they never do.
-  for (let i = 0; i < merged.length - 1; i++) {
-    merged[i].endTime = Math.min(merged[i].endTime, merged[i + 1].startTime)
+  for (let i = 0; i < merged.length; i++) {
+    const cue = merged[i]
+    const next = merged[i + 1]
+    if (next) cue.endTime = Math.min(cue.endTime, next.startTime)
+    // A malformed track can also hand us a cue that ends before it starts,
+    // including as the very last one, where there is no next cue to clamp
+    // against. A negative span breaks repeat, pacing and the shadowing gap.
+    cue.endTime = Math.max(cue.startTime, cue.endTime)
   }
 
   // Indices are positional; the syncer and the sidebar both rely on that.
