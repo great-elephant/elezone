@@ -66,6 +66,18 @@ export interface ReadAloudSettings {
   focus?: boolean
 }
 
+// Where a saved word's phonetic transcription comes from. 'dictionaryapi' is a
+// real dictionary IPA lookup (Free Dictionary API, wraps Wiktionary);
+// 'google-rm' reuses Google Translate's `dt=rm` romanization field — built for
+// transliterating non-Latin scripts, not true IPA, but kept as an optional
+// fallback since it covers words/phrases dictionaryapi.dev doesn't have.
+export type PhoneticsSource = 'dictionaryapi' | 'google-rm'
+
+export interface PhoneticsSourceSetting {
+  source: PhoneticsSource
+  enabled: boolean
+}
+
 export interface TranslationSettings {
   defaultTargetLanguage: string
   /**
@@ -83,6 +95,10 @@ export interface TranslationSettings {
   disableAI?: boolean
   disableGoogleContext?: boolean
   disableGoogleSenses?: boolean
+  // Order and on/off state of phonetic-transcription sources, tried in array
+  // order — first enabled source that returns a result wins. Undefined/empty
+  // falls back to DEFAULT_SETTINGS.translation.phoneticsSourceOrder.
+  phoneticsSourceOrder?: PhoneticsSourceSetting[]
 }
 
 export type ReadAloudState = 'idle' | 'playing' | 'paused'
@@ -336,6 +352,10 @@ export const DEFAULT_SETTINGS: Settings = {
     enabled: true,
     mode: 'paragraph',
     disableAI: true,
+    phoneticsSourceOrder: [
+      { source: 'dictionaryapi', enabled: true },
+      { source: 'google-rm', enabled: true },
+    ],
   },
   sync: {
     enabled: false,

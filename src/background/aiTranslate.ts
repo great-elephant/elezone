@@ -25,6 +25,8 @@
 // Runs in the background service worker, where the built-in AI globals are
 // available (they are typically NOT exposed in content-script isolated worlds).
 
+import { DEFAULT_SETTINGS, PhoneticsSourceSetting } from '../shared/types'
+
 export type TranslateSource =
   | 'ai+on-device'    // Gemini Nano disambiguated → on-device Translator
   | 'ai+google'       // Gemini Nano disambiguated → Google Translate
@@ -43,6 +45,14 @@ export interface ContextTranslateRequest {
   disableAI?: boolean
   disableGoogleContext?: boolean
   disableGoogleSenses?: boolean
+  // Language of `word` itself (not the translation target), read from the
+  // page's `lang` attribute at lookup time — used to gate dictionaryapi.dev,
+  // which only covers a fixed set of languages and would mislabel e.g. a
+  // French word that happens to spell like an English one.
+  sourceLang?: string
+  // Falls back to this when `sourceLang` isn't available for the lookup.
+  learningLanguage?: string
+  phoneticsSourceOrder?: PhoneticsSourceSetting[]
 }
 
 
@@ -241,6 +251,74 @@ async function googleSenses(word: string, tgt: string): Promise<{ senses: string
   }
 }
 
+// ── Free Dictionary API (dictionaryapi.dev): real dictionary IPA ──────────────
+//
+// Community-run, free, no key — but no SLA, so every call gets a timeout and a
+// per-word cache. The cache lives only as long as this service worker instance
+// (Chrome unloads it after ~30s idle, sometimes sooner), so it can't grow
+// across a long-lived process — the size cap below is a defensive backstop for
+// the rare case a worker stays alive longer (open DevTools, active ports).
+const PHONETICS_CACHE_MAX = 500
+const phoneticsCache = new Map<string, string | null>()
+
+function cachePhonetics(word: string, value: string | null) {
+  if (phoneticsCache.size >= PHONETICS_CACHE_MAX && !phoneticsCache.has(word)) {
+    const oldestKey = phoneticsCache.keys().next().value
+    if (oldestKey !== undefined) phoneticsCache.delete(oldestKey)
+  }
+  phoneticsCache.set(word, value)
+}
+
+async function fetchDictionaryApiWord(rawWord: string): Promise<string | null> {
+  const word = rawWord.toLowerCase()
+  const cached = phoneticsCache.get(word)
+  if (cached !== undefined) return cached
+
+  let result: string | null = null
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 3000)
+  try {
+    const res = await fetch(
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`,
+      { signal: controller.signal },
+    )
+    if (res.ok) {
+      const entries = (await res.json()) as Array<{
+        phonetic?: string
+        phonetics?: Array<{ text?: string }>
+      }>
+      for (const entry of entries) {
+        const text = entry.phonetic?.trim() || entry.phonetics?.find(p => p.text?.trim())?.text?.trim()
+        if (text) { result = text; break }
+      }
+    }
+  } catch {
+    result = null
+  } finally {
+    clearTimeout(timeoutId)
+  }
+
+  cachePhonetics(word, result)
+  return result
+}
+
+// dictionaryapi.dev has no phrase endpoint — split, look up each word, and
+// join with a space. A phrase with any word missing is dropped as a whole
+// (returning null) rather than shown half-transcribed, so the caller falls
+// through to a source that natively handles the full phrase instead.
+async function fetchDictionaryApiPhonetics(text: string): Promise<string | null> {
+  const words = text.trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return null
+  if (words.length === 1) return fetchDictionaryApiWord(words[0])
+  const results = await Promise.all(words.map(fetchDictionaryApiWord))
+  if (results.some(r => !r)) return null
+  return results.join(' ')
+}
+
+function isEnglish(lang: string | undefined): boolean {
+  return !lang || lang.toLowerCase().startsWith('en')
+}
+
 // ── Public entry point ─────────────────────────────────────────────────────────
 
 export async function translateInContext(
@@ -254,6 +332,18 @@ export async function translateInContext(
   const sensesPromise = !req.disableGoogleSenses
     ? googleSenses(word, targetLang)
     : Promise.resolve({ senses: [] as string[], sourceLang: undefined as string | undefined, phonetics: undefined as string | undefined })
+
+  // Phonetics: try each enabled source in the user's configured order, first
+  // hit wins. 'google-rm' piggybacks on the senses call above (it's the same
+  // Google request, `dt=rm`) at no extra cost; 'dictionaryapi' is fetched here
+  // in parallel so it adds no latency over the old Google-only path.
+  const phoneticsOrder = req.phoneticsSourceOrder?.length
+    ? req.phoneticsSourceOrder
+    : DEFAULT_SETTINGS.translation.phoneticsSourceOrder!
+  const enabledPhoneticsSources = phoneticsOrder.filter(s => s.enabled).map(s => s.source)
+  const dictApiPromise = enabledPhoneticsSources.includes('dictionaryapi') && isEnglish(req.sourceLang || req.learningLanguage)
+    ? fetchDictionaryApiPhonetics(word)
+    : Promise.resolve(null as string | null)
 
   // Primary: on-device AI — single prompt with the full sentence as context.
   let contextResult: { translation: string; source: TranslateSource } | null = null
@@ -300,7 +390,16 @@ export async function translateInContext(
     if (contextTr) contextResult = { translation: contextTr, source: 'google-context' }
   }
 
-  const { senses, sourceLang, phonetics } = await sensesPromise
+  const [{ senses, sourceLang, phonetics: googleRmPhonetics }, dictApiPhonetics] = await Promise.all([
+    sensesPromise,
+    dictApiPromise,
+  ])
+
+  let phonetics: string | undefined
+  for (const src of enabledPhoneticsSources) {
+    if (src === 'dictionaryapi' && dictApiPhonetics) { phonetics = dictApiPhonetics; break }
+    if (src === 'google-rm' && googleRmPhonetics) { phonetics = googleRmPhonetics; break }
+  }
 
   let result: ContextTranslateResult
 

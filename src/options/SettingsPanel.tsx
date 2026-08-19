@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Settings, BookmarkColor, BOOKMARK_COLORS, DEFAULT_SETTINGS } from '../shared/types'
+import { Settings, BookmarkColor, BOOKMARK_COLORS, DEFAULT_SETTINGS, PhoneticsSource, PhoneticsSourceSetting } from '../shared/types'
 import { RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
 import {
   DndContext,
@@ -65,6 +65,10 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
   const deckOrder: BookmarkColor[] = settings.deckOrder?.length === ALL_COLORS.length
     ? settings.deckOrder
     : ALL_COLORS
+
+  const phoneticsSourceOrder: PhoneticsSourceSetting[] = settings.translation.phoneticsSourceOrder?.length
+    ? settings.translation.phoneticsSourceOrder
+    : DEFAULT_SETTINGS.translation.phoneticsSourceOrder!
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -151,6 +155,20 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
     const to = deckOrder.indexOf(over.id as BookmarkColor)
     const next = arrayMove(deckOrder, from, to)
     onChange({ ...settings, deckOrder: next, updatedAt: Date.now() })
+  }
+
+  function handlePhoneticsDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const from = phoneticsSourceOrder.findIndex(s => s.source === active.id)
+    const to = phoneticsSourceOrder.findIndex(s => s.source === over.id)
+    if (from === -1 || to === -1) return
+    set('translation', 'phoneticsSourceOrder', arrayMove(phoneticsSourceOrder, from, to))
+  }
+
+  function togglePhoneticsSource(source: PhoneticsSource, enabled: boolean) {
+    const next = phoneticsSourceOrder.map(s => s.source === source ? { ...s, enabled } : s)
+    set('translation', 'phoneticsSourceOrder', next)
   }
 
   const ra = settings.readAloud
@@ -592,6 +610,28 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
           </span>
         </div>
 
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={{ fontSize: 13, color: '#8888aa' }}>Phonetic (IPA) sources (drag to reorder, first hit wins)</label>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handlePhoneticsDragEnd}>
+            <SortableContext items={phoneticsSourceOrder.map(s => s.source)} strategy={verticalListSortingStrategy}>
+              <div style={styles.deckList}>
+                {phoneticsSourceOrder.map(({ source, enabled }) => (
+                  <SortablePhoneticSourceItem
+                    key={source}
+                    source={source}
+                    enabled={enabled}
+                    onEnabledChange={v => togglePhoneticsSource(source, v)}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+          <span style={{ fontSize: 12, color: '#8a8ab0' }}>
+            Free Dictionary API looks up real dictionary IPA (English words only); Google
+            romanization is not true IPA but can fill in words the dictionary doesn't have.
+          </span>
+        </div>
+
         <OnDeviceAi targetLang={tr.defaultTargetLanguage} onStatusChange={setAiStatus} onModelDownloaded={() => set('translation', 'disableAI', false)} />
       </CollapsibleSection>
 
@@ -902,6 +942,70 @@ function SortableDeckItem({
         onChange={e => onLabelChange(e.target.value)}
         style={itemStyles.input}
       />
+    </div>
+  )
+}
+
+const PHONETICS_SOURCE_LABELS: Record<PhoneticsSource, string> = {
+  dictionaryapi: '📖 Free Dictionary API · real dictionary IPA',
+  'google-rm': '🌐 Google romanization · approximate, not true IPA',
+}
+
+function SortablePhoneticSourceItem({
+  source,
+  enabled,
+  onEnabledChange,
+}: {
+  source: PhoneticsSource
+  enabled: boolean
+  onEnabledChange: (enabled: boolean) => void
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: source })
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '8px 10px',
+    borderRadius: 8,
+    background: isDragging ? '#2a2a4a' : '#0f0f1a',
+    border: isDragging ? '1px solid #6b8aff' : '1px solid #2a2a4a',
+    boxShadow: isDragging ? '0 8px 20px rgba(0,0,0,0.5)' : 'none',
+    zIndex: isDragging ? 10 : undefined,
+    position: 'relative',
+    opacity: enabled ? 1 : 0.5,
+  }
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <span
+        {...attributes}
+        {...listeners}
+        style={itemStyles.handle}
+        title="Drag to reorder"
+        aria-label={`Drag to reorder ${source} phonetics source`}
+      >
+        ⠿
+      </span>
+      <input
+        type="checkbox"
+        id={`phonetics-src-${source}`}
+        checked={enabled}
+        onChange={e => onEnabledChange(e.target.checked)}
+        style={{ width: 16, height: 16, accentColor: '#4f6ef7', flexShrink: 0 }}
+      />
+      <label htmlFor={`phonetics-src-${source}`} style={{ fontSize: 13, color: '#e0e0e0', cursor: 'pointer' }}>
+        {PHONETICS_SOURCE_LABELS[source]}
+      </label>
     </div>
   )
 }

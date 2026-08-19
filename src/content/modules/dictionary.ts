@@ -535,9 +535,11 @@ async function showPopover(
       payload: {
         word, sentence, targetLang,
         sourceLang: context?.sourceLang,
+        learningLanguage: settings?.translation?.learningLanguage,
         disableAI: settings?.translation?.disableAI ?? true,
         disableGoogleContext: settings?.translation?.disableGoogleContext ?? false,
         disableGoogleSenses: settings?.translation?.disableGoogleSenses ?? false,
+        phoneticsSourceOrder: settings?.translation?.phoneticsSourceOrder,
       },
     }).catch(() => null) as Promise<ContextTranslateResult | null>,
     sentence ? translate(sentence, targetLang).catch(() => null) : Promise.resolve(null),
