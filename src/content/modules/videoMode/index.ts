@@ -26,6 +26,7 @@ import { configurePacing, updatePacingConfig, handleCueEnd, resumeFromWait, isWa
 import { installVideoModeKeys, uninstallVideoModeKeys, setVideoModeKeysEnabled } from './videoModeKeys'
 import { openSettingsPanel, closeSettingsPanel, refreshSettingsPanel, isSettingsPanelOpen } from './videoModeSettingsPanel'
 import { showDictionaryPopoverForWord, setDictionaryCloseListener, setDictionarySaveListener, isDictionaryPopoverOpen } from '../dictionary'
+import { initSavedWordTooltip, destroySavedWordTooltip } from './savedWordTooltip'
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -102,6 +103,22 @@ async function unsaveWord(word: string): Promise<void> {
   }
 }
 
+/** Change the deck colour of an already-saved word, from the hover tooltip. */
+async function changeSavedWordColor(word: string, color: SavedItem['color']): Promise<void> {
+  const key = word.toLowerCase()
+  const changed = _savedItems.filter(i => i.text.toLowerCase() === key)
+  if (changed.length === 0) return
+
+  _savedItems = _savedItems.map(i => i.text.toLowerCase() === key ? { ...i, color } : i)
+  updateSubtitleCard(getCurrentCue(), _savedItems)
+  updateDialogueSidebarSavedItems(_savedItems)
+  updateSyncerSavedItems(_savedItems)
+
+  for (const item of changed) {
+    await chrome.runtime.sendMessage({ type: 'UPDATE_ITEM', payload: { ...item, color } }).catch(() => { })
+  }
+}
+
 /** Fold a newly saved word into the live library so it highlights at once. */
 function registerSavedItem(item: SavedItem): void {
   if (_savedItems.some(existing => existing.id === item.id)) return
@@ -133,6 +150,7 @@ export async function enableVideoMode(
   platform().installLayout()
   setDictionaryCloseListener(onDictionaryClosed)
   setDictionarySaveListener(registerSavedItem)
+  initSavedWordTooltip({ onChangeColor: changeSavedWordColor, onDelete: unsaveWord })
   setTranslationSource(_settings.translationSource)
   installPacing()
   installKeys()
@@ -719,6 +737,7 @@ export function disableVideoMode(): void {
   _adPlaying = false
   setDictionaryCloseListener(null)
   setDictionarySaveListener(null)
+  destroySavedWordTooltip()
   closeSettingsPanel()
   cancelPacing()
   uninstallVideoModeKeys()

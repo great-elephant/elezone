@@ -16,6 +16,7 @@ import type { SubtitleCue } from './subtitleInterceptor'
 import type { SavedItem, BookmarkColor } from '../../../shared/types'
 import { translationFor } from './cueTranslation'
 import { phoneticsForWords } from './wordPhonetics'
+import { showSavedWordTooltip, scheduleHideSavedWordTooltip } from './savedWordTooltip'
 
 export type SeekTarget = 'prev' | 'replay' | 'next'
 
@@ -68,6 +69,9 @@ let _phoneticsUnderWords = false
 // back empty for every word.
 let _learningLang = 'en'
 let _savedColorsMap: Map<string, BookmarkColor> = new Map()
+// Full items, for the hover tooltip's content (translation/phonetics) — the
+// colour map above only carries what the underline needs.
+let _savedItemsMap: Map<string, SavedItem> = new Map()
 let _dueWords: Set<string> = new Set()
 
 const CARD_CSS = `
@@ -435,14 +439,20 @@ function buildWordUnit(token: string, cue: SubtitleCue): HTMLElement {
   wordSpan.className = 'word-text'
   wordSpan.textContent = token
 
-  const savedColor = _savedColorsMap.get(clean.toLowerCase())
+  const key = clean.toLowerCase()
+  const savedColor = _savedColorsMap.get(key)
   if (savedColor) {
     wordSpan.classList.add('saved')
     wordSpan.style.setProperty('--save-color', BOOKMARK_COLOR_HEX[savedColor] ?? '#ffd93d')
-    if (_dueWords.has(clean.toLowerCase())) {
+    if (_dueWords.has(key)) {
       wordSpan.classList.add('due')
       unit.title = 'Due for review'
     }
+    unit.addEventListener('mouseenter', () => {
+      const item = _savedItemsMap.get(key)
+      if (item) showSavedWordTooltip(clean, item, unit)
+    })
+    unit.addEventListener('mouseleave', scheduleHideSavedWordTooltip)
   }
 
   unit.appendChild(wordSpan)
@@ -799,6 +809,7 @@ export function updateSubtitleCard(cue: SubtitleCue | null, savedItems: SavedIte
 
   // Rebuild saved-words index
   _savedColorsMap = new Map(savedItems.map(i => [i.text.toLowerCase(), i.color]))
+  _savedItemsMap = new Map(savedItems.map(i => [i.text.toLowerCase(), i]))
   _dueWords = dueWordSet(savedItems)
 
   _currentCue = cue

@@ -9,6 +9,7 @@ import { translationFor, nativeTranslationFor } from './cueTranslation'
 import { dueWordSet } from './subtitleCard'
 import type { SeekTarget } from './subtitleCard'
 import { seekToSeconds } from './videoControl'
+import { showSavedWordTooltip, scheduleHideSavedWordTooltip } from './savedWordTooltip'
 
 type LookupCallback = (word: string, cue: SubtitleCue) => void
 type SaveCallback = (word: string, cue: SubtitleCue) => void
@@ -21,6 +22,7 @@ let _onLookup: LookupCallback | null = null
 let _onSave: SaveCallback | null = null
 let _isCollapsed = false
 let _savedColorsMap: Map<string, BookmarkColor> = new Map()
+let _savedItemsMap: Map<string, SavedItem> = new Map()
 let _dueWords: Set<string> = new Set()
 let _showTranslation = true
 let _targetLang = 'vi'
@@ -306,10 +308,17 @@ function applySavedState(span: HTMLElement, clean: string): void {
   span.classList.toggle('saved', !!color)
   span.classList.toggle('due', !!color && _dueWords.has(key))
   span.querySelector('.unsave')?.remove()
+  span.onmouseenter = null
+  span.onmouseleave = null
 
   if (!color) return
   span.style.setProperty('--wc', BOOKMARK_COLOR_HEX[color] ?? '#ffd93d')
   span.title = _dueWords.has(key) ? 'Due for review' : ''
+  span.onmouseenter = () => {
+    const item = _savedItemsMap.get(key)
+    if (item) showSavedWordTooltip(clean, item, span)
+  }
+  span.onmouseleave = () => scheduleHideSavedWordTooltip()
 
   const remove = document.createElement('button')
   remove.className = 'unsave'
@@ -456,6 +465,7 @@ export function initDialogueSidebar(opts: {
   _onSeekLine = opts.onSeekLine ?? null
   _onOpenSettings = opts.onOpenSettings ?? null
   _savedColorsMap = new Map(opts.savedItems.map(i => [i.text.toLowerCase(), i.color]))
+  _savedItemsMap = new Map(opts.savedItems.map(i => [i.text.toLowerCase(), i]))
   _dueWords = dueWordSet(opts.savedItems)
 
   _host = document.createElement('div')
@@ -603,6 +613,7 @@ export function recentreActiveCue(): void {
 
 export function updateDialogueSidebarSavedItems(savedItems: SavedItem[]): void {
   _savedColorsMap = new Map(savedItems.map(i => [i.text.toLowerCase(), i.color]))
+  _savedItemsMap = new Map(savedItems.map(i => [i.text.toLowerCase(), i]))
   _dueWords = dueWordSet(savedItems)
   // Refresh saved highlighting on all word spans
   if (!_shadow) return
