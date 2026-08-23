@@ -53,6 +53,7 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   const [isPlaying, setIsPlaying] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
+  const translatedRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef({ x: 0, y: 0 });
   const translateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pausedMiniPlayerRef = useRef(false);
@@ -71,7 +72,28 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
       return;
     }
     setTranslatedText('⏳ Translating...');
-    chrome.runtime.sendMessage({ type: 'GET_SETTINGS' })
+
+    const fail = (err: unknown) => {
+      if (requestId !== translateRequestIdRef.current) return; // superseded
+      console.error('Translation error:', err);
+      setTranslatedText('⚠ Translation failed');
+    };
+
+    // chrome.runtime.sendMessage throws SYNCHRONOUSLY (not a rejected
+    // promise) when the extension context is invalidated — e.g. the
+    // extension was reloaded/updated while this tab's content script is
+    // still the old instance. Called bare, that throw aborts this function
+    // right after "⏳ Translating..." is set above, before .then()/.catch()
+    // ever gets attached — nothing is left to ever change that state again.
+    let settingsPromise: Promise<Settings>;
+    try {
+      settingsPromise = chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
+    } catch (err) {
+      fail(err);
+      return;
+    }
+
+    settingsPromise
       .then((settings: Settings) => {
         const tgtLang = settings?.translation?.defaultTargetLanguage || 'en';
         return translate(currentText, tgtLang);
@@ -80,17 +102,44 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
         if (requestId !== translateRequestIdRef.current) return; // superseded
         setTranslatedText(res.text);
       })
-      .catch(err => {
-        if (requestId !== translateRequestIdRef.current) return; // superseded
-        console.error('Translation error:', err);
-        setTranslatedText('⚠ Translation failed');
-      });
+      .catch(fail);
   }, []);
 
   const retryTranslation = useCallback(() => {
     const currentText = textRef.current?.innerText || textRef.current?.textContent || text;
     runTranslation(currentText);
   }, [runTranslation, text]);
+
+  // Written imperatively (like textRef's OCR text above) instead of through
+  // JSX interpolation. On some hosting pages, React's own commit for this
+  // element's re-render silently never reaches the DOM — setTranslatedText
+  // runs with the correct value (confirmed via logging) but the text
+  // visually stays frozen on "Translating...". A direct DOM write bypasses
+  // whatever is swallowing React's commit here.
+  useEffect(() => {
+    const el = translatedRef.current;
+    if (!el) return;
+    if (!translatedText) {
+      el.style.display = 'none';
+      el.textContent = '';
+      return;
+    }
+    const isWarning = translatedText.startsWith('⚠');
+    const isPending = translatedText.startsWith('⏳');
+    el.style.display = 'block';
+    el.style.color = isWarning ? '#ff6b6b' : isPending ? '#8888aa' : '#6bcfff';
+    el.style.borderLeft = `2px solid ${isWarning ? '#aa3333' : isPending ? '#3a3a5a' : '#2a3a5a'}`;
+    el.style.fontStyle = isPending ? 'italic' : 'normal';
+    el.textContent = translatedText;
+
+    if (isWarning) {
+      const retryBtn = document.createElement('button');
+      retryBtn.textContent = 'Retry';
+      retryBtn.style.cssText = 'background:none;border:none;color:#6bcfff;cursor:pointer;font-size:1em;padding:0;margin-left:8px;text-decoration:underline';
+      retryBtn.onclick = retryTranslation;
+      el.appendChild(retryBtn);
+    }
+  }, [translatedText, retryTranslation]);
 
   useEffect(() => {
     if (textRef.current && !isLoading) {
@@ -452,36 +501,16 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
               onInput={handleInput}
               style={{ outline: 'none', cursor: 'text', width: '100%', whiteSpace: 'pre-wrap' }}
             />
-            {translatedText && (
-              <div style={{
+            <div
+              ref={translatedRef}
+              style={{
+                display: 'none',
                 fontFamily: "system-ui, -apple-system, 'Segoe UI', 'Noto Sans', sans-serif",
                 fontSize: '0.875em',
-                color: translatedText.startsWith('⚠') ? '#ff6b6b' : translatedText.startsWith('⏳') ? '#8888aa' : '#6bcfff',
                 padding: '3px 0 5px 10px',
-                borderLeft: `2px solid ${translatedText.startsWith('⚠') ? '#aa3333' : translatedText.startsWith('⏳') ? '#3a3a5a' : '#2a3a5a'}`,
-                fontStyle: translatedText.startsWith('⏳') ? 'italic' : 'normal',
                 lineHeight: 1.6
-              }}>
-                {translatedText}
-                {translatedText.startsWith('⚠') && (
-                  <button
-                    onClick={retryTranslation}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      color: '#6bcfff',
-                      cursor: 'pointer',
-                      fontSize: '1em',
-                      padding: 0,
-                      marginLeft: 8,
-                      textDecoration: 'underline'
-                    }}
-                  >
-                    Retry
-                  </button>
-                )}
-              </div>
-            )}
+              }}
+            />
           </div>
         )}
       </div>
