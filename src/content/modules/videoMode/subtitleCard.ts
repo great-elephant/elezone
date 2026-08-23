@@ -15,6 +15,7 @@
 import type { SubtitleCue } from './subtitleInterceptor'
 import type { SavedItem, BookmarkColor } from '../../../shared/types'
 import { translationFor } from './cueTranslation'
+import { phoneticsForWords } from './wordPhonetics'
 
 export type SeekTarget = 'prev' | 'replay' | 'next'
 
@@ -27,6 +28,10 @@ function tokenize(text: string): string[] {
 
 function strippedWord(token: string): string {
   return token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+}
+
+function isEnglishLearningLang(): boolean {
+  return _learningLang.toLowerCase().startsWith('en')
 }
 
 /** Saved words whose SRS review is due right now. */
@@ -57,6 +62,11 @@ let _currentCue: SubtitleCue | null = null
 let _showTranslation = true
 let _fontSize = 28
 let _targetLang = 'vi'
+let _phoneticsUnderWords = false
+// The dictionaryapi.dev source only covers English; gating here means a
+// French or Japanese subtitle line never fires a lookup that would just come
+// back empty for every word.
+let _learningLang = 'en'
 let _savedColorsMap: Map<string, BookmarkColor> = new Map()
 let _dueWords: Set<string> = new Set()
 
@@ -201,6 +211,19 @@ const CARD_CSS = `
     background: rgba(255,217,61,0.22);
     border-radius: 3px;
     box-shadow: 0 0 0 1px rgba(255,217,61,0.4);
+  }
+
+  /* Reserves its line even before the lookup resolves (and stays reserved for
+     a word that never gets one back) — otherwise words with phonetics sit
+     taller than their neighbours and the row's baseline saws up and down as
+     lookups trickle in one word at a time. */
+  .phonetics-text {
+    display: block;
+    min-height: calc(var(--fs, 28px) * 0.42 * 1.1);
+    font-size: calc(var(--fs, 28px) * 0.42);
+    color: rgba(255,255,255,0.55);
+    line-height: 1.1;
+    text-shadow: var(--elezone-strip-text-shadow, none);
   }
 
   .translation-row {
@@ -424,6 +447,16 @@ function buildWordUnit(token: string, cue: SubtitleCue): HTMLElement {
 
   unit.appendChild(wordSpan)
 
+  if (_phoneticsUnderWords && isEnglishLearningLang()) {
+    // Added even for a punctuation-only token (empty `clean`, no lookup ever
+    // fired for it) so every word-unit in the row reserves the same second
+    // line — otherwise that one token sits shorter than its neighbours.
+    const phoneticsSpan = document.createElement('span')
+    phoneticsSpan.className = 'phonetics-text'
+    if (clean) phoneticsSpan.dataset.word = clean.toLowerCase()
+    unit.appendChild(phoneticsSpan)
+  }
+
   unit.addEventListener('click', () => {
     if (clean) _onLookupWord?.(clean, cue)
   })
@@ -465,6 +498,8 @@ export function initSubtitleCard(opts: {
   showTranslation: boolean
   fontSize: number
   targetLang: string
+  phoneticsUnderWords: boolean
+  learningLang: string
 }): void {
   _onSaveWord = opts.onSaveWord
   _onLookupWord = opts.onLookupWord
@@ -473,6 +508,8 @@ export function initSubtitleCard(opts: {
   _showTranslation = opts.showTranslation
   _fontSize = opts.fontSize
   _targetLang = opts.targetLang
+  _phoneticsUnderWords = opts.phoneticsUnderWords
+  _learningLang = opts.learningLang
 
   host = document.createElement('div')
   host.id = 'elezone-subtitle-card'
@@ -783,6 +820,22 @@ export function updateSubtitleCard(cue: SubtitleCue | null, savedItems: SavedIte
     _wordsRow!.appendChild(buildWordUnit(token, cue))
   })
 
+  if (_phoneticsUnderWords && isEnglishLearningLang()) {
+    const key = cue.text
+    const words = tokens.map(strippedWord).filter(Boolean)
+    if (words.length > 0) {
+      void phoneticsForWords(words).then(result => {
+        // The line has moved on by the time this resolves — the spans it would
+        // fill no longer belong to what's on screen.
+        if (_currentCue?.text !== key || !_wordsRow) return
+        _wordsRow.querySelectorAll<HTMLElement>('.phonetics-text').forEach(span => {
+          const text = result.get(span.dataset.word ?? '')
+          if (text) span.textContent = text
+        })
+      })
+    }
+  }
+
   // Translation
   if (_showTranslation) {
     _translationRowEl.style.display = ''
@@ -819,9 +872,13 @@ export function applySubtitleCardSettings(opts: {
   showTranslation?: boolean
   fontSize?: number
   sidebarVisible?: boolean
+  phoneticsUnderWords?: boolean
+  learningLang?: string
 }): void {
   if (opts.showTranslation !== undefined) _showTranslation = opts.showTranslation
   if (opts.fontSize !== undefined) _fontSize = opts.fontSize
+  if (opts.phoneticsUnderWords !== undefined) _phoneticsUnderWords = opts.phoneticsUnderWords
+  if (opts.learningLang !== undefined) _learningLang = opts.learningLang
   if (opts.sidebarVisible !== undefined) {
     _sidebarVisible = opts.sidebarVisible
     shadow?.querySelector('.sidebar-toggle')?.classList.toggle('on', _sidebarVisible)

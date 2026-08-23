@@ -269,12 +269,22 @@ function cachePhonetics(word: string, value: string | null) {
   phoneticsCache.set(word, value)
 }
 
-async function fetchDictionaryApiWord(rawWord: string): Promise<string | null> {
+/**
+ * `definitive: true` means the API actually answered the question — there is
+ * (or isn't) a phonetic transcription for this word — so it's safe to
+ * remember. `false` means the request itself didn't get an answer (network
+ * error, timeout, a 5xx/429 from the API): that's not evidence the word has
+ * no phonetics, just that this attempt failed, so it must not be cached —
+ * caching it would permanently mistake "the request failed once" for "this
+ * word has no phonetics".
+ */
+async function fetchDictionaryApiWordStatus(rawWord: string): Promise<{ value: string | null; definitive: boolean }> {
   const word = rawWord.toLowerCase()
   const cached = phoneticsCache.get(word)
-  if (cached !== undefined) return cached
+  if (cached !== undefined) return { value: cached, definitive: true }
 
-  let result: string | null = null
+  let value: string | null = null
+  let definitive = false
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 3000)
   try {
@@ -283,23 +293,51 @@ async function fetchDictionaryApiWord(rawWord: string): Promise<string | null> {
       { signal: controller.signal },
     )
     if (res.ok) {
+      definitive = true
       const entries = (await res.json()) as Array<{
         phonetic?: string
         phonetics?: Array<{ text?: string }>
       }>
       for (const entry of entries) {
         const text = entry.phonetic?.trim() || entry.phonetics?.find(p => p.text?.trim())?.text?.trim()
-        if (text) { result = text; break }
+        if (text) { value = text; break }
       }
+    } else if (res.status === 404) {
+      // "No Definitions Found" — a real, final answer, not a fluke.
+      definitive = true
     }
+    // Any other non-ok status (5xx, 429...) falls through as non-definitive.
   } catch {
-    result = null
+    // Network error or our own 3s abort — non-definitive.
   } finally {
     clearTimeout(timeoutId)
   }
 
-  cachePhonetics(word, result)
-  return result
+  if (definitive) cachePhonetics(word, value)
+  return { value, definitive }
+}
+
+export async function fetchDictionaryApiWord(rawWord: string): Promise<string | null> {
+  return (await fetchDictionaryApiWordStatus(rawWord)).value
+}
+
+/**
+ * Video Mode's auto phonetics: one message per subtitle line instead of one
+ * per word, so a line of ten words costs one round trip through the
+ * extension's messaging layer instead of ten. Each word still goes through
+ * `fetchDictionaryApiWord`'s own cache, so repeats across lines cost nothing.
+ *
+ * A word whose lookup failed (see `fetchDictionaryApiWordStatus`) is left out
+ * of the returned object entirely, rather than included as `null` — that lets
+ * the content-script cache tell "definitely no phonetics" apart from "ask
+ * again later" without a third value threaded through every caller.
+ */
+export async function fetchPhoneticsForWords(words: string[]): Promise<Record<string, string | null>> {
+  const unique = [...new Set(words.map(w => w.toLowerCase()).filter(Boolean))]
+  const results = await Promise.all(unique.map(w => fetchDictionaryApiWordStatus(w)))
+  const out: Record<string, string | null> = {}
+  unique.forEach((w, i) => { if (results[i].definitive) out[w] = results[i].value })
+  return out
 }
 
 // dictionaryapi.dev has no phrase endpoint — split, look up each word, and

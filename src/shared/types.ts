@@ -144,6 +144,11 @@ export interface VideoModeSettings {
   pauseOnSavedWord: boolean
   sidebarVisible: boolean
   repeat: number               // times each line plays, 1 = no repeat
+  // Auto-fetched IPA under every English word of the line being spoken (not the
+  // sidebar transcript). Off by default: unlike the other toggles this fires a
+  // lookup per word with no click, so a viewer who never wanted it shouldn't pay
+  // for it silently.
+  phoneticsUnderWords: boolean
 
   // ── Advanced ──
   hideSoundEffects: boolean    // drop "[door opens]" style cues
@@ -288,6 +293,7 @@ export const DEFAULT_VIDEO_MODE_SETTINGS: VideoModeSettings = {
   pauseOnSavedWord: false,
   sidebarVisible: true,
   repeat: 1,
+  phoneticsUnderWords: false,
   hideSoundEffects: true,
   subtitleFontSize: 28,
   translationSource: 'auto',
@@ -442,6 +448,7 @@ export type MessageType =
   | 'READ_ALOUD_WORD'
   | 'TOGGLE_TRANSLATION'
   | 'TRANSLATE_IN_CONTEXT'
+  | 'FETCH_PHONETICS'
   | 'GET_TRANSLATION_API_AVAILABLE'
   | 'GET_TRANSLATOR_STATUS'
   | 'SHOW_DICTIONARY_POPOVER'

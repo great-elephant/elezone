@@ -21,6 +21,7 @@ import { placeYouTubeOverlays, isStripOverlaid, defaultStripPosition } from './y
 import { getSidebarWidth, getSidebarScrollTop, setSidebarScrollTop } from './dialogueSidebar'
 import { seekToSeconds, pauseVideo, playVideo, useClosedCaptions } from './videoControl'
 import { setNativeTranslationCues, clearNativeTranslationCues, hasNativeTranslations, setTranslationSource } from './cueTranslation'
+import { prefetchPhonetics, clearPhoneticsCache } from './wordPhonetics'
 import { configurePacing, updatePacingConfig, handleCueEnd, resumeFromWait, isWaitingForLearner, cancelPacing } from './linePacing'
 import { installVideoModeKeys, uninstallVideoModeKeys, setVideoModeKeysEnabled } from './videoModeKeys'
 import { openSettingsPanel, closeSettingsPanel, refreshSettingsPanel, isSettingsPanelOpen } from './videoModeSettingsPanel'
@@ -527,6 +528,8 @@ function buildUi() {
       showTranslation: _settings.showTranslation,
       fontSize: _settings.subtitleFontSize,
       targetLang: _targetLang,
+      phoneticsUnderWords: _settings.phoneticsUnderWords,
+      learningLang: _learningLang,
     })
   }
   if (!document.getElementById('elezone-dialogue-sidebar')) {
@@ -608,9 +611,27 @@ function installFullscreenReparent() {
   document.addEventListener('webkitfullscreenchange', onFullscreenChange)
 }
 
+// How many lines ahead to fetch phonetics for while the learner is still on
+// the current one — enough to stay ahead of normal reading pace without
+// firing lookups for dialogue that's minutes away and may never be reached
+// (a seek).
+const PHONETICS_PREFETCH_LINES = 3
+
 function onCueChange(state: { currentCueIndex: number; currentCue: SubtitleCue | null }) {
   updateSubtitleCard(state.currentCue, _savedItems)
   updateDialogueSidebarCue(state.currentCueIndex)
+
+  if (_settings.phoneticsUnderWords && _learningLang.toLowerCase().startsWith('en') && state.currentCueIndex >= 0) {
+    // Only reachable with a known cue list (the DOM fallback calls
+    // updateSubtitleCard directly and never goes through the syncer), so
+    // there's always a real lookahead here — no separate fallback branch.
+    const cues = getCues()
+    const upcoming = cues.slice(state.currentCueIndex + 1, state.currentCueIndex + 1 + PHONETICS_PREFETCH_LINES)
+    const words = upcoming.flatMap(c => c.text.match(/\S+/g) ?? [])
+      .map(w => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+      .filter(Boolean)
+    if (words.length > 0) prefetchPhonetics(words)
+  }
 }
 
 /**
@@ -703,6 +724,7 @@ export function disableVideoMode(): void {
   uninstallVideoModeKeys()
   _resumeAfterLookup = false
   clearNativeTranslationCues()
+  clearPhoneticsCache()
   _domFallbackCues = []
   if (_urlWatch !== null) {
     clearInterval(_urlWatch)
@@ -744,6 +766,7 @@ function watchForTitleChange() {
     _domFallbackCues = []
     resetSubtitleInterceptor()
     clearNativeTranslationCues()
+    clearPhoneticsCache()
     _verified = false
     _verifyHits = 0
     _verifyMisses = 0
@@ -777,16 +800,19 @@ export function applyVideoModeSettings(settings: VideoModeSettings): void {
     showTranslation: _settings.showTranslation,
     fontSize: _settings.subtitleFontSize,
     sidebarVisible: _settings.sidebarVisible,
+    phoneticsUnderWords: _settings.phoneticsUnderWords,
+    learningLang: _learningLang,
   })
   // Re-render the strip so the change lands on the line already on screen.
   updateSubtitleCard(getCurrentCue(), _savedItems)
 
-  // These three change the cue list itself or how every row renders, and the
+  // These four change the cue list itself or how every row renders, and the
   // sidebar builds its rows up front — a restyle isn't enough.
   if (
     prev.showTranslation !== _settings.showTranslation ||
     prev.translationSource !== _settings.translationSource ||
-    prev.hideSoundEffects !== _settings.hideSoundEffects
+    prev.hideSoundEffects !== _settings.hideSoundEffects ||
+    prev.phoneticsUnderWords !== _settings.phoneticsUnderWords
   ) {
     if (_interceptorCues.length > 0) onCuesReady(_interceptorCues)
   }

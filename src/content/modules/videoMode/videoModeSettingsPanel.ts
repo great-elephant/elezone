@@ -263,6 +263,12 @@ function render(): void {
     _onChange?.({ showTranslation: next })
   }))
 
+  panel.appendChild(toggleRow(
+    'Phonetics under words', settings.phoneticsUnderWords,
+    'Shows IPA under each English word of the line being spoken.',
+    next => _onChange?.({ phoneticsUnderWords: next }),
+  ))
+
   // No row for the dialogue sidebar: its own button sits on the subtitle strip,
   // in view whenever the sidebar is, and a second switch for the same thing two
   // clicks deeper is only somewhere for the two to disagree.
