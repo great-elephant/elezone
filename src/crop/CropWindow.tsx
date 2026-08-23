@@ -169,6 +169,7 @@ export function CropWindow() {
           cropBox={cropBox}
           ocrLang={lang}
           onClose={() => window.close()}
+          onRecrop={() => { setOcrText(''); setCropBox(null); setState('cropping') }}
         />
       )}
     </div>

@@ -144,41 +144,49 @@ export const OcrManager: React.FC = () => {
   // it's stale and no-op instead of clobbering the new session's state.
   const sessionIdRef = useRef(0);
 
+  // Shared by the START_CROP_MODE message handler (Alt+O, context menu) and
+  // the FloatingTextPopup "Re-crop" button, so re-cropping from an already
+  // open result popup goes through the exact same session/lock/capture path
+  // as a brand new trigger instead of a second, drifting copy of it.
+  const startCropSession = () => {
+    // Lock first, synchronously, before anything else — see lockScroll's
+    // comment for why this can't wait on a React state/effect round-trip.
+    lockScroll();
+    // Always reset and start fresh — a second Alt+O while OCR is already
+    // open replaces it with a brand new capture rather than just closing.
+    const sessionId = ++sessionIdRef.current;
+    setOcrText('');
+    setState('capturing');
+    // Wait for the browser to actually paint away whatever was on screen
+    // before this session (e.g. a previous OCR Result popup) — otherwise
+    // chrome.tabs.captureVisibleTab can capture a stale frame that still
+    // has the old popup baked into its pixels, even though it's already
+    // gone from the DOM. The frozen "old result" the user sees afterwards
+    // is then just a picture, not a stuck live element.
+    nextPaint()
+      .then(() => captureAndTrimScrollbar())
+      .then((response) => {
+        if (sessionId !== sessionIdRef.current) return; // superseded meanwhile
+        if (response?.dataUrl) {
+          setScreenshot(response.dataUrl);
+          setState('cropping');
+        } else {
+          unlockScroll();
+          setState('idle');
+        }
+      })
+      .catch(err => {
+        if (sessionId !== sessionIdRef.current) return;
+        console.error('Failed to capture tab:', err);
+        unlockScroll();
+        setState('idle');
+      });
+  };
+
   useEffect(() => {
     const handleMessage = (msg: any) => {
       if (msg.type === 'START_CROP_MODE') {
-        // Lock first, synchronously, before anything else — see lockScroll's
-        // comment for why this can't wait on a React state/effect round-trip.
-        lockScroll();
-        // Always reset and start fresh — a second Alt+O while OCR is already
-        // open replaces it with a brand new capture rather than just closing.
-        const sessionId = ++sessionIdRef.current;
-        setOcrText('');
-        setState('capturing');
-        // Wait for the browser to actually paint away whatever was on screen
-        // before this session (e.g. a previous OCR Result popup) — otherwise
-        // chrome.tabs.captureVisibleTab can capture a stale frame that still
-        // has the old popup baked into its pixels, even though it's already
-        // gone from the DOM. The frozen "old result" the user sees afterwards
-        // is then just a picture, not a stuck live element.
-        nextPaint()
-          .then(() => captureAndTrimScrollbar())
-          .then((response) => {
-            if (sessionId !== sessionIdRef.current) return; // superseded meanwhile
-            if (response?.dataUrl) {
-              setScreenshot(response.dataUrl);
-              setState('cropping');
-            } else {
-              unlockScroll();
-              setState('idle');
-            }
-          })
-          .catch(err => {
-            if (sessionId !== sessionIdRef.current) return;
-            console.error('Failed to capture tab:', err);
-            unlockScroll();
-            setState('idle');
-          });
+        startCropSession();
       } else if (msg.type === 'OCR_PROGRESS') {
         if (msg.payload.requestId !== sessionIdRef.current) return; // stale session
         setStatus(msg.payload.status);
@@ -282,6 +290,7 @@ export const OcrManager: React.FC = () => {
           cropBox={cropBox}
           ocrLang={settingsRef.current?.ocr?.language}
           onClose={handleClosePopup}
+          onRecrop={startCropSession}
         />
       )}
     </>
