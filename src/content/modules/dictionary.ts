@@ -1,5 +1,5 @@
 import { translate } from './translation'
-import { getSelectionContext, applyHighlight, pulseHighlight } from './anchor'
+import { getSelectionContext, applyHighlight, pulseHighlight, selectionTextExcludingIpa } from './anchor'
 import { BookmarkColor, BOOKMARK_COLORS } from '../../shared/types'
 import type { SavedItem } from '../../shared/types'
 import type { ContextTranslateResult } from '../../background/aiTranslate'
@@ -393,7 +393,7 @@ export async function showPopoverFromSelection(selectedText?: string, color: Boo
   const sel = window.getSelection()
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
 
-  const word = selectedText ? selectedText.trim() : sel.toString().trim()
+  const word = selectedText ? selectedText.trim() : selectionTextExcludingIpa(sel).trim()
   if (!word) return
   if (word.split(/\s+/).length > 10) {
     // Right-click "Save" can still reach here with a long selection (the chip

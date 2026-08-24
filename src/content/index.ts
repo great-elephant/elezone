@@ -1,6 +1,6 @@
-import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint } from './modules/anchor'
-import { start, startFrom, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo } from './modules/readAloud'
-import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
+import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, selectionTextExcludingIpa } from './modules/anchor'
+import { start, startFrom, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo, setOnPhoneticsInfoChange, getPhoneticsOn } from './modules/readAloud'
+import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, updateWidgetPhoneticsInfo, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
 import { installSpaNavigationGuard } from './modules/readAloudSpaGuard'
 import { savePosition } from './modules/readAloudPosition'
@@ -113,6 +113,7 @@ setOnStateChange(newState => {
     updateWidgetVoice(voice, lang)
     const shadow = getShadowInfo()
     updateWidgetShadowInfo(shadow.shadowing, shadow.repetition)
+    updateWidgetPhoneticsInfo(getPhoneticsOn())
   }
 })
 
@@ -133,6 +134,12 @@ setOnShadowInfoChange(() => {
   updateWidgetShadowInfo(shadowing, repetition)
 })
 
+// Refresh the phonetics toggle when it changes (mirrors the shadowing wiring
+// above, minus the background round trip — see setPhonetics in readAloud.ts).
+setOnPhoneticsInfoChange(() => {
+  updateWidgetPhoneticsInfo(getPhoneticsOn())
+})
+
 // Shared "start reading from the top" path, mirroring the popup's Start Reading:
 // pull settings, show the mini-player, kick off translation if enabled, then
 // read from the article top. Reused by the popup message, the keyboard command,
@@ -145,7 +152,7 @@ async function startReadingFromTop() {
   if (settings.translation?.enabled) {
     await enableTranslation(settings.translation.defaultTargetLanguage, settings.translation.mode, settings.translation.asideForceGoogle ?? true)
   }
-  await start(settings.readAloud)
+  await start(settings.readAloud, settings.translation?.mode)
 }
 
 // ── Bookmark delete tooltip ───────────────────────────────────────────────────
@@ -503,6 +510,17 @@ document.addEventListener('selectionchange', () => {
 
 async function handleMessage(msg: { type: string; payload?: unknown }): Promise<unknown> {
   switch (msg.type) {
+    // `chrome.contextMenus`' own `info.selectionText` is the browser's raw
+    // read of the live DOM selection — it has no idea Read Aloud's phonetics
+    // feature injected extra `/ipa/` text right next to the words, so it
+    // picks that up too. The background script can't filter that itself (it
+    // never sees the DOM); this asks the content script for the same
+    // selection, minus anything under `.elezone-word-ipa`.
+    case 'GET_CLEAN_SELECTION_TEXT': {
+      const sel = window.getSelection()
+      return sel ? selectionTextExcludingIpa(sel) : ''
+    }
+
     case 'GET_SELECTION_CONTEXT': {
       const { searchString } = (msg.payload || {}) as { searchString?: string }
       return getSelectionContext(searchString)
@@ -530,7 +548,7 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
         await enableTranslation(settings2.translation.defaultTargetLanguage, settings2.translation.mode)
       }
       const { selectedText } = msg.payload as { selectedText: string }
-      await startFrom(settings2.readAloud, selectedText, lastKnownSelection)
+      await startFrom(settings2.readAloud, selectedText, lastKnownSelection, settings2.translation?.mode)
       return { ok: true }
     }
 

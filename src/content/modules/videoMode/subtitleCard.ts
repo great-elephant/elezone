@@ -15,7 +15,7 @@
 import type { SubtitleCue } from './subtitleInterceptor'
 import type { SavedItem, BookmarkColor } from '../../../shared/types'
 import { translationFor } from './cueTranslation'
-import { phoneticsForWords } from './wordPhonetics'
+import { phoneticsForWords } from '../wordPhonetics'
 import { showSavedWordTooltip, scheduleHideSavedWordTooltip } from './savedWordTooltip'
 
 export type SeekTarget = 'prev' | 'replay' | 'next'

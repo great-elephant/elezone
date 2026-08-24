@@ -6,10 +6,12 @@ import {
   prepareWordIndex,
   highlightSpokenWord,
   clearWordHighlight,
+  resolveSentenceWordRanges,
 } from './anchor'
 import { extractReadableArticle, getContentElements } from './contentDiscovery'
 import { prefetchAhead } from './translation'
 import { savePosition, clearPosition, setSessionUrl, clearSessionUrl } from './readAloudPosition'
+import { wrapAndShowPhoneticsForWords, unwrapAllPhoneticsWords } from './readAloudPhonetics'
 
 let state: ReadAloudState = 'idle'
 let sentences: string[] = []
@@ -29,6 +31,22 @@ let currentSpeed = 1
 let currentRepetition = 1
 // H29 — whether shadowing mode (inter-sentence gap) is on for this session.
 let shadowingOn = false
+// IPA under every word of the sentence being spoken. Unlike shadowing this
+// never needs a session rebuild — it's purely local DOM rendering, so
+// toggling it just flips the flag and the next applySentenceIndex() call
+// (or an immediate one if toggled mid-sentence, see setPhonetics) picks it up.
+let phoneticsOn = false
+// 'paragraph' wraps a whole content block's worth of sentences the first
+// time any of them is reached; 'sentence' wraps one sentence at a time —
+// matches translation.ts's own paragraph/sentence overlay granularity (H33),
+// so "the zone with phonetics" lines up with whatever's already the reading
+// focus/translation unit rather than introducing a third, unrelated notion
+// of "zone". Threaded in from settings.translation.mode at session start.
+let translationMode: 'paragraph' | 'sentence' = 'paragraph'
+// Sentence indices already wrapped with phonetics this session — a zone
+// (see translationMode above) is wrapped once; leaving it, in either
+// direction, doesn't undo it (H33).
+const phoneticsWrappedIndices = new Set<number>()
 // True only while the background is sitting in the intentional inter-sentence
 // gap, so the mini-player can show a subtle "shadowing…" hint.
 let inShadowGap = false
@@ -43,6 +61,8 @@ let onVoiceInfoChange: (() => void) | null = null
 // Fires when the shadowing on/off flag, the repetition count, or the
 // intentional-gap flag changes so the mini-player controls/indicator refresh.
 let onShadowInfoChange: (() => void) | null = null
+// Fired when the phonetics on/off flag changes so the mini-player toggle refreshes.
+let onPhoneticsInfoChange: (() => void) | null = null
 // True only for the single idle transition that represents a *natural* finish
 // (reached the end, page repetitions exhausted — not a user stop). Read by the
 // state-change handler to decide between the Finished card and a plain hide (F22).
@@ -70,6 +90,15 @@ export function setOnShadowInfoChange(cb: () => void) {
 
 export function getShadowInfo(): { shadowing: boolean; repetition: number; inGap: boolean } {
   return { shadowing: shadowingOn, repetition: currentRepetition, inGap: inShadowGap }
+}
+
+// The mini-player registers here so its phonetics toggle can refresh.
+export function setOnPhoneticsInfoChange(cb: () => void) {
+  onPhoneticsInfoChange = cb
+}
+
+export function getPhoneticsOn(): boolean {
+  return phoneticsOn
 }
 
 // Whether the most recent idle transition was a natural finish (F22). Only
@@ -103,6 +132,8 @@ export function extractSentences(): string[] {
 function clearLocalSession() {
   clearSentenceHighlight()
   clearWordHighlight()
+  unwrapAllPhoneticsWords()
+  phoneticsWrappedIndices.clear()
   sentences = []
   sentenceRanges = []
   sentenceElements = []
@@ -110,6 +141,49 @@ function clearLocalSession() {
   sessionSettings = null
   currentIndex = 0
   wordIndexSentence = -1
+}
+
+// Sentences sharing the same paragraph/content-block element as `index`, when
+// reading in paragraph mode — otherwise just `[index]` alone. Read Aloud
+// always speaks one sentence at a time regardless of this; it only controls
+// how wide a stretch phonetics wraps in one go (H33).
+function zoneIndicesFor(index: number): number[] {
+  if (translationMode !== 'paragraph') return [index]
+  const el = sentenceElements[index]
+  if (!el) return [index]
+  let start = index
+  let end = index
+  while (start > 0 && sentenceElements[start - 1] === el) start--
+  while (end < sentenceElements.length - 1 && sentenceElements[end + 1] === el) end++
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i)
+}
+
+// Wraps every not-yet-wrapped sentence in `index`'s zone. Leaves
+// `sentenceRanges`/the karaoke word index correct for whichever sentence is
+// actually being spoken (`index`) even when the zone spans several.
+function wrapPhoneticsForZone(index: number): void {
+  for (const i of zoneIndicesFor(index)) {
+    if (phoneticsWrappedIndices.has(i)) continue
+    phoneticsWrappedIndices.add(i)
+    const zoneRange = sentenceRanges[i]
+    if (!zoneRange) continue
+
+    prepareWordIndex(zoneRange, sentences[i] ?? '')
+    const wrappers = wrapAndShowPhoneticsForWords(resolveSentenceWordRanges(sentences[i] ?? ''))
+    if (wrappers.length > 0) {
+      // Wrapping split/moved the range's underlying text nodes — rebuild it
+      // from the wrapper elements' own boundaries (see applySentenceIndex's
+      // matching comment for why the old boundary offsets can't be trusted).
+      const rebuilt = document.createRange()
+      rebuilt.setStartBefore(wrappers[0])
+      rebuilt.setEndAfter(wrappers[wrappers.length - 1])
+      sentenceRanges[i] = rebuilt
+    }
+  }
+  // The loop above leaves the global word index pointed at whichever zone
+  // sentence was processed last — reset it to the one actually being spoken
+  // so a real chrome.tts 'word' event still resolves against the right one.
+  prepareWordIndex(sentenceRanges[index] ?? new Range(), sentences[index] ?? '')
 }
 
 function applySentenceIndex(index: number) {
@@ -128,6 +202,19 @@ function applySentenceIndex(index: number) {
     // Periodically persist progress as we advance so an unexpected teardown
     // (tab close, crash, SPA nav) still leaves a resumable position (F24).
     if (changed) void savePosition(index, sentences.length)
+
+    if (phoneticsOn && currentLang.toLowerCase().startsWith('en')) {
+      wrapPhoneticsForZone(index)
+      // wrapPhoneticsForZone rebuilds sentenceRanges[index] in place (a new
+      // Range object) only when this sentence was actually wrapped just now
+      // — re-apply the highlight against it. On a sentence already wrapped
+      // in an earlier visit, sentenceRanges[index] is unchanged from the
+      // (already-correct) one the highlight call above already used.
+      const rebuilt = sentenceRanges[index]
+      if (rebuilt && rebuilt !== range) {
+        highlightSentenceRange(rebuilt, sentenceElements[index] ?? null)
+      }
+    }
   }
   prefetchAhead(index, sentences, 3)
 }
@@ -145,6 +232,7 @@ async function beginSession(
   settings: ReadAloudSettings,
   startIndex: number,
   lang: string,
+  translationModeIn: 'paragraph' | 'sentence',
 ) {
   // Pin the position key to the URL we're starting on, so a later SPA nav (which
   // mutates location.href before our save runs) still saves to this article (F24/F25).
@@ -156,6 +244,14 @@ async function beginSession(
   // renders the right initial values before the first background broadcast.
   currentRepetition = Math.max(1, Math.round(settings.repetition || 1))
   shadowingOn = settings.shadowing === true
+  phoneticsOn = settings.showPhonetics === true
+  translationMode = translationModeIn
+  // Best guess until the background's own detectLanguage broadcast corrects
+  // it — without this the very first sentence's applySentenceIndex() call
+  // (below, before any broadcast has arrived) always sees currentLang as
+  // whatever the *previous* session left it as (or '' on the very first
+  // session ever), and the phonetics gate reads that same field.
+  currentLang = lang
   inShadowGap = false
   sessionSettings = { ...settings, speed: currentSpeed, repetition: currentRepetition, shadowing: shadowingOn }
 
@@ -170,8 +266,12 @@ async function beginSession(
     return
   }
 
-  applySentenceIndex(startIndex)
+  // Order matters: the phonetics walker kicked off inside applySentenceIndex
+  // checks `state === 'playing'` on its very first (synchronous) tick — call
+  // notifyState first so that check doesn't see the still-'idle' state and
+  // permanently bail before a single word is shown for this session.
   notifyState('playing')
+  applySentenceIndex(startIndex)
 }
 
 // Build the sentence plan for the whole readable article and load it into the
@@ -187,14 +287,14 @@ function loadArticlePlan(splitAtShadowStops?: boolean): string {
   return lang
 }
 
-export async function start(settings: ReadAloudSettings) {
+export async function start(settings: ReadAloudSettings, translationMode: 'paragraph' | 'sentence' = 'paragraph') {
   if (state !== 'idle') return
 
   const lang = loadArticlePlan(settings.shadowing)
   if (sentences.length === 0) return
 
   currentIndex = 0
-  await beginSession(settings, 0, lang)
+  await beginSession(settings, 0, lang, translationMode)
 }
 
 function normTextFallback(s: string): string {
@@ -254,12 +354,13 @@ export async function startFrom(
   settings: ReadAloudSettings,
   selectedText: string,
   selRange: Range | null,
+  translationMode: 'paragraph' | 'sentence' = 'paragraph',
 ) {
   const lang = loadArticlePlan(settings.shadowing)
   if (sentences.length === 0) return
 
   currentIndex = findSentenceIndex(sentences, sentenceRanges, selectedText, selRange)
-  await beginSession(settings, currentIndex, lang)
+  await beginSession(settings, currentIndex, lang, translationMode)
 }
 
 // Sends a CONTROL_READ_ALOUD action and, if the background reports no matching
@@ -284,6 +385,8 @@ export function pause() {
   if (state !== 'playing') return
   // Persist where we paused so the user can resume later (F24).
   void savePosition(currentIndex, sentences.length)
+  // The phonetics badges are static per sentence now (not tied to playback
+  // progress), so pausing leaves them exactly as they are — nothing to do.
   notifyState('paused')
   sendControl('pause')
 }
@@ -330,9 +433,13 @@ export function seekTo(index: number) {
   // A seek restarts the utterance from the sentence start, so any prior word
   // highlight (incl. a replay of the same sentence) is stale — drop it now.
   clearWordHighlight()
+  // notifyState before applySentenceIndex: a seek while paused would otherwise
+  // have the phonetics walker's first (synchronous) tick see the still-'paused'
+  // state, bail, and permanently latch as "already walking" this sentence —
+  // see the identical fix in beginSession() above.
+  notifyState('playing')
   // Highlight immediately for responsiveness; background confirms via broadcast.
   applySentenceIndex(clamped)
-  notifyState('playing')
   sendControl('seek', { index: clamped })
 }
 
@@ -421,6 +528,42 @@ export function setShadowing(on: boolean) {
   void rebuildSessionForShadowing(on)
 }
 
+// Toggle the phonetics wraps live and persist the choice. Unlike shadowing
+// this never touches the background/chrome.tts session — it's pure content-
+// script DOM rendering, so there's nothing to rebuild on that side.
+export async function setPhonetics(on: boolean): Promise<void> {
+  phoneticsOn = on
+  onPhoneticsInfoChange?.()
+  if (on) {
+    // Show the current zone already on screen instead of waiting for the
+    // next sentence — flipping the toggle mid-sentence should show
+    // something right away.
+    if (state !== 'idle' && currentLang.toLowerCase().startsWith('en')) {
+      wrapPhoneticsForZone(currentIndex)
+      const rebuilt = sentenceRanges[currentIndex]
+      if (rebuilt) highlightSentenceRange(rebuilt, sentenceElements[currentIndex] ?? null)
+    }
+  } else {
+    unwrapAllPhoneticsWords()
+    phoneticsWrappedIndices.clear()
+    const range = sentenceRanges[currentIndex]
+    if (range) prepareWordIndex(range, sentences[currentIndex] ?? '')
+  }
+  if (sessionSettings) sessionSettings = { ...sessionSettings, showPhonetics: on }
+
+  let stored: Settings | undefined
+  try {
+    stored = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }) as Settings | undefined
+  } catch {
+    stored = undefined
+  }
+  if (!stored?.readAloud) return
+  await chrome.runtime.sendMessage({
+    type: 'SAVE_SETTINGS',
+    payload: { ...stored, updatedAt: Date.now(), readAloud: { ...stored.readAloud, showPhonetics: on } },
+  }).catch(() => {})
+}
+
 // H31 — set per-sentence repetition live (1..5). Takes effect from the next
 // sentence; the background persists it and re-broadcasts to confirm.
 export function setRepetition(count: number) {
@@ -451,10 +594,6 @@ export function syncRemoteState(
   // can't inherit a stale "finished" flag.
   lastFinishedNaturally = nextState === 'idle' ? finished === true : false
 
-  if (typeof index === 'number') {
-    applySentenceIndex(index)
-  }
-
   if (typeof speed === 'number' && Number.isFinite(speed)) {
     currentSpeed = speed
   }
@@ -474,7 +613,9 @@ export function syncRemoteState(
   }
 
   // The background reports the voice/language it actually resolved (incl. an
-  // auto-picked one) so the mini-player chip can show it.
+  // auto-picked one) so the mini-player chip can show it. Set BEFORE
+  // applySentenceIndex below — that's where the phonetics gate reads
+  // `currentLang`, and it needs this call's fresh value, not last call's.
   let voiceInfoChanged = false
   if (typeof voice === 'string' && voice !== currentVoice) {
     currentVoice = voice
@@ -483,6 +624,17 @@ export function syncRemoteState(
   if (typeof lang === 'string' && lang !== currentLang) {
     currentLang = lang
     voiceInfoChanged = true
+  }
+
+  if (typeof index === 'number') {
+    // Set the raw flag before applySentenceIndex, not after — the phonetics
+    // walker it can kick off checks `state === 'playing'` synchronously on
+    // its first tick. The full notifyState(nextState) call further down
+    // (unchanged) still fires the onStateChange callback at its original
+    // point in this function; this just makes the plain state value correct
+    // early enough for that synchronous check to see it.
+    state = nextState
+    applySentenceIndex(index)
   }
 
   if (nextState === 'idle') {

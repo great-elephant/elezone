@@ -64,6 +64,9 @@ export interface ReadAloudSettings {
   // H32 — focus/spotlight mode: dim the rest of the page and highlight the current
   // sentence. Persisted so the choice sticks across sessions.
   focus?: boolean
+  // IPA phonetics badge under the word currently being spoken (English pages
+  // only). Persisted so the choice sticks across sessions.
+  showPhonetics?: boolean
 }
 
 // Where a saved word's phonetic transcription comes from. 'dictionaryapi' is a
@@ -351,6 +354,7 @@ export const DEFAULT_SETTINGS: Settings = {
     pitch: 1,
     volume: 1,
     focus: false,
+    showPhonetics: false,
   },
   translation: {
     defaultTargetLanguage: 'vi',

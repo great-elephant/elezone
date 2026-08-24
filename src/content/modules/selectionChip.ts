@@ -1,5 +1,6 @@
 import { showPopoverFromSelection } from './dictionary'
 import { Settings, BookmarkColor } from '../../shared/types'
+import { selectionTextExcludingIpa } from './anchor'
 
 // The default color the extension uses for a quick save.
 const DEFAULT_COLOR: BookmarkColor = 'red'
@@ -194,7 +195,7 @@ function handleMouseUp(e: MouseEvent) {
       removeChip()
       return
     }
-    const word = sel.toString().trim()
+    const word = selectionTextExcludingIpa(sel).trim()
     if (!isSavableWord(word) || isInEditableOrOwn(sel.anchorNode)) {
       removeChip()
       return

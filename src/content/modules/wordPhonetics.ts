@@ -1,18 +1,22 @@
-// IPA phonetics shown under every word of the subtitle line currently being
-// spoken (English only — see the language gate in aiTranslate.ts).
+// Shared IPA phonetics lookup + cache, used by both Video Mode (phonetics
+// under each subtitle word) and Read Aloud (phonetics badge for the word
+// currently being spoken). English only — see the language gate in
+// aiTranslate.ts.
 //
-// Subtitle dialogue repeats words constantly ("the", "you", "is"...), so this
-// keeps its own memory cache and checks it before ever messaging the
-// background: a cache hit costs nothing, not even an IPC round trip. Unlike
-// the background's own phoneticsCache (capped, defensive against a long-lived
-// service worker) this one is deliberately uncapped — a whole movie's unique
-// vocabulary is a few thousand words at most, trivial to hold for the length
-// of a viewing session, and dropping entries here would mean re-fetching a
-// word the viewer already saw once already this session.
+// Both features repeat the same words constantly ("the", "you", "is"...), so
+// this keeps one memory cache shared between them and checks it before ever
+// messaging the background: a cache hit costs nothing, not even an IPC round
+// trip — a word already looked up in one feature is free in the other.
+// Unlike the background's own phoneticsCache (capped, defensive against a
+// long-lived service worker) this one is deliberately uncapped — a whole
+// article or movie's unique vocabulary is a few thousand words at most,
+// trivial to hold for the length of a page/tab's life, and dropping entries
+// here would mean re-fetching a word already seen once this session.
 
 const _cache = new Map<string, string | null>()
-// De-dupes concurrent requests for the same word — the current cue's fetch and
-// a look-ahead prefetch can otherwise both go out for the same word at once.
+// De-dupes concurrent requests for the same word — a feature's own fetch and
+// a look-ahead prefetch (or the other feature entirely) can otherwise both go
+// out for the same word at once.
 const _pending = new Map<string, Promise<void>>()
 
 function normalise(word: string): string {
@@ -52,9 +56,9 @@ async function fetchMissing(words: string[]): Promise<void> {
 }
 
 /**
- * Phonetics for every word of the cue currently on screen. Resolves once
- * every word is either cached or has come back from the background —
- * suitable for populating the subtitle card as soon as it's ready.
+ * Phonetics for a batch of words — the cue currently on screen (Video Mode)
+ * or the sentence being spoken (Read Aloud). Resolves once every word is
+ * either cached or has come back from the background.
  */
 export async function phoneticsForWords(words: string[]): Promise<Map<string, string | null>> {
   const clean = [...new Set(words.map(normalise).filter(Boolean))]
@@ -67,10 +71,10 @@ export async function phoneticsForWords(words: string[]): Promise<Map<string, st
 }
 
 /**
- * Fire-and-forget look-ahead: populate the cache for cues the learner hasn't
- * reached yet, so by the time they get there the words are already known.
- * Callers don't await this — it only ever writes to the cache, never to the
- * DOM, so there is nothing to race against a cue change.
+ * Fire-and-forget look-ahead: populate the cache for words not on screen/
+ * spoken yet, so by the time they are the words are already known. Callers
+ * don't await this — it only ever writes to the cache, never to the DOM, so
+ * there is nothing to race against a cue/sentence change.
  */
 export function prefetchPhonetics(words: string[]): void {
   const clean = [...new Set(words.map(normalise).filter(Boolean))]

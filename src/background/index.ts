@@ -1228,21 +1228,34 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     return
   }
 
+  // `info.selectionText` is the browser's own raw read of the DOM selection
+  // — it has no notion of Read Aloud's phonetics wraps, so it picks up their
+  // injected `/ipa/` text along with the real words. Ask the content script
+  // for the same selection filtered to exclude that (falls back to the raw
+  // text if the content script can't answer, e.g. on a page it never
+  // injected into) before this text goes anywhere — read aloud, popover, or
+  // saved bookmark.
+  const cleanText = info.selectionText
+    ? await chrome.tabs.sendMessage(tab.id, { type: 'GET_CLEAN_SELECTION_TEXT' })
+      .catch(() => null) as string | null
+    : null
+  const selectionText = cleanText || info.selectionText
+
   if (info.menuItemId === 'read-from-here') {
     chrome.tabs.sendMessage(tab.id, {
       type: 'START_READ_ALOUD_FROM',
-      payload: { selectedText: info.selectionText ?? '' },
+      payload: { selectedText: selectionText ?? '' },
     }).catch(() => { })
     return
   }
 
-  if (!info.selectionText) return
+  if (!selectionText) return
 
   const match = info.menuItemId.toString().match(/^bookmark-(.+)$/)
   if (!match || match[1] === 'parent') return
 
   const color = match[1] as BookmarkColor
-  const text = info.selectionText.trim()
+  const text = selectionText.trim()
 
   // If it's a short phrase (<= 10 words), show the dictionary popover to let them add a translation
   if (text.split(/\s+/).length <= 10) {
@@ -1263,7 +1276,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const bookmark: SavedItem = {
     id: crypto.randomUUID(),
     url: info.pageUrl,
-    text: info.selectionText,
+    text,
     sourceLang: response.sourceLang,
     prefix: response.prefix,
     suffix: response.suffix,

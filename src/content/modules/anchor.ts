@@ -1,5 +1,6 @@
 import { SavedItem } from '../../shared/types'
 import { updateReadingOverlays, hideReadingOverlays } from './readAloudOverlay'
+import { IPA_SELECTOR, WRAP_CLASS } from './readAloudPhonetics'
 
 // ── window.find() helper ─────────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ export function getSelectionContext(searchString?: string): {
   const sel = window.getSelection()
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
 
-  const text = searchString || sel.toString()
+  const text = searchString || selectionTextExcludingIpa(sel)
   if (!text.trim()) return null
 
   const currentRange = sel.getRangeAt(0).cloneRange()
@@ -122,6 +123,11 @@ export function getSelectionContext(searchString?: string): {
       // See buildElementTextIndex — a <noscript>'s content is one literal text
       // node holding raw markup source once scripting is enabled.
       if (el.closest('noscript')) return NodeFilter.FILTER_REJECT
+      // Read Aloud's phonetics wraps inject real IPA text right next to the
+      // word — without this, the "surrounding sentence" context built below
+      // (and sent along for translation) picks up that pronunciation text as
+      // if it were part of the sentence.
+      if (el.closest(IPA_SELECTOR)) return NodeFilter.FILTER_REJECT
       const s = window.getComputedStyle(el)
       if (s.display === 'none' || s.visibility === 'hidden') return NodeFilter.FILTER_REJECT
       return NodeFilter.FILTER_ACCEPT
@@ -356,6 +362,13 @@ function buildElementTextIndex(root: HTMLElement): { entries: TextEntry[]; text:
       const s = getComputedStyle(el)
       if (s.display === 'none' || s.visibility === 'hidden') return NodeFilter.FILTER_REJECT
       if (el.closest('[data-cxt-translation]')) return NodeFilter.FILTER_REJECT
+      // The phonetics feature's injected IPA text (readAloudPhonetics.ts) —
+      // wraps now persist across sentences instead of being torn down on
+      // every transition, so without this, re-deriving the sentence plan
+      // later in the same session (e.g. toggling shadowing mid-read) would
+      // pick up already-injected IPA strings as if they were the article's
+      // own words.
+      if (el.closest(IPA_SELECTOR)) return NodeFilter.FILTER_REJECT
       if (isNoisyInteractiveText(el)) return NodeFilter.FILTER_REJECT
       return NodeFilter.FILTER_ACCEPT
     },
@@ -649,6 +662,94 @@ function clipBeforeTranslation(range: Range): Range {
   }
 }
 
+/**
+ * Every text-node sub-range of `range` that isn't nested inside
+ * `excludeSelector` — adjacent runs are merged so a fully-unaffected range
+ * (nothing to exclude) comes back as a single Range, not one per text node.
+ * Used to keep the Read Aloud phonetics wraps' injected IPA text out of the
+ * `cxt-speaking`/`cxt-word` highlights: those are meant to mark the original
+ * sentence/word, not the pronunciation guide sitting underneath it.
+ */
+/**
+ * `range.toString()`, but skipping any text nested inside `excludeSelector`
+ * — the IPA-safe equivalent of just reading `range.toString()` directly.
+ * Read Aloud's phonetics wraps inject real DOM text (`/ˈdaetə/` etc.) right
+ * next to the word it's a reading for, so a plain `.toString()` over a
+ * range/selection that happens to span a wrapped word silently pulls that
+ * pronunciation text in along with it — this is for the save-word/translate
+ * paths that need exactly the word/sentence text a user selected, not what's
+ * rendered underneath it.
+ */
+function rangeTextExcluding(range: Range, excludeSelector: string): string {
+  return splitRangeExcluding(range, excludeSelector).map(r => r.toString()).join('')
+}
+
+/** Same as `rangeTextExcluding`, applied across every range of a Selection. */
+export function selectionTextExcludingIpa(sel: Selection): string {
+  const parts: string[] = []
+  for (let i = 0; i < sel.rangeCount; i++) parts.push(rangeTextExcluding(sel.getRangeAt(i), IPA_SELECTOR))
+  return parts.join('')
+}
+
+// Chrome's default copy behaviour serializes the selected HTML to plain
+// text by inserting a newline at the boundary of anything that isn't
+// `display:inline` — which every phonetics-wrapped word is (`inline-flex`,
+// so the word+IPA can stack), so copying a sentence full of them comes out
+// with a stray line break after nearly every word instead of a space. The
+// selected text itself is fine (`selectionTextExcludingIpa` reads real
+// spaces from the gap-wraps between words); it's only the browser's own
+// clipboard serialization that's mangling it. Overriding the plain-text
+// clipboard payload with that same reader sidesteps the mangling.
+document.addEventListener('copy', (e) => {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed) return
+  const range = sel.getRangeAt(0)
+  const root = range.commonAncestorContainer
+  const scope = root.nodeType === Node.ELEMENT_NODE ? root as Element : root.parentElement
+  const wrap = scope?.querySelector(`.${WRAP_CLASS}`)
+  if (!wrap || !range.intersectsNode(wrap)) return
+
+  const text = selectionTextExcludingIpa(sel)
+  e.clipboardData?.setData('text/plain', text)
+  e.preventDefault()
+})
+
+function splitRangeExcluding(range: Range, excludeSelector: string): Range[] {
+  const root = range.commonAncestorContainer
+  const scope = root.nodeType === Node.ELEMENT_NODE ? root as Element : root.parentElement
+  if (!scope) return [range]
+
+  const ranges: Range[] = []
+  let last: Range | null = null
+  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!range.intersectsNode(node)) return NodeFilter.FILTER_REJECT
+      if ((node as Text).parentElement?.closest(excludeSelector)) return NodeFilter.FILTER_REJECT
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+
+  let n: Node | null
+  while ((n = walker.nextNode())) {
+    const text = n as Text
+    const full = text.nodeValue ?? ''
+    const start = text === range.startContainer ? range.startOffset : 0
+    const end = text === range.endContainer ? range.endOffset : full.length
+    if (start >= end) continue
+
+    if (last && last.endContainer === text && last.endOffset === start) {
+      last.setEnd(text, end)
+      continue
+    }
+    const r = document.createRange()
+    r.setStart(text, start)
+    r.setEnd(text, end)
+    ranges.push(r)
+    last = r
+  }
+  return ranges.length > 0 ? ranges : [range]
+}
+
 export function highlightSentenceRange(range: Range, contentEl?: HTMLElement | null): void {
   if (!range.toString()) {
     // buildSentencePlan couldn't resolve this sentence to a real DOM position
@@ -662,7 +763,7 @@ export function highlightSentenceRange(range: Range, contentEl?: HTMLElement | n
     return
   }
   const ownRange = clipBeforeTranslation(range)
-  CSS.highlights.set('cxt-speaking', new Highlight(ownRange))
+  CSS.highlights.set('cxt-speaking', new Highlight(...splitRangeExcluding(ownRange, IPA_SELECTOR)))
 
   // Keep the left "reading" marker + focus spotlight in sync with the sentence.
   // `contentEl` (the exact paragraph/content block this sentence came from, from
@@ -780,8 +881,15 @@ export function prepareWordIndex(rawRange: Range, ttsText: string): void {
   } else {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
-        // Only nodes that actually intersect the range.
-        return range.intersectsNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+        // Only nodes that actually intersect the range — and never the IPA
+        // text the phonetics feature injects under each word. Without this,
+        // a real chrome.tts 'word' event's charIndex (which counts only the
+        // original sentence text) would land inside whatever IPA string
+        // happened to fall before it in raw text order, misplacing every
+        // word highlight from that point on.
+        if (!range.intersectsNode(node)) return NodeFilter.FILTER_REJECT
+        if ((node as Text).parentElement?.closest(IPA_SELECTOR)) return NodeFilter.FILTER_REJECT
+        return NodeFilter.FILTER_ACCEPT
       },
     })
     let n: Node | null
@@ -816,11 +924,28 @@ export function prepareWordIndex(rawRange: Range, ttsText: string): void {
 }
 
 // Resolve a character offset (relative to the raw range text) to (node, offset).
-function resolveWordOffset(rawOffset: number): { node: Text; nodeOffset: number } | null {
+//
+// `preferNextEntry`: when the offset sits exactly on the shared boundary
+// between two adjacent entries (e1.end === e2.start — e.g. a plain text node
+// ending right where a <b>/<a> begins), naively taking the first match binds
+// to the END of e1 instead of the START of e2. That's invisible for a plain
+// paragraph, but for Read Aloud's phonetics wraps it silently produced a
+// Range starting in the wrong (preceding) text node and ending inside the
+// element after it — `surroundContents()` then rejects it as partially
+// selecting a non-Text node, and words immediately following a <b>/<a>/etc.
+// boundary (e.g. "document" right after "<b>...</b>, or ") never get
+// wrapped at all. A word's *start* offset should prefer the later entry at a
+// shared boundary; its *end* offset should keep preferring the earlier one
+// (attach to the end of the word's own entry, not the start of whatever
+// follows) — hence this is only set true by the start-offset call below.
+function resolveWordOffset(rawOffset: number, preferNextEntry = false): { node: Text; nodeOffset: number } | null {
   if (!wordIndexEntries.length) return null
   const clamped = Math.max(0, Math.min(rawOffset, wordIndexRawText.length))
-  for (const e of wordIndexEntries) {
-    if (clamped >= e.start && clamped <= e.end) {
+  for (let i = 0; i < wordIndexEntries.length; i++) {
+    const e = wordIndexEntries[i]
+    const atSharedBoundary = preferNextEntry && clamped === e.end && i < wordIndexEntries.length - 1
+      && wordIndexEntries[i + 1].start === e.end
+    if (clamped >= e.start && clamped <= e.end && !atSharedBoundary) {
       const base = (e as WordIndexEntry & { base?: number }).base ?? 0
       return { node: e.node, nodeOffset: base + (clamped - e.start) }
     }
@@ -829,19 +954,19 @@ function resolveWordOffset(rawOffset: number): { node: Text; nodeOffset: number 
 }
 
 /**
- * Given a word position reported by chrome.tts (charIndex relative to the TTS
- * sentence text, optional length), highlight that single word as `cxt-word`
- * on top of the sentence's `cxt-speaking` highlight.
- *
- * Never throws and never falls back to highlighting the whole sentence: if the
- * offset can't be resolved to a sub-range, the word highlight is simply skipped.
+ * Resolve a character offset (relative to the sentence's TTS text, same
+ * alignment `prepareWordIndex` already computed) to the word's DOM Range,
+ * text, and viewport rect. Pure lookup — no side effect on the page — so it
+ * works equally whether `charIndex` came from a real chrome.tts `'word'`
+ * event or was estimated ourselves (see the Read Aloud phonetics badge's
+ * self-paced walker, which never gets a real event from every voice).
  */
-export function highlightSpokenWord(charIndex: number, length?: number): void {
-  if (!wordIndexEntries.length) return
+function resolveWordAt(charIndex: number, length?: number): { text: string; rect: DOMRect; range: Range } | null {
+  if (!wordIndexEntries.length) return null
 
   // Map TTS-text offset → raw-range offset.
   const rawStart = charIndex + wordIndexTextOffset
-  if (rawStart < 0 || rawStart >= wordIndexRawText.length) return
+  if (rawStart < 0 || rawStart >= wordIndexRawText.length) return null
 
   // Determine the word's end: prefer the reported length, else extend to the
   // next whitespace in the raw range text (word boundary).
@@ -853,21 +978,99 @@ export function highlightSpokenWord(charIndex: number, length?: number): void {
     rawEnd = ws === -1 ? wordIndexRawText.length : rawStart + ws
   }
   rawEnd = Math.min(rawEnd, wordIndexRawText.length)
-  if (rawEnd <= rawStart) return
+  if (rawEnd <= rawStart) return null
 
-  const startPos = resolveWordOffset(rawStart)
+  const startPos = resolveWordOffset(rawStart, true)
   const endPos = resolveWordOffset(rawEnd)
-  if (!startPos || !endPos) return
+  if (!startPos || !endPos) return null
 
   try {
     const wordRange = new Range()
     wordRange.setStart(startPos.node, startPos.nodeOffset)
     wordRange.setEnd(endPos.node, endPos.nodeOffset)
-    if (wordRange.collapsed) return
-    CSS.highlights.set('cxt-word', new Highlight(wordRange))
+    if (wordRange.collapsed) return null
+    return { text: wordRange.toString(), rect: wordRange.getBoundingClientRect(), range: wordRange }
   } catch {
     // Bad offsets (e.g. node mutated) — skip this word rather than mis-highlight.
+    return null
   }
+}
+
+/**
+ * Given a word position reported by chrome.tts (charIndex relative to the TTS
+ * sentence text, optional length), highlight that single word as `cxt-word`
+ * on top of the sentence's `cxt-speaking` highlight.
+ *
+ * Never throws and never falls back to highlighting the whole sentence: if the
+ * offset can't be resolved to a sub-range, the word highlight is simply
+ * skipped. Returns the word's text and viewport rect or null when skipped.
+ */
+export function highlightSpokenWord(charIndex: number, length?: number): { text: string; rect: DOMRect } | null {
+  const resolved = resolveWordAt(charIndex, length)
+  if (!resolved) return null
+  CSS.highlights.set('cxt-word', new Highlight(resolved.range))
+  return { text: resolved.text, rect: resolved.rect }
+}
+
+/**
+ * Every word of `sentenceText` (the same string `prepareWordIndex` was just
+ * built from), resolved to its own DOM Range. For Read Aloud's phonetics
+ * feature, which wraps each word in a small span so CSS can center the IPA
+ * under it — surroundContents() needs the actual Range, not just its text/
+ * rect, hence a dedicated resolver rather than reusing `highlightSpokenWord`/
+ * a single-word lookup in a loop.
+ */
+export function resolveSentenceWordRanges(sentenceText: string): { text: string; range: Range }[] {
+  const out: { text: string; range: Range }[] = []
+  for (const m of sentenceText.matchAll(/\S+/g)) {
+    const token = m[0]
+    // Trim leading/trailing punctuation from the span we resolve/wrap, not
+    // just from the text used for the dictionary lookup — a trailing comma
+    // or a citation bracket right after a </b>/</a> genuinely lives in a
+    // different (plain) text node than the word itself, so a Range spanning
+    // "database," would cross out of the <b> it starts in and
+    // surroundContents() rejects it outright, leaving the word unwrapped.
+    // Punctuation isn't looked up or shown anyway, so it's fine to just
+    // leave it standing outside the wrap.
+    const lead = token.match(/^[^\p{L}\p{N}]+/u)?.[0].length ?? 0
+    const trail = token.match(/[^\p{L}\p{N}]+$/u)?.[0].length ?? 0
+    const core = token.slice(lead, token.length - trail)
+    if (!core) continue
+    // A bare number — most commonly a citation marker like the "1" in
+    // "data.[1]" or "[Notes 1]" — has no pronunciation to look up, so
+    // wrapping it only pays cost for zero benefit: it's almost always inside
+    // a `<sup>`, and giving it a flex-column box with a reserved (empty) IPA
+    // row there breaks the browser's own superscript sizing/positioning,
+    // which is what caused the number to visibly detach from its brackets.
+    if (!/\p{L}/u.test(core)) continue
+    const resolved = resolveWordAt(m.index + lead, core.length)
+    if (!resolved) continue
+
+    // Grow the wrap forward through any run of punctuation/whitespace that
+    // immediately follows, up to the next letter/digit — but only within the
+    // *same* text node the word's own end already sits in, since staying in
+    // one node can never cross an element boundary the way the raw token
+    // regularly does (a "(" right before a wrapped word, or the ")." right
+    // after one, commonly live in a different, plain sibling node than the
+    // bold/linked word text itself). One word's forward-only reach is enough
+    // to cover both directions: it swallows its own trailing space, and by
+    // extension the leading "(" of whatever comes next, right up to that
+    // word's first letter — so the sentence highlight reads as one unbroken
+    // strip instead of separate word-islands with a gap at every space or
+    // bracket, without two neighbouring words ever fighting to extend into
+    // the same characters.
+    const range = resolved.range
+    const endNode = range.endContainer
+    if (endNode.nodeType === Node.TEXT_NODE) {
+      const val = (endNode as Text).nodeValue ?? ''
+      let e = range.endOffset
+      while (e < val.length && /[^\p{L}\p{N}]/u.test(val[e])) e++
+      if (e > range.endOffset) range.setEnd(endNode, e)
+    }
+
+    out.push({ text: resolved.text, range })
+  }
+  return out
 }
 
 export function clearWordHighlight(): void {

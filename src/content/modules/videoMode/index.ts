@@ -21,7 +21,7 @@ import { placeYouTubeOverlays, isStripOverlaid, defaultStripPosition } from './y
 import { getSidebarWidth, getSidebarScrollTop, setSidebarScrollTop } from './dialogueSidebar'
 import { seekToSeconds, pauseVideo, playVideo, useClosedCaptions } from './videoControl'
 import { setNativeTranslationCues, clearNativeTranslationCues, hasNativeTranslations, setTranslationSource } from './cueTranslation'
-import { prefetchPhonetics, clearPhoneticsCache } from './wordPhonetics'
+import { prefetchPhonetics, clearPhoneticsCache } from '../wordPhonetics'
 import { configurePacing, updatePacingConfig, handleCueEnd, resumeFromWait, isWaitingForLearner, cancelPacing } from './linePacing'
 import { installVideoModeKeys, uninstallVideoModeKeys, setVideoModeKeysEnabled } from './videoModeKeys'
 import { openSettingsPanel, closeSettingsPanel, refreshSettingsPanel, isSettingsPanelOpen } from './videoModeSettingsPanel'
