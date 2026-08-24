@@ -840,8 +840,13 @@ export function updateSubtitleCard(cue: SubtitleCue | null, savedItems: SavedIte
         // fill no longer belong to what's on screen.
         if (_currentCue?.text !== key || !_wordsRow) return
         _wordsRow.querySelectorAll<HTMLElement>('.phonetics-text').forEach(span => {
-          const text = result.get(span.dataset.word ?? '')
-          if (text) span.textContent = text
+          const entry = result.get(span.dataset.word ?? '')
+          if (!entry) return
+          span.textContent = entry.text
+          // A reading borrowed from a fallback (plural's singular, one half
+          // of a hyphenated compound...) rather than the word's own exact
+          // entry — shown dimmer to signal "close, not guaranteed exact".
+          span.style.opacity = entry.approximate ? '0.6' : ''
         })
       })
     }

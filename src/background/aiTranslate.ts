@@ -259,14 +259,74 @@ async function googleSenses(word: string, tgt: string): Promise<{ senses: string
 // across a long-lived process — the size cap below is a defensive backstop for
 // the rare case a worker stays alive longer (open DevTools, active ports).
 const PHONETICS_CACHE_MAX = 500
-const phoneticsCache = new Map<string, string | null>()
+// `approximate: true` means `value` isn't this exact word's own dictionary
+// entry — it's a reading borrowed from a fallback (the singular of a plural,
+// one half of a hyphenated compound, etc. — see the fallback chain below).
+// Still meaningfully useful, but the content script dims it to signal
+// "close, not guaranteed exact" rather than showing it with the same
+// confidence as a word's own real entry.
+const phoneticsCache = new Map<string, { value: string | null; approximate: boolean }>()
 
-function cachePhonetics(word: string, value: string | null) {
+function cachePhonetics(word: string, value: string | null, approximate: boolean) {
   if (phoneticsCache.size >= PHONETICS_CACHE_MAX && !phoneticsCache.has(word)) {
     const oldestKey = phoneticsCache.keys().next().value
     if (oldestKey !== undefined) phoneticsCache.delete(oldestKey)
   }
-  phoneticsCache.set(word, value)
+  phoneticsCache.set(word, { value, approximate })
+}
+
+// Read Aloud's paragraph mode wraps every sentence in a paragraph up front,
+// each firing its own word batch — a several-sentence paragraph can mean 50+
+// words all wanting a lookup in the same instant. Without a cap, that's 50+
+// concurrent requests at once to a free, unauthenticated, no-SLA API — the
+// observed result was most of them timing out or getting throttled and
+// coming back non-definitive (only a word or two in a whole sentence ever
+// got a real result). Funneling every dictionaryapi.dev call through one
+// small queue keeps only a handful in flight at a time regardless of how
+// many words asked at once, so the API sees the same request pattern a
+// normal user reading one word at a time would.
+const MAX_CONCURRENT_DICT_FETCHES = 6
+let activeDictFetches = 0
+// Two separate waiting lines, not one — a word from the sentence actually on
+// screen right now and a word from Read Aloud's look-ahead prefetch (up to 4
+// sentences not on screen yet) used to queue FIFO together, so a big
+// paragraph's prefetch could sit ahead of and delay the very sentence the
+// user is looking at right now waiting for its own reading. `high` always
+// drains before `low` regardless of arrival order — prefetch only ever uses
+// a slot the current sentence didn't want yet.
+const dictFetchQueueHigh: Array<() => void> = []
+const dictFetchQueueLow: Array<() => void> = []
+
+// Capping *concurrency* alone turned out not to be enough on its own: a run
+// of 429s comes back in single-digit milliseconds (there's no real work
+// happening server-side to wait on), so 6-at-a-time still let a big batch
+// cycle through all 150+ words in well under a second — plenty fast to blow
+// past dictionaryapi.dev's per-IP rate limit, at which point *most* of the
+// batch comes back 429 instead of a real answer. This paces the actual
+// dispatch rate independently of concurrency, so a burst can't out-race the
+// limit just because responses happen to come back fast.
+const MIN_DISPATCH_GAP_MS = 120
+let nextAllowedDispatchTime = 0
+
+async function acquireDictFetchSlot(priority: 'high' | 'low' = 'high'): Promise<void> {
+  if (activeDictFetches >= MAX_CONCURRENT_DICT_FETCHES) {
+    const queue = priority === 'high' ? dictFetchQueueHigh : dictFetchQueueLow
+    await new Promise<void>(resolve => queue.push(resolve))
+  }
+  activeDictFetches++
+
+  const now = Date.now()
+  const waitUntil = Math.max(now, nextAllowedDispatchTime)
+  nextAllowedDispatchTime = waitUntil + MIN_DISPATCH_GAP_MS
+  if (waitUntil > now) await new Promise(resolve => setTimeout(resolve, waitUntil - now))
+}
+
+function releaseDictFetchSlot(): void {
+  activeDictFetches--
+  // High-priority waiters always get the freed slot first — a low-priority
+  // (prefetch) request already in flight isn't preempted, only *future*
+  // slot grants are reordered, so this never cancels work already dispatched.
+  ;(dictFetchQueueHigh.shift() ?? dictFetchQueueLow.shift())?.()
 }
 
 /**
@@ -278,43 +338,171 @@ function cachePhonetics(word: string, value: string | null) {
  * caching it would permanently mistake "the request failed once" for "this
  * word has no phonetics".
  */
-async function fetchDictionaryApiWordStatus(rawWord: string): Promise<{ value: string | null; definitive: boolean }> {
+type DictStatus = { value: string | null; definitive: boolean; approximate: boolean }
+
+// Concurrent callers asking for the *same* word before the first lookup has
+// finished caching it — common with a shared word ("the", "and"...) appearing
+// in several sentences a big paragraph batch fires off in the same instant —
+// otherwise each independently misses the cache and dispatches its own
+// redundant fetch. Sharing the in-flight Promise means only the first caller
+// actually hits the network; everyone else just awaits the same result.
+const dictInFlight = new Map<string, Promise<DictStatus>>()
+
+async function fetchDictionaryApiWordStatus(
+  rawWord: string,
+  priority: 'high' | 'low' = 'high',
+): Promise<DictStatus> {
   const word = rawWord.toLowerCase()
   const cached = phoneticsCache.get(word)
-  if (cached !== undefined) return { value: cached, definitive: true }
+  if (cached !== undefined) return { ...cached, definitive: true }
 
-  let value: string | null = null
-  let definitive = false
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 3000)
+  const pending = dictInFlight.get(word)
+  if (pending) return pending
+
+  const request = fetchDictionaryApiWordStatusUncached(word, priority)
+  dictInFlight.set(word, request)
   try {
-    const res = await fetch(
-      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`,
-      { signal: controller.signal },
-    )
-    if (res.ok) {
-      definitive = true
-      const entries = (await res.json()) as Array<{
-        phonetic?: string
-        phonetics?: Array<{ text?: string }>
-      }>
-      for (const entry of entries) {
-        const text = entry.phonetic?.trim() || entry.phonetics?.find(p => p.text?.trim())?.text?.trim()
-        if (text) { value = text; break }
-      }
-    } else if (res.status === 404) {
-      // "No Definitions Found" — a real, final answer, not a fluke.
-      definitive = true
-    }
-    // Any other non-ok status (5xx, 429...) falls through as non-definitive.
-  } catch {
-    // Network error or our own 3s abort — non-definitive.
+    return await request
   } finally {
-    clearTimeout(timeoutId)
+    dictInFlight.delete(word)
+  }
+}
+
+async function fetchDictionaryApiWordStatusUncached(word: string, priority: 'high' | 'low'): Promise<DictStatus> {
+  let value: string | null = null
+  let approximate = false
+  let definitive = false
+  // A 429 specifically gets a couple of short-backoff retries — the pacing
+  // above should mean this is rare, but a second paragraph's batch starting
+  // while the first is still draining can still overlap. Anything else
+  // (network error, our own 3s abort, 5xx) is left to the caller's normal
+  // "not definitive, try again whenever this word next comes up" path
+  // instead of retried here.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // Wait for a free slot *before* starting the timeout clock — starting it
+    // while still queued behind other words would abort this one for having
+    // taken "too long" without it ever having gotten a request out the door.
+    await acquireDictFetchSlot(priority)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 3000)
+    let status = 0
+    try {
+      const res = await fetch(
+        `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`,
+        { signal: controller.signal },
+      )
+      status = res.status
+      if (res.ok) {
+        definitive = true
+        const entries = (await res.json()) as Array<{
+          phonetic?: string
+          phonetics?: Array<{ text?: string }>
+        }>
+        for (const entry of entries) {
+          const text = entry.phonetic?.trim() || entry.phonetics?.find(p => p.text?.trim())?.text?.trim()
+          if (text) { value = text; break }
+        }
+      } else if (res.status === 404) {
+        // "No Definitions Found" — a real, final answer, not a fluke.
+        definitive = true
+      }
+      // Any other non-ok status (5xx, 429...) falls through as non-definitive.
+    } catch {
+      // Network error or our own 3s abort — non-definitive.
+    } finally {
+      clearTimeout(timeoutId)
+      releaseDictFetchSlot()
+    }
+    if (status !== 429) break
+    await new Promise(resolve => setTimeout(resolve, 400 * (attempt + 1)))
   }
 
-  if (definitive) cachePhonetics(word, value)
-  return { value, definitive }
+  // A handful of English word-formation patterns dictionaryapi.dev's flat,
+  // one-entry-per-headword dataset doesn't compose on its own — all handled
+  // as *fallbacks after* the direct lookup, tried in this order, so a word
+  // that genuinely has its own entry (like "let's" /lɛts/, "don't" /dəʊnt/,
+  // or "cats" /kæts/ — inflected forms are inconsistently but often present
+  // on their own) always gets that exact reading first, never a synthesized
+  // approximation:
+  //
+  // - A possessive/contraction suffix ("immigrant's", "it's" with no entry
+  //   of its own) — retry stripped of the trailing 's ("immigrant", "it").
+  // - A hyphenated compound ("sky-high" has an entry with no `phonetic`
+  //   field, even though "sky" /skaɪ/ and "high" /haɪ/ each do on their
+  //   own) — split on "-", look up every half, join with a space. Only
+  //   accepted if *every* half resolved to a real value; one unresolvable
+  //   half still falls through rather than showing a partial reading.
+  // - A plural/3rd-person-singular noun or verb with no entry of its own
+  //   even though the singular/base form does ("ambitions" has none,
+  //   "ambition" /æmˈbɪ.ʃən/ does; same for "patients", "appointments",
+  //   "nurses"...) — retry stripped of a trailing "es" then, if that also
+  //   comes up empty, a trailing "s".
+  //
+  // All three recurse into this same function, reusing its cache, pacing/
+  // concurrency queue, and 429 retry — and all naturally terminate, since
+  // none of these conditions can still be true of the already-stripped/split
+  // result they each recurse on.
+  //
+  // A fallback's *own* recursive lookup can itself come back non-definitive
+  // (its own 429 retries exhausted, a timeout under a busy batch...) — that's
+  // exactly the "this attempt failed, not proof there's no phonetics" case
+  // `definitive` exists to guard against in the first place, just one level
+  // deeper. Letting it fall through as if the fallback had definitively
+  // found nothing would `cachePhonetics(word, null)` this word *permanently*
+  // over what's really a transient failure of one recursive sub-lookup —
+  // observed as "sky-high" having real phonetics most of the time but
+  // occasionally, irreversibly, showing nothing for the rest of the session.
+  // So: downgrade `definitive` back to false (skip caching, try again next
+  // time this word comes up) whenever a fallback both found no value *and*
+  // its own recursive lookup wasn't definitive either.
+  if (definitive && value === null) {
+    const possessiveMatch = word.match(/^(.+)['’]s?$/i)
+    if (possessiveMatch && possessiveMatch[1]) {
+      const base = await fetchDictionaryApiWordStatus(possessiveMatch[1], priority)
+      if (base.value) { value = base.value; approximate = true }
+      else if (!base.definitive) definitive = false
+    }
+  }
+
+  if (definitive && value === null && word.includes('-')) {
+    const parts = word.split('-').filter(Boolean)
+    if (parts.length > 1) {
+      const partResults = await Promise.all(parts.map(p => fetchDictionaryApiWordStatus(p, priority)))
+      if (partResults.every(r => r.value)) { value = partResults.map(r => r.value).join(' '); approximate = true }
+      else if (partResults.some(r => !r.definitive)) definitive = false
+    }
+  }
+
+  if (definitive && value === null) {
+    const pluralCandidates: string[] = []
+    if (word.endsWith('es') && word.length > 3) pluralCandidates.push(word.slice(0, -2))
+    if (word.endsWith('s') && word.length > 2) pluralCandidates.push(word.slice(0, -1))
+    for (const candidate of pluralCandidates) {
+      const base = await fetchDictionaryApiWordStatus(candidate, priority)
+      if (base.value) { value = base.value; approximate = true; break }
+      if (!base.definitive) { definitive = false; break }
+    }
+  }
+
+  // dictionaryapi.dev is a small crowd-sourced dataset — it flat-out doesn't
+  // have an entry for plenty of everyday words ("has", "for") and proper
+  // nouns, and plenty of entries it does have skip the `phonetic` field
+  // entirely. Read Aloud's whole pitch is a reading under *every* word, so a
+  // dictionary miss falls through to the same Google romanization fallback
+  // the on-demand dictionary popover already uses, rather than just leaving
+  // the word blank.
+  if (definitive && value === null) {
+    await acquireDictFetchSlot(priority)
+    try {
+      const { phonetics } = await googleSenses(word, 'en')
+      if (phonetics) { value = phonetics; approximate = true }
+    } finally {
+      releaseDictFetchSlot()
+    }
+  }
+
+  if (definitive) cachePhonetics(word, value, approximate)
+  return { value, definitive, approximate }
 }
 
 export async function fetchDictionaryApiWord(rawWord: string): Promise<string | null> {
@@ -332,11 +520,16 @@ export async function fetchDictionaryApiWord(rawWord: string): Promise<string | 
  * the content-script cache tell "definitely no phonetics" apart from "ask
  * again later" without a third value threaded through every caller.
  */
-export async function fetchPhoneticsForWords(words: string[]): Promise<Record<string, string | null>> {
+export async function fetchPhoneticsForWords(
+  words: string[],
+  priority: 'high' | 'low' = 'high',
+): Promise<Record<string, { text: string | null; approximate: boolean }>> {
   const unique = [...new Set(words.map(w => w.toLowerCase()).filter(Boolean))]
-  const results = await Promise.all(unique.map(w => fetchDictionaryApiWordStatus(w)))
-  const out: Record<string, string | null> = {}
-  unique.forEach((w, i) => { if (results[i].definitive) out[w] = results[i].value })
+  const results = await Promise.all(unique.map(w => fetchDictionaryApiWordStatus(w, priority)))
+  const out: Record<string, { text: string | null; approximate: boolean }> = {}
+  unique.forEach((w, i) => {
+    if (results[i].definitive) out[w] = { text: results[i].value, approximate: results[i].approximate }
+  })
   return out
 }
 

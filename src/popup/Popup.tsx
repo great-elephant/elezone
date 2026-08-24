@@ -185,6 +185,29 @@ export default function Popup() {
     }
   }
 
+  async function togglePhonetics() {
+    const on = !settings.readAloud?.showPhonetics;
+    const next: Settings = {
+      ...settings,
+      readAloud: { ...settings.readAloud!, showPhonetics: on },
+      updatedAt: Date.now(),
+    };
+    setSettings(next);
+    await chrome.runtime.sendMessage({ type: "SAVE_SETTINGS", payload: next });
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    if (tab?.id && tab.id >= 0) {
+      // Same effect the floating mini-player's own "IPA" button has — applies
+      // immediately if a session is live, in addition to the SAVE_SETTINGS
+      // above (which is what makes it stick for the *next* session too).
+      chrome.tabs
+        .sendMessage(tab.id, { type: "TOGGLE_PHONETICS", payload: { on } })
+        .catch(() => { });
+    }
+  }
+
   const videoMode: VideoModeSettings = normaliseVideoModeSettings(settings.videoMode);
 
   // Persists the change, then tells the tab about it. Flipping `enabled` has to
@@ -744,25 +767,47 @@ export default function Popup() {
         <div style={styles.pomodoroBox}>
           <div style={styles.pomodoroHeader}>
             <span>Read Aloud</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>Translate</span>
-              <button
-                style={{
-                  ...styles.toggle,
-                  ...(settings.translation.enabled ? styles.toggleOn : {}),
-                }}
-                onClick={toggleTranslation}
-                role="switch"
-                aria-label="Translate website text"
-                aria-pressed={settings.translation.enabled}
-              >
-                <span
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>IPA</span>
+                <button
                   style={{
-                    ...styles.toggleThumb,
-                    ...(settings.translation.enabled ? styles.toggleThumbOn : {}),
+                    ...styles.toggle,
+                    ...(settings.readAloud?.showPhonetics ? styles.toggleOn : {}),
                   }}
-                />
-              </button>
+                  onClick={togglePhonetics}
+                  role="switch"
+                  aria-label="Show pronunciation under words while reading"
+                  aria-pressed={!!settings.readAloud?.showPhonetics}
+                >
+                  <span
+                    style={{
+                      ...styles.toggleThumb,
+                      ...(settings.readAloud?.showPhonetics ? styles.toggleThumbOn : {}),
+                    }}
+                  />
+                </button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>Translate</span>
+                <button
+                  style={{
+                    ...styles.toggle,
+                    ...(settings.translation.enabled ? styles.toggleOn : {}),
+                  }}
+                  onClick={toggleTranslation}
+                  role="switch"
+                  aria-label="Translate website text"
+                  aria-pressed={settings.translation.enabled}
+                >
+                  <span
+                    style={{
+                      ...styles.toggleThumb,
+                      ...(settings.translation.enabled ? styles.toggleThumbOn : {}),
+                    }}
+                  />
+                </button>
+              </div>
             </div>
           </div>
           <div style={{ fontSize: 11, color: '#8a8ab0', marginTop: -6, marginBottom: 8, lineHeight: 1.4 }}>

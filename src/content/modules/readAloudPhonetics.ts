@@ -26,7 +26,7 @@
 // the original word — the IPA line underneath is meant to be read quietly,
 // not be part of what "focus on this sentence" visually means.
 
-import { phoneticsForWords } from './wordPhonetics'
+import { phoneticsForWords, type PhoneticsResult } from './wordPhonetics'
 
 export const WRAP_CLASS = 'elezone-word-wrap'
 const IPA_CLASS = 'elezone-word-ipa'
@@ -37,7 +37,18 @@ export const IPA_SELECTOR = `.${IPA_CLASS}`
 // whole thing down (phonetics turned off, or the session/article ends).
 let wrappedWords: HTMLElement[] = []
 
-function stripped(token: string): string {
+// The word text used to actually *look up* phonetics — distinct from the
+// word's own wrap Range, which stays spanning the full visible token so the
+// highlight/wrap still reads as one word. Only trims surrounding punctuation
+// — a possessive/contraction suffix ("immigrant's", "it's") or a hyphenated
+// compound ("sky-high") is sent through whole and handled server-side
+// (aiTranslate.ts's fetchDictionaryApiWordStatus), which tries the word
+// as-is *first* and only falls back to a stripped/split form if that has no
+// entry of its own — some of these ("let's", "don't") have their own exact
+// dictionary entry, which stripping here unconditionally would throw away
+// before ever getting the chance to use it. Exported so readAloud.ts's
+// look-ahead prefetch computes the exact same cache key for the same word.
+export function lookupWord(token: string): string {
   return token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
 }
 
@@ -252,32 +263,81 @@ export function unwrapAllPhoneticsWords(): void {
  */
 export function wrapAndShowPhoneticsForWords(
   ranges: { text: string; range: Range }[],
-): HTMLElement[] {
-  if (ranges.length === 0) return []
+  priority: 'high' | 'low' = 'high',
+): { wrappers: HTMLElement[]; ready: Promise<void> } {
+  if (ranges.length === 0) return { wrappers: [], ready: Promise.resolve() }
 
   const wrapped = wrapWords(ranges)
   wrappedWords.push(...wrapped.map(w => w.wrapper))
   // Gap-wrapping runs *after* every word in this batch is already wrapped —
   // it needs the words' final positions to find what's left over between them.
   wrappedWords.push(...wrapGaps(wrapped))
-  const cleanWords = wrapped.map(w => stripped(w.text).toLowerCase())
+  const cleanWords = wrapped.map(w => lookupWord(w.text).toLowerCase())
 
-  void phoneticsForWords(cleanWords).then(result => {
-    wrapped.forEach((w, i) => {
+  // A word's own wrapper(s) — the same word can appear more than once in a
+  // sentence ("the", "and"...), and every occurrence fills in together the
+  // moment that one word's lookup resolves, not just the first.
+  const wrappersByWord = new Map<string, HTMLElement[]>()
+  wrapped.forEach((w, i) => {
+    const list = wrappersByWord.get(cleanWords[i])
+    if (list) list.push(w.wrapper)
+    else wrappersByWord.set(cleanWords[i], [w.wrapper])
+  })
+
+  const fillWord = (word: string, entry: PhoneticsResult): void => {
+    if (!entry) return // leave the reserved empty slot as-is
+    for (const wrapper of wrappersByWord.get(word) ?? []) {
       // The wrapper can only have left the document via
       // unwrapAllPhoneticsWords() (phonetics turned off, or the session
       // ended) — never as a side effect of a *different* zone being wrapped,
       // since zones accumulate instead of replacing each other. Skipping a
       // detached wrapper here just avoids pointless work, not a real bug.
-      if (!w.wrapper.isConnected) return
-      const text = result.get(cleanWords[i])
-      if (!text) return // leave the reserved empty slot as-is
-      const ipa = w.wrapper.querySelector<HTMLElement>(`.${IPA_CLASS}`)
-      if (ipa) ipa.textContent = text
-    })
-  })
+      if (!wrapper.isConnected) continue
+      const ipa = wrapper.querySelector<HTMLElement>(`.${IPA_CLASS}`)
+      if (!ipa || ipa.textContent) continue
+      ipa.textContent = entry.text
+      // A reading borrowed from a fallback (plural's singular, one half of a
+      // hyphenated compound...) rather than the word's own exact dictionary
+      // entry — dimmed to signal "close, not guaranteed exact".
+      if (entry.approximate) ipa.style.opacity = '0.6'
+    }
+  }
 
-  return wrapped.map(w => w.wrapper)
+  // A word can come back without a result for reasons that have nothing to
+  // do with whether it *has* phonetics — the background's own dictionary
+  // fetch queue paces/retries against rate limits, and a word needing a
+  // fallback (a hyphenated compound needs its own recursive sub-lookups) is
+  // one or more *extra* round trips through that same queue, so it can still
+  // be waiting behind everything else a big paragraph's worth of words
+  // dispatched all at once. Missing here is indistinguishable from "still
+  // being looked up", so retry on a growing delay (cheap: `phoneticsForWords`
+  // skips anything already resolved, cached even as "no phonetics", so a
+  // retry only ever does real work for words still actually missing) instead
+  // of leaving stragglers permanently blank after just one attempt.
+  //
+  // The sentence actually being read (`'high'`) fills progressively — each
+  // word's slot the instant *that* word resolves, instead of every word
+  // waiting on whichever one happens to be slowest (a fallback's own
+  // recursive sub-lookups can turn one word into several round trips). A
+  // look-ahead sentence (`'low'`) is the opposite on purpose: it isn't on
+  // screen being read yet, so there's no responsiveness to protect, and
+  // words popping in one at a time while nobody's looking just means the
+  // sentence reads as unfinished/flickering for however long it takes —
+  // fill it in one clean reveal once every word in it has settled instead.
+  const RETRY_DELAYS_MS = [5000, 12000]
+  const attempt = (attemptIndex: number): Promise<void> =>
+    phoneticsForWords(cleanWords, priority, priority === 'high' ? fillWord : undefined).then(result => {
+      if (priority === 'low') for (const [word, entry] of result) fillWord(word, entry)
+      const stillMissing = wrapped.some((w, i) => w.wrapper.isConnected && !result.get(cleanWords[i])
+        && !w.wrapper.querySelector(`.${IPA_CLASS}`)?.textContent)
+      if (stillMissing && attemptIndex < RETRY_DELAYS_MS.length) {
+        return new Promise<void>(resolve => {
+          setTimeout(() => resolve(attempt(attemptIndex + 1)), RETRY_DELAYS_MS[attemptIndex])
+        })
+      }
+    })
+
+  return { wrappers: wrapped.map(w => w.wrapper), ready: attempt(0) }
 }
 
 // Triple-click-to-select-paragraph is a *browser* behaviour, not something

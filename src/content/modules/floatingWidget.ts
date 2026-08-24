@@ -1,4 +1,4 @@
-import { pause, resume, stop, getState, next, prev, seekTo, setSpeed, getSpeed, setVoice, setShadowing, setRepetition, setPhonetics } from './readAloud'
+import { pause, resume, stop, getState, next, prev, seekTo, setSpeed, getSpeed, setVoice, setShadowing, setRepetition } from './readAloud'
 import { setFocusMode, isFocusMode } from './readAloudOverlay'
 import { Settings, TtsVoiceInfo } from '../../shared/types'
 
@@ -16,7 +16,6 @@ let warningBanner: HTMLElement | null = null
 // H29/H30/H31 — learner controls.
 let shadowBtn: HTMLButtonElement | null = null
 let repeatBtn: HTMLButtonElement | null = null
-let phoneticsBtn: HTMLButtonElement | null = null
 // Secondary controls (voice, shadowing, repeat, speed) live in a "⋯" overflow
 // popover instead of the always-visible player, so the main widget only shows
 // transport controls (prev/play/next), focus mode, + progress at rest.
@@ -26,7 +25,6 @@ let overflowMenu: HTMLElement | null = null
 // the right values.
 let curShadowing = false
 let curRepetition = 1
-let curPhonetics = false
 
 // Volume control — lives next to focus mode on the right of the transport row.
 // Unlike speed/shadowing/repetition, volume isn't part of the read-aloud
@@ -397,22 +395,6 @@ const WIDGET_CSS = `
   }
   button.repeat:hover { background: #2a2a4a; color: #c8d0f0; }
   button.repeat.active { color: #4f6ef7; border-color: #3d4d99; }
-  button.phonetics-toggle {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    color: #a8b0d8;
-    background: #22223e;
-    border: 1px solid #33335a;
-    min-width: 34px;
-    height: 28px;
-    min-height: 28px;
-    border-radius: 14px;
-    padding: 0 8px;
-    flex: 0 0 auto;
-  }
-  button.phonetics-toggle:hover { background: #2a2a4a; color: #c8d0f0; }
-  button.phonetics-toggle.active { color: #4f6ef7; background: #232c56; border-color: #3d4d99; }
 `
 
 // The Finished card (F22) is its own tiny host with self-contained styles.
@@ -616,26 +598,6 @@ export function updateWidgetShadowInfo(shadowing: boolean, repetition: number) {
   if (typeof repetition === 'number' && repetition >= 1) curRepetition = Math.round(repetition)
   refreshShadowButton()
   refreshRepeatButton()
-}
-
-function refreshPhoneticsButton() {
-  if (!phoneticsBtn) return
-  phoneticsBtn.classList.toggle('active', curPhonetics)
-  const label = curPhonetics ? 'Phonetics: on' : 'Phonetics: off'
-  phoneticsBtn.title = `${label}\nShows the IPA of the word being spoken (English pages)`
-  phoneticsBtn.setAttribute('aria-label', label)
-  phoneticsBtn.setAttribute('aria-pressed', String(curPhonetics))
-}
-
-function togglePhonetics() {
-  curPhonetics = !curPhonetics
-  void setPhonetics(curPhonetics)
-  refreshPhoneticsButton()
-}
-
-export function updateWidgetPhoneticsInfo(on: boolean) {
-  curPhonetics = on
-  refreshPhoneticsButton()
 }
 
 function renderProgress() {
@@ -897,7 +859,6 @@ function closeOverflowMenu() {
   voiceChip = null
   shadowBtn = null
   repeatBtn = null
-  phoneticsBtn = null
   speedBtn = null
   overflowBtn?.setAttribute('aria-expanded', 'false')
   document.removeEventListener('mousedown', onDocMouseDownForOverflow, { capture: true })
@@ -923,10 +884,8 @@ function openOverflowMenu() {
   shadowBtn = makeButton('shadow-toggle', '🗣', 'Shadowing mode: off', toggleShadowing)
   shadowBtn.setAttribute('aria-pressed', 'false')
   repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', cycleRepeat)
-  phoneticsBtn = makeButton('phonetics-toggle', 'IPA', 'Phonetics: off', togglePhonetics)
-  phoneticsBtn.setAttribute('aria-pressed', 'false')
   speedBtn = makeButton('speed', `${getSpeed()}x`, 'Playback speed', cycleSpeed)
-  row.append(shadowBtn, repeatBtn, phoneticsBtn, speedBtn)
+  row.append(shadowBtn, repeatBtn, speedBtn)
 
   overflowMenu.append(voiceRow, row)
   overflowBtn.parentElement.appendChild(overflowMenu)
@@ -937,7 +896,6 @@ function openOverflowMenu() {
   refreshSpeedLabel()
   refreshShadowButton()
   refreshRepeatButton()
-  refreshPhoneticsButton()
 }
 
 // ── Volume popover ────────────────────────────────────────────────────────

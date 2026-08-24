@@ -1,5 +1,6 @@
 import { Readability } from '@mozilla/readability'
 import { CONTENT_BLOCK_SELECTORS, getContentRootCandidates, getSiteProfile, getTitleElement, type SiteProfile } from './siteProfiles'
+import { IPA_SELECTOR } from './readAloudPhonetics'
 
 type ReadableArticle = {
   title: string
@@ -8,7 +9,11 @@ type ReadableArticle = {
 
 function removeNoisyDescendants(root: HTMLElement): void {
   root.querySelectorAll(
-    'script, style, noscript, form, input, select, textarea, button, [role="button"], [data-cxt-translation]'
+    // `IPA_SELECTOR` — Read Aloud's phonetics wraps inject real, visible text
+    // (`/ˈbaɪ.oʊ/` etc.) right next to the word it's a reading for, so
+    // `.innerText` below picks it up as if it were part of the article's own
+    // prose otherwise, and it ends up sent along for translation.
+    `script, style, noscript, form, input, select, textarea, button, [role="button"], [data-cxt-translation], ${IPA_SELECTOR}`
   ).forEach(el => el.remove())
 
   root.querySelectorAll<HTMLElement>('a').forEach(link => {
@@ -281,7 +286,7 @@ function isLikelyTitleContextElement(el: HTMLElement): boolean {
 
 export function extractReadableArticle(): ReadableArticle | null {
   const docClone = document.cloneNode(true) as Document
-  docClone.querySelectorAll('[data-cxt-translation]').forEach(el => el.remove())
+  docClone.querySelectorAll(`[data-cxt-translation], ${IPA_SELECTOR}`).forEach(el => el.remove())
   const article = new Readability(docClone).parse()
   if (!article) return null
 

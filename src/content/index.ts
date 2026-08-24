@@ -1,6 +1,6 @@
 import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight, getBookmarkAtPoint, selectionTextExcludingIpa } from './modules/anchor'
-import { start, startFrom, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo, setOnPhoneticsInfoChange, getPhoneticsOn } from './modules/readAloud'
-import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, updateWidgetPhoneticsInfo, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
+import { start, startFrom, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo, setPhonetics } from './modules/readAloud'
+import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
 import { installSpaNavigationGuard } from './modules/readAloudSpaGuard'
 import { savePosition } from './modules/readAloudPosition'
@@ -35,7 +35,7 @@ function injectHighlightStyles() {
        both light and dark pages. The left "reading" accent bar is drawn
        separately (CSS Highlight API can't paint pseudo-elements). */
     ::highlight(cxt-speaking) {
-      background-color: rgba(79, 110, 247, 0.38);
+      background-color: rgba(79, 110, 247, 0.26);
       color: inherit;
     }
     /* Karaoke: the single word currently being spoken, painted over cxt-speaking. */
@@ -113,7 +113,6 @@ setOnStateChange(newState => {
     updateWidgetVoice(voice, lang)
     const shadow = getShadowInfo()
     updateWidgetShadowInfo(shadow.shadowing, shadow.repetition)
-    updateWidgetPhoneticsInfo(getPhoneticsOn())
   }
 })
 
@@ -132,12 +131,6 @@ setOnVoiceInfoChange(() => {
 setOnShadowInfoChange(() => {
   const { shadowing, repetition } = getShadowInfo()
   updateWidgetShadowInfo(shadowing, repetition)
-})
-
-// Refresh the phonetics toggle when it changes (mirrors the shadowing wiring
-// above, minus the background round trip — see setPhonetics in readAloud.ts).
-setOnPhoneticsInfoChange(() => {
-  updateWidgetPhoneticsInfo(getPhoneticsOn())
 })
 
 // Shared "start reading from the top" path, mirroring the popup's Start Reading:
@@ -586,6 +579,15 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
       } else {
         disableTranslation()
       }
+      return { ok: true }
+    }
+
+    case 'TOGGLE_PHONETICS': {
+      // Same effect as the floating mini-player's own "IPA" button, just
+      // reachable from the popup too — `setPhonetics` already persists the
+      // setting and, if a session is live, applies it to the page immediately.
+      const { on } = msg.payload as { on: boolean }
+      await setPhonetics(on)
       return { ok: true }
     }
 

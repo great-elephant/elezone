@@ -1422,12 +1422,14 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
     }
     case 'TRANSLATE_IN_CONTEXT':
       return translateInContext(msg.payload as ContextTranslateRequest)
-    case 'FETCH_PHONETICS':
+    case 'FETCH_PHONETICS': {
       // Video Mode's auto phonetics — a batch of words from one subtitle line,
       // English-only, IPA source only. Deliberately not `translateInContext`:
       // that also fires a Google Translate call per word, which this doesn't
       // want on every line of a movie.
-      return fetchPhoneticsForWords((msg.payload as { words: string[] }).words)
+      const { words, priority } = msg.payload as { words: string[]; priority?: 'high' | 'low' }
+      return fetchPhoneticsForWords(words, priority)
+    }
     case 'START_READ_ALOUD_SESSION':
       return startReadAloudSession(sender, msg.payload)
     case 'CONTROL_READ_ALOUD':

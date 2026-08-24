@@ -61,8 +61,6 @@ let onVoiceInfoChange: (() => void) | null = null
 // Fires when the shadowing on/off flag, the repetition count, or the
 // intentional-gap flag changes so the mini-player controls/indicator refresh.
 let onShadowInfoChange: (() => void) | null = null
-// Fired when the phonetics on/off flag changes so the mini-player toggle refreshes.
-let onPhoneticsInfoChange: (() => void) | null = null
 // True only for the single idle transition that represents a *natural* finish
 // (reached the end, page repetitions exhausted — not a user stop). Read by the
 // state-change handler to decide between the Finished card and a plain hide (F22).
@@ -90,15 +88,6 @@ export function setOnShadowInfoChange(cb: () => void) {
 
 export function getShadowInfo(): { shadowing: boolean; repetition: number; inGap: boolean } {
   return { shadowing: shadowingOn, repetition: currentRepetition, inGap: inShadowGap }
-}
-
-// The mini-player registers here so its phonetics toggle can refresh.
-export function setOnPhoneticsInfoChange(cb: () => void) {
-  onPhoneticsInfoChange = cb
-}
-
-export function getPhoneticsOn(): boolean {
-  return phoneticsOn
 }
 
 // Whether the most recent idle transition was a natural finish (F22). Only
@@ -158,32 +147,72 @@ function zoneIndicesFor(index: number): number[] {
   return Array.from({ length: end - start + 1 }, (_, i) => start + i)
 }
 
-// Wraps every not-yet-wrapped sentence in `index`'s zone. Leaves
-// `sentenceRanges`/the karaoke word index correct for whichever sentence is
-// actually being spoken (`index`) even when the zone spans several.
-function wrapPhoneticsForZone(index: number): void {
-  for (const i of zoneIndicesFor(index)) {
-    if (phoneticsWrappedIndices.has(i)) continue
-    phoneticsWrappedIndices.add(i)
-    const zoneRange = sentenceRanges[i]
-    if (!zoneRange) continue
+// Wraps a single not-yet-wrapped sentence and fills in its IPA, at the given
+// priority — shared by both the zone actually being spoken (`'high'`, must
+// win any contention for the background's dictionary fetch queue) and the
+// look-ahead window (`'low'`, fine to sit behind it). Leaves
+// `sentenceRanges[i]` rebuilt from the wrapper elements' own boundaries,
+// since wrapping splits/moves the range's underlying text nodes.
+function wrapPhoneticsForSentence(i: number, priority: 'high' | 'low'): Promise<void> {
+  if (phoneticsWrappedIndices.has(i)) return Promise.resolve()
+  phoneticsWrappedIndices.add(i)
+  const zoneRange = sentenceRanges[i]
+  if (!zoneRange) return Promise.resolve()
 
-    prepareWordIndex(zoneRange, sentences[i] ?? '')
-    const wrappers = wrapAndShowPhoneticsForWords(resolveSentenceWordRanges(sentences[i] ?? ''))
-    if (wrappers.length > 0) {
-      // Wrapping split/moved the range's underlying text nodes — rebuild it
-      // from the wrapper elements' own boundaries (see applySentenceIndex's
-      // matching comment for why the old boundary offsets can't be trusted).
-      const rebuilt = document.createRange()
-      rebuilt.setStartBefore(wrappers[0])
-      rebuilt.setEndAfter(wrappers[wrappers.length - 1])
-      sentenceRanges[i] = rebuilt
-    }
+  prepareWordIndex(zoneRange, sentences[i] ?? '')
+  const { wrappers, ready } = wrapAndShowPhoneticsForWords(resolveSentenceWordRanges(sentences[i] ?? ''), priority)
+  if (wrappers.length > 0) {
+    const rebuilt = document.createRange()
+    rebuilt.setStartBefore(wrappers[0])
+    rebuilt.setEndAfter(wrappers[wrappers.length - 1])
+    sentenceRanges[i] = rebuilt
   }
-  // The loop above leaves the global word index pointed at whichever zone
-  // sentence was processed last — reset it to the one actually being spoken
-  // so a real chrome.tts 'word' event still resolves against the right one.
+  return ready
+}
+
+// Wraps every not-yet-wrapped sentence in `index`'s zone, at high priority.
+// Leaves `sentenceRanges`/the karaoke word index correct for whichever
+// sentence is actually being spoken (`index`) even when the zone spans
+// several — `wrapPhoneticsForSentence` repoints the global word index at
+// whichever sentence it just processed, so the last thing this does is
+// point it back at `index` for a real chrome.tts 'word' event to resolve
+// against.
+function wrapPhoneticsForZone(index: number): void {
+  for (const i of zoneIndicesFor(index)) wrapPhoneticsForSentence(i, 'high')
   prepareWordIndex(sentenceRanges[index] ?? new Range(), sentences[index] ?? '')
+}
+
+// Wrapping (and therefore showing) a sentence's IPA only once it's actually
+// on screen is exactly the latency the user notices as "IPA takes a while to
+// show up" — and only doing the network lookup ahead of time without also
+// showing it just moves that wait to "it's fetched, but still invisible
+// until I get there". So this wraps the next few sentences too, same as the
+// zone above just at low priority (never contends with the sentence actually
+// being read for the background's fetch queue) — `wrapPhoneticsForSentence`'s
+// own already-wrapped check means this costs nothing for whatever the zone
+// above just wrapped.
+// One look-ahead sentence's *network fetch* fully finishes (and reveals)
+// before the next one's even starts — sequential, not 4 sentences' worth of
+// words all racing each other through the low-priority queue at once, so
+// each sentence settles as one clean unit in the order the reader will
+// actually reach them, soonest first.
+//
+// The *wrap* (span creation) is synchronous DOM work, over instantly either
+// way — what actually takes time is `ready` (the network side), so that's
+// the only thing this awaits between sentences. Re-pointing the global word
+// index back at `index` right after each sentence's wrap (not just once at
+// the very end) matters here specifically because this now spans real async
+// gaps — without it, a genuine chrome.tts 'word' event for the sentence
+// actually being read could arrive *while* this is still awaiting a
+// look-ahead sentence's fetch, and resolve against the wrong sentence's word
+// index for however long that await lasts.
+async function wrapPhoneticsAhead(index: number, count = 4): Promise<void> {
+  if (!phoneticsOn || !currentLang.toLowerCase().startsWith('en')) return
+  for (let i = index; i < Math.min(index + count, sentences.length); i++) {
+    const ready = wrapPhoneticsForSentence(i, 'low')
+    prepareWordIndex(sentenceRanges[index] ?? new Range(), sentences[index] ?? '')
+    await ready
+  }
 }
 
 function applySentenceIndex(index: number) {
@@ -217,6 +246,7 @@ function applySentenceIndex(index: number) {
     }
   }
   prefetchAhead(index, sentences, 3)
+  void wrapPhoneticsAhead(index)
 }
 
 // Called when the background reports a spoken-word position (karaoke). Guarded
@@ -370,12 +400,17 @@ export async function startFrom(
 // stuck on 'playing'/'paused' with no live session behind it, and start()'s
 // `if (state !== 'idle') return` guard turns every later Play click into a
 // silent no-op.
-function sendControl(action: string, extra?: Record<string, unknown>) {
+// `onFailure` lets a specific action recover instead of just dropping to
+// idle — see resume()'s use of it below for why that matters.
+function sendControl(action: string, extra?: Record<string, unknown>, onFailure?: () => void) {
   chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action, ...extra } })
     .then((res: { ok?: boolean } | undefined) => {
       if (res?.ok === false && state !== 'idle') {
-        clearLocalSession()
-        notifyState('idle')
+        if (onFailure) onFailure()
+        else {
+          clearLocalSession()
+          notifyState('idle')
+        }
       }
     })
     .catch(() => {})
@@ -398,7 +433,24 @@ export function resume() {
     void rebuildSessionForShadowing(shadowingOn)
     return
   }
-  sendControl('resume')
+  // The background holds the active session purely in memory (`activeSession`
+  // in background/index.ts) — no persistence, nothing survives its service
+  // worker being recycled. A tab left paused and backgrounded long enough
+  // (switching to another app for a while) is exactly what triggers MV3's
+  // idle teardown, so by the time the user comes back and hits Resume, the
+  // background may have nothing left to resume. This content script's own
+  // module state (`sentences`, `sessionSettings`, `currentIndex`...) isn't
+  // affected by the tab losing focus, though — only by the *page* unloading —
+  // so on that specific failure, rebuild the session from here instead of
+  // just dropping to idle (which was also tearing down the floating widget
+  // with no explanation, since idle unconditionally hides it).
+  sendControl('resume', undefined, () => {
+    if (sessionSettings) void beginSession(sessionSettings, currentIndex, currentLang, translationMode)
+    else {
+      clearLocalSession()
+      notifyState('idle')
+    }
+  })
 }
 
 export function stop() {
@@ -515,7 +567,7 @@ async function rebuildSessionForShadowing(on: boolean) {
   }
 
   const startIndex = findSentenceIndex(sentences, sentenceRanges, previousText, previousRange)
-  await beginSession(settings, startIndex, lang)
+  await beginSession(settings, startIndex, lang, translationMode)
 }
 
 // H29 — toggle shadowing (inter-sentence gap) live. Optimistically flips the
@@ -533,7 +585,6 @@ export function setShadowing(on: boolean) {
 // script DOM rendering, so there's nothing to rebuild on that side.
 export async function setPhonetics(on: boolean): Promise<void> {
   phoneticsOn = on
-  onPhoneticsInfoChange?.()
   if (on) {
     // Show the current zone already on screen instead of waiting for the
     // next sentence — flipping the toggle mid-sentence should show
