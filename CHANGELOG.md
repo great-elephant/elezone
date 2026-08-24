@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/great-elephant/elezone/compare/0.5.0...0.6.0) (2026-08-24)
+
+### Features
+
+* **ocr:** add re-crop button to text-from-image popup ([72d16c9](https://github.com/great-elephant/elezone/commit/72d16c9bd4924509bec70139bbd6fbfdc7a8d67a))
+* **phonetics:** add configurable dictionary-based IPA source with google romanization fallback ([bc03560](https://github.com/great-elephant/elezone/commit/bc03560f6ece4a4ccb2e30bd8c4b3155ad00d5b4))
+* **read-aloud:** make pronunciation lookups faster and more reliable ([9d8c71e](https://github.com/great-elephant/elezone/commit/9d8c71ea16983789f0a19dd264df9720372f2edb))
+* **read-aloud:** show pronunciation under words while reading aloud ([9e30162](https://github.com/great-elephant/elezone/commit/9e30162b202377d1b7c7fd45d40b6210e07f9b01))
+* **video-mode:** add hover tooltip for saved words in subtitle/sidebar ([f3d4949](https://github.com/great-elephant/elezone/commit/f3d4949616e157506e0c9b6c5d68661d1ad2791a))
+* **video-mode:** auto-show IPA phonetics under English words ([8a01efe](https://github.com/great-elephant/elezone/commit/8a01efe8678242aab3794d6b2408fb76d5b852d7))
+
+### Bug Fixes
+
+* correct logic bugs found across all features ([aef842e](https://github.com/great-elephant/elezone/commit/aef842e23013da8a50eb7e337a600af588213209))
+* **ocr:** stop translated text getting stuck on some hosting pages ([497d70f](https://github.com/great-elephant/elezone/commit/497d70f618fd377c50f4f870a0bc60e487f2ff4e))
+
 ## [0.5.0](https://github.com/great-elephant/elezone/compare/0.4.0...0.5.0) (2026-08-02)
 
 ### Features
