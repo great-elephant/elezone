@@ -5,6 +5,7 @@
 import type { SubtitleCue } from './subtitleInterceptor'
 import type { SavedItem } from '../../../shared/types'
 import { pauseVideo } from './videoControl'
+import { isHoldingLine } from './linePacing'
 
 export interface SubtitleSyncState {
   currentCueIndex: number
@@ -106,7 +107,23 @@ function loop() {
     // it is still the current one — the moment it ends, the next has already
     // started. Advancing by exactly one is therefore the usual way a line ends;
     // a bigger jump is a seek, not a finished line.
-    if (_lastCueIndex >= 0 && idx === _lastCueIndex + 1) announceCueEnd(_lastCueIndex)
+    const cueJustEnded = _lastCueIndex >= 0 && idx === _lastCueIndex + 1
+    if (cueJustEnded) announceCueEnd(_lastCueIndex)
+
+    // announceCueEnd may have just told pacing to freeze here (a shadowing gap,
+    // a manual wait, the pause between repeats). When cues run back to back —
+    // the norm for YouTube's caption tracks, which time each line to start
+    // exactly where the last one ended, unlike Netflix's authored tracks which
+    // leave silence between lines — `idx` has *already* moved on to the next
+    // cue by the time we notice the current one ended. Advancing the strip here
+    // would show that next line the same instant we tell the video to stop, so
+    // the learner sees "the wrong sentence" frozen on screen. Hold the display
+    // on the line that just ended until pacing lets go of it.
+    if (cueJustEnded && isHoldingLine()) {
+      _rafId = requestAnimationFrame(loop)
+      return
+    }
+
     _lastCueIndex = idx
     if (_onCueChange) {
       _onCueChange({

@@ -72,6 +72,16 @@ export function isWaitingForLearner(): boolean {
   return _waitingCue !== null
 }
 
+/**
+ * Whether the engine just froze playback on the line that ended — a shadowing
+ * gap, a manual wait, or the pause between repeats. The syncer uses this to
+ * keep the strip on that line instead of racing ahead to the next one; see
+ * `subtitleSyncer.ts`.
+ */
+export function isHoldingLine(): boolean {
+  return _waitingCue !== null || _gapTimer !== null
+}
+
 /** Resume after a `manual` end-of-line pause. No-op when not waiting. */
 export function resumeFromWait(): void {
   if (!_waitingCue) return
