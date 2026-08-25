@@ -59,6 +59,10 @@ let _onSaveWord: ((word: string, cue: SubtitleCue) => void) | null = null
 let _onLookupWord: ((word: string, cue: SubtitleCue) => void) | null = null
 let _onToggleSidebar: (() => void) | null = null
 let _sidebarVisible = true
+// Purely a UI toggle for the learner to hide the line while shadowing without
+// losing their place — not persisted, and never touches sync/pacing, which
+// keep tracking cues and pausing the video exactly as if it were shown.
+let _subtitleHidden = false
 let _currentCue: SubtitleCue | null = null
 let _showTranslation = true
 let _fontSize = 28
@@ -116,6 +120,29 @@ const CARD_CSS = `
   }
   .stage.empty .words-row,
   .stage.empty .translation-row { visibility: hidden; }
+
+  /* Learner-hidden for shadowing: the whole slab collapses to nothing — no
+     background, no padding, no reserved height — so it stops sitting over the
+     picture and stealing clicks meant for the player underneath. Only the two
+     toolbar buttons stay put (own pointer-events, since the stage's own is
+     switched off), so hiding is never a dead end. */
+  .stage.subtitle-hidden {
+    background: transparent;
+    padding: 0;
+    min-height: 0;
+    pointer-events: none;
+  }
+  .stage.subtitle-hidden:hover { background: transparent; }
+  .stage.subtitle-hidden .text-area { display: none; }
+  /* The buttons' own backdrop (rgba(0,0,0,0.55)) reads fine over the solid
+     stage, but with the stage gone it sits straight over the picture and
+     washes out. Opaque it up so the two controls stay legible over any frame. */
+  .stage.subtitle-hidden .sidebar-toggle,
+  .stage.subtitle-hidden .subtitle-hide-toggle {
+    pointer-events: auto;
+    background: rgba(20,20,24,0.88);
+    color: #fff;
+  }
 
   /* Floating over the picture, the panel is invisible until pointed at: a solid
      slab sitting over a third of the shot all the time is worse than the
@@ -325,6 +352,15 @@ const CARD_CSS = `
     color: rgba(255,255,255,0.5);
   }
   .sidebar-toggle.on { color: #fff; background: rgba(255,255,255,0.28); }
+  /* Sits directly beside the sidebar toggle, at the same row — one ctrl width
+     (32px) plus its gap (6px) further in from the edge. */
+  .subtitle-hide-toggle {
+    position: absolute;
+    right: 52px;
+    bottom: 10px;
+    color: rgba(255,255,255,0.5);
+  }
+  .subtitle-hide-toggle.on { color: #fff; background: rgba(255,255,255,0.28); }
   .ctrl-sep {
     width: 1px;
     height: 18px;
@@ -371,6 +407,7 @@ const CARD_CSS = `
 // ── DOM ───────────────────────────────────────────────────────────────────────
 
 const SIDEBAR_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/></svg>'
+const SUBTITLE_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="7" y1="10" x2="10" y2="10"/><line x1="13" y1="10" x2="17" y2="10"/><line x1="7" y1="14" x2="13" y2="14"/></svg>'
 
 
 function buildStage(): HTMLElement {
@@ -393,6 +430,22 @@ function buildStage(): HTMLElement {
     e.stopPropagation()
     _onToggleSidebar?.()
   })
+
+  // Hides the line for shadowing: the learner speaks it from memory before
+  // it reappears. Sync and pacing never see this — they keep tracking cues
+  // and pausing the video exactly as if the line were shown, so replay,
+  // next/prev and the shadowing gap still land on the right line.
+  const subtitleHideBtn = document.createElement('button')
+  subtitleHideBtn.className = `ctrl subtitle-hide-toggle${_subtitleHidden ? ' on' : ''}`
+  subtitleHideBtn.innerHTML = SUBTITLE_ICON
+  subtitleHideBtn.title = 'Show / hide the subtitle'
+  subtitleHideBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    _subtitleHidden = !_subtitleHidden
+    subtitleHideBtn.classList.toggle('on', _subtitleHidden)
+    _stage?.classList.toggle('subtitle-hidden', _subtitleHidden)
+  })
+
   const gapRow = document.createElement('div')
   gapRow.className = 'gap-row'
 
@@ -423,7 +476,7 @@ function buildStage(): HTMLElement {
     return handle
   })
 
-  stage.append(notice, textArea, sidebarBtn, gapRow, ...handles)
+  stage.append(notice, textArea, sidebarBtn, subtitleHideBtn, gapRow, ...handles)
   stage.addEventListener('pointerdown', onDragStart)
   shadow.appendChild(stage)
   return stage
@@ -877,6 +930,7 @@ export function destroySubtitleCard(): void {
   _statusEl = null
   _status = null
   _currentCue = null
+  _subtitleHidden = false
 }
 
 /**
