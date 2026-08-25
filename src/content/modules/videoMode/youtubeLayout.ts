@@ -218,6 +218,10 @@ export function isStripOverlaid(): boolean {
  * would only be correct at one window size. Returns null when there is nothing
  * to measure yet, which leaves the stored or built-in default in place.
  */
+// Extra clearance above the control bar so the strip doesn't land on YouTube's
+// own "Skip Ads" button, which sits in that same bottom-right area during an ad.
+const SKIP_AD_CLEARANCE_PX = 100
+
 export function defaultStripPosition(): { xPct: number; yPct: number } | null {
   const player = document.querySelector<HTMLElement>(PLAYER_BOX)
   const height = player?.clientHeight ?? 0
@@ -227,7 +231,7 @@ export function defaultStripPosition(): { xPct: number; yPct: number } | null {
   // transparent, not removed.
   const chrome = player.querySelector<HTMLElement>('.ytp-chrome-bottom')
   const chromeHeight = chrome?.getBoundingClientRect().height || 48
-  return { xPct: 50, yPct: ((chromeHeight + 10) / height) * 100 }
+  return { xPct: 50, yPct: ((chromeHeight + 10 + SKIP_AD_CLEARANCE_PX) / height) * 100 }
 }
 
 /**
