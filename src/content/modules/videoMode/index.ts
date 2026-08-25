@@ -21,7 +21,7 @@ import { placeYouTubeOverlays, isStripOverlaid, defaultStripPosition } from './y
 import { getSidebarWidth, getSidebarScrollTop, setSidebarScrollTop } from './dialogueSidebar'
 import { seekToSeconds, pauseVideo, playVideo, useClosedCaptions } from './videoControl'
 import { setNativeTranslationCues, clearNativeTranslationCues, hasNativeTranslations, setTranslationSource } from './cueTranslation'
-import { prefetchPhonetics, clearPhoneticsCache } from '../wordPhonetics'
+import { phoneticsForWords, clearPhoneticsCache } from '../wordPhonetics'
 import { configurePacing, updatePacingConfig, handleCueEnd, resumeFromWait, isWaitingForLearner, cancelPacing } from './linePacing'
 import { installVideoModeKeys, uninstallVideoModeKeys, setVideoModeKeysEnabled } from './videoModeKeys'
 import { openSettingsPanel, closeSettingsPanel, refreshSettingsPanel, isSettingsPanelOpen } from './videoModeSettingsPanel'
@@ -635,6 +635,22 @@ function installFullscreenReparent() {
 // (a seek).
 const PHONETICS_PREFETCH_LINES = 3
 
+// One line's words fully settle through the low-priority queue before the
+// next line's are even requested — same reasoning as Read Aloud's own
+// sentence-by-sentence look-ahead (readAloud.ts's wrapPhoneticsAhead): a
+// single flat batch across 3 lines lets a later line's words crowd the
+// shared background pacing queue (~8 req/s) ahead of the very next line's,
+// which is the one actually about to need them. Sequencing keeps the
+// closest-to-be-shown line's words at the front of the queue.
+async function prefetchUpcomingPhonetics(cues: SubtitleCue[]): Promise<void> {
+  for (const cue of cues) {
+    const words = (cue.text.match(/\S+/g) ?? [])
+      .map(w => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+      .filter(Boolean)
+    if (words.length > 0) await phoneticsForWords(words, 'low')
+  }
+}
+
 function onCueChange(state: { currentCueIndex: number; currentCue: SubtitleCue | null }) {
   updateSubtitleCard(state.currentCue, _savedItems)
   updateDialogueSidebarCue(state.currentCueIndex)
@@ -645,10 +661,7 @@ function onCueChange(state: { currentCueIndex: number; currentCue: SubtitleCue |
     // there's always a real lookahead here — no separate fallback branch.
     const cues = getCues()
     const upcoming = cues.slice(state.currentCueIndex + 1, state.currentCueIndex + 1 + PHONETICS_PREFETCH_LINES)
-    const words = upcoming.flatMap(c => c.text.match(/\S+/g) ?? [])
-      .map(w => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
-      .filter(Boolean)
-    if (words.length > 0) prefetchPhonetics(words)
+    void prefetchUpcomingPhonetics(upcoming)
   }
 }
 
