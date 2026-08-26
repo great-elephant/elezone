@@ -134,14 +134,27 @@ const CARD_CSS = `
   }
   .stage.subtitle-hidden:hover { background: transparent; }
   .stage.subtitle-hidden .text-area { display: none; }
+  /* The toolbar sits over the stage's own pointer-events:none, so the two
+     controls — and the space around them, which is what dragging the
+     collapsed panel grabs — stay usable with no background left to click. */
+  .stage.subtitle-hidden .toolbar { pointer-events: auto; }
   /* The buttons' own backdrop (rgba(0,0,0,0.55)) reads fine over the solid
      stage, but with the stage gone it sits straight over the picture and
      washes out. Opaque it up so the two controls stay legible over any frame. */
   .stage.subtitle-hidden .sidebar-toggle,
   .stage.subtitle-hidden .subtitle-hide-toggle {
-    pointer-events: auto;
     background: rgba(20,20,24,0.88);
     color: #fff;
+  }
+  /* The opacity bump above outranks .sidebar-toggle.on on specificity alone
+     (three classes beat two), so without this it silently swallows whether
+     the sidebar is actually open — every button reads as the same flat dark
+     tile regardless of its own toggle state. Carry the highlight through,
+     just opaque enough to still read over the picture like the rest of this
+     corner. */
+  .stage.subtitle-hidden .sidebar-toggle.on,
+  .stage.subtitle-hidden .subtitle-hide-toggle.on {
+    background: rgba(255,255,255,0.4);
   }
 
   /* Floating over the picture, the panel is invisible until pointed at: a solid
@@ -334,32 +347,22 @@ const CARD_CSS = `
   }
   .notice-close:hover { color: #fff; }
 
-  /* Control row across the top of the strip, filling what was dead space. */
-  .controls {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-  }
-  /* Anchored to the strip, not to the control row, so the strip's side padding
-     doesn't hold it 72px off the edge. Its top matches the row's own offset. */
-  /* On the toolbar's row, at the strip's edge — the strip's side padding would
-     otherwise hold it 72px in. */
-  .sidebar-toggle {
+  /* Anchored to the strip's corner, not to the text area, so the strip's side
+     padding doesn't hold it 72px off the edge. Stacked column so both controls
+     sit in the same corner without crowding the words above them. */
+  .toolbar {
     position: absolute;
     right: 14px;
     bottom: 10px;
-    color: rgba(255,255,255,0.5);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 4px;
   }
+  .sidebar-toggle { color: rgba(255,255,255,0.5); }
   .sidebar-toggle.on { color: #fff; background: rgba(255,255,255,0.28); }
-  /* Sits directly beside the sidebar toggle, at the same row — one ctrl width
-     (32px) plus its gap (6px) further in from the edge. */
-  .subtitle-hide-toggle {
-    position: absolute;
-    right: 52px;
-    bottom: 10px;
-    color: rgba(255,255,255,0.5);
-  }
+  .subtitle-hide-toggle { color: rgba(255,255,255,0.5); }
   .subtitle-hide-toggle.on { color: #fff; background: rgba(255,255,255,0.28); }
   .ctrl-sep {
     width: 1px;
@@ -426,7 +429,7 @@ function buildStage(): HTMLElement {
   sidebarBtn.className = `ctrl sidebar-toggle${_sidebarVisible ? ' on' : ''}`
   sidebarBtn.innerHTML = SIDEBAR_ICON
   sidebarBtn.title = 'Show / hide the dialogue sidebar'
-  sidebarBtn.addEventListener('click', (e) => {
+  makeDraggableButton(sidebarBtn, (e) => {
     e.stopPropagation()
     _onToggleSidebar?.()
   })
@@ -436,14 +439,21 @@ function buildStage(): HTMLElement {
   // and pausing the video exactly as if the line were shown, so replay,
   // next/prev and the shadowing gap still land on the right line.
   const subtitleHideBtn = document.createElement('button')
-  subtitleHideBtn.className = `ctrl subtitle-hide-toggle${_subtitleHidden ? ' on' : ''}`
+  // .on means "shown", same as sidebar-toggle — so it lights up when its
+  // content is visible, not when the toggle itself has been pressed.
+  subtitleHideBtn.className = `ctrl subtitle-hide-toggle${_subtitleHidden ? '' : ' on'}`
   subtitleHideBtn.innerHTML = SUBTITLE_ICON
   subtitleHideBtn.title = 'Show / hide the subtitle'
-  subtitleHideBtn.addEventListener('click', (e) => {
+  makeDraggableButton(subtitleHideBtn, (e) => {
     e.stopPropagation()
     _subtitleHidden = !_subtitleHidden
-    subtitleHideBtn.classList.toggle('on', _subtitleHidden)
+    subtitleHideBtn.classList.toggle('on', !_subtitleHidden)
     _stage?.classList.toggle('subtitle-hidden', _subtitleHidden)
+    // Hidden mode shrinks the box down to just the toolbar (see
+    // applyStripPosition) instead of leaving the full strip width invisibly
+    // in place — recompute now rather than waiting for the layout's once-a-
+    // second reassertion.
+    applyStripPosition()
   })
 
   const gapRow = document.createElement('div')
@@ -476,7 +486,11 @@ function buildStage(): HTMLElement {
     return handle
   })
 
-  stage.append(notice, textArea, sidebarBtn, subtitleHideBtn, gapRow, ...handles)
+  const toolbar = document.createElement('div')
+  toolbar.className = 'toolbar'
+  toolbar.append(subtitleHideBtn, sidebarBtn)
+
+  stage.append(notice, textArea, toolbar, gapRow, ...handles)
   stage.addEventListener('pointerdown', onDragStart)
   shadow.appendChild(stage)
   return stage
@@ -618,6 +632,10 @@ export interface StripPosition { xPct: number; yPct: number }
 const DEFAULT_STRIP_POSITION: StripPosition = { xPct: 50, yPct: 8 }
 const DEFAULT_STRIP_WIDTH_PCT = 90
 const MIN_STRIP_WIDTH_PX = 220
+// How far the pointer has to move, past a toolbar button's own press, before
+// it counts as a grab of the panel rather than a click of the button — the
+// toolbar's padding is too small on its own to reliably grab.
+const DRAG_CLICK_THRESHOLD_PX = 5
 
 let _dragEnabled = false
 let _dragging = false
@@ -648,7 +666,7 @@ function applyStripPosition(): void {
   if (!_stage || !box) return
 
   if (!_dragEnabled || !_position) {
-    for (const prop of ['left', 'top', 'bottom', 'width']) _stage.style.removeProperty(prop)
+    for (const prop of ['left', 'right', 'top', 'bottom', 'width']) _stage.style.removeProperty(prop)
     return
   }
 
@@ -656,16 +674,46 @@ function applyStripPosition(): void {
   const boxHeight = box.clientHeight
   if (boxWidth === 0 || boxHeight === 0) return
 
-  const width = clamp(boxWidth * _widthPct / 100, Math.min(MIN_STRIP_WIDTH_PX, boxWidth), boxWidth)
-  _stage.style.width = `${Math.round(width)}px`
+  const fullWidth = clamp(boxWidth * _widthPct / 100, Math.min(MIN_STRIP_WIDTH_PX, boxWidth), boxWidth)
+  // Unclamped: the raw centre the stored xPct maps to, even if the
+  // hypothetical full-width panel it implies would sit off-screen. Clamped
+  // only for actually rendering that full-width panel (`fullLeft` below) —
+  // the hidden branch needs the raw value to recover the exact right edge a
+  // narrow-box drag was released at; clamping it first (to keep a full-size
+  // panel on screen) would silently drag that edge back in from wherever it
+  // was actually dropped.
+  const rawFullLeft = boxWidth * _position.xPct / 100 - fullWidth / 2
+  const fullLeft = clamp(rawFullLeft, 0, Math.max(0, boxWidth - fullWidth))
 
-  const left = clamp(boxWidth * _position.xPct / 100 - width / 2, 0, Math.max(0, boxWidth - width))
+  if (_subtitleHidden) {
+    // Only the corner toolbar is left visible — shrink the box down to just
+    // wrap it instead of leaving the full strip width sitting there invisibly.
+    // `.stage`'s own shrink-to-fit sizing can't be used for this: `.toolbar`
+    // is itself `position: absolute`, so it never counts toward its parent's
+    // intrinsic width, and the stage would collapse to ~0 instead of hugging
+    // it — which then throws off every pixel computed from its box below.
+    // Measure the toolbar directly instead (stable regardless of the stage's
+    // own box, since its buttons are ordinary flex children of it) and give
+    // the stage an explicit width that wraps it with the same inset its own
+    // `right` uses, so the two line up.
+    const toolbar = _stage.querySelector<HTMLElement>('.toolbar')
+    const TOOLBAR_INSET_PX = 14 // must match `.toolbar { right: ... }` above
+    const narrowWidth = (toolbar?.offsetWidth ?? 0) + TOOLBAR_INSET_PX * 2
+    const rightEdge = rawFullLeft + fullWidth
+    _stage.style.removeProperty('right')
+    _stage.style.width = `${Math.round(narrowWidth)}px`
+    _stage.style.left = `${Math.round(clamp(rightEdge - narrowWidth, 0, Math.max(0, boxWidth - narrowWidth)))}px`
+  } else {
+    _stage.style.removeProperty('right')
+    _stage.style.width = `${Math.round(fullWidth)}px`
+    _stage.style.left = `${Math.round(fullLeft)}px`
+  }
+
   // Measured after the width is set: the height depends on how the text wraps
   // inside it, and that is what decides how far up the box may sit.
   const height = _stage.getBoundingClientRect().height
   const bottom = clamp(boxHeight * _position.yPct / 100, 0, Math.max(0, boxHeight - height))
 
-  _stage.style.left = `${Math.round(left)}px`
   _stage.style.bottom = `${Math.round(bottom)}px`
   _stage.style.top = 'auto'
 }
@@ -673,6 +721,16 @@ function applyStripPosition(): void {
 function onDragStart(e: PointerEvent): void {
   if (!_dragEnabled || !_stage || e.button !== 0) return
   if (isInteractive(e.composedPath())) return
+  beginDrag(e)
+}
+
+/**
+ * The actual grab-and-move logic, shared by a press on the stage's own
+ * background (`onDragStart`, immediate) and a press on a toolbar button that
+ * has crossed the drag threshold (`makeDraggableButton`, delayed).
+ */
+function beginDrag(e: PointerEvent): void {
+  if (!_dragEnabled || !_stage) return
 
   const box = dragContainer()
   if (!box) return
@@ -680,6 +738,15 @@ function onDragStart(e: PointerEvent): void {
   const boxRect = box.getBoundingClientRect()
   const grabX = e.clientX - stageRect.left
   const grabY = e.clientY - stageRect.top
+
+  // The hidden state anchors from `right` with `width` auto (see
+  // applyStripPosition) so the box hugs the toolbar instead of stretching to
+  // the stylesheet's own `right`. `move` below only ever writes `left`, so
+  // pin the width to what it already measured as and drop `right` up front —
+  // otherwise dragging would leave `right` fighting the new `left` and the
+  // box would stretch/shrink live as the pointer moves instead of sliding.
+  _stage.style.width = `${Math.round(stageRect.width)}px`
+  _stage.style.removeProperty('right')
 
   _dragging = true
   _stage.classList.add('dragging')
@@ -693,8 +760,17 @@ function onDragStart(e: PointerEvent): void {
     _stage.style.left = `${Math.round(left)}px`
     _stage.style.bottom = `${Math.round(bottom)}px`
     _stage.style.top = 'auto'
+
+    // While hidden the box is shrunk to just the toolbar (see
+    // applyStripPosition) — store the position as where the full-width strip's
+    // centre would be for this same right edge, not the narrow box's own
+    // centre, so the strip doesn't jump sideways once shown again.
+    const rightEdge = left + stageRect.width
+    const fullWidth = _subtitleHidden
+      ? clamp(boxRect.width * _widthPct / 100, Math.min(MIN_STRIP_WIDTH_PX, boxRect.width), boxRect.width)
+      : stageRect.width
     _position = {
-      xPct: boxRect.width ? ((left + stageRect.width / 2) / boxRect.width) * 100 : 50,
+      xPct: boxRect.width ? ((rightEdge - fullWidth / 2) / boxRect.width) * 100 : 50,
       yPct: boxRect.height ? (bottom / boxRect.height) * 100 : DEFAULT_STRIP_POSITION.yPct,
     }
   }
@@ -714,6 +790,62 @@ function onDragStart(e: PointerEvent): void {
   _stage.addEventListener('pointerup', end)
   _stage.addEventListener('pointercancel', end)
   e.preventDefault()
+}
+
+/**
+ * Wires a toolbar button so a plain press-and-release still fires `onClick`,
+ * but a press that moves past `DRAG_CLICK_THRESHOLD_PX` first hands off to
+ * `beginDrag` instead — the button becomes a second grab point for the panel,
+ * needed because the toolbar's own padding around the buttons is too thin to
+ * reliably grab on its own.
+ */
+function makeDraggableButton(btn: HTMLElement, onClick: (e: MouseEvent) => void): void {
+  let downEvent: PointerEvent | null = null
+  let dragging = false
+
+  const stopTracking = () => {
+    btn.removeEventListener('pointermove', onMove)
+    btn.removeEventListener('pointerup', stopTracking)
+    btn.removeEventListener('pointercancel', stopTracking)
+    downEvent = null
+  }
+
+  const onMove = (ev: PointerEvent) => {
+    if (!downEvent || dragging) return
+    const moved = Math.hypot(ev.clientX - downEvent.clientX, ev.clientY - downEvent.clientY)
+    if (moved < DRAG_CLICK_THRESHOLD_PX) return
+    dragging = true
+    const start = downEvent
+    stopTracking()
+    // Hand capture off to the stage before beginDrag re-captures the same
+    // pointer there — without it, a fast press that's already left the
+    // button's small hit-box would target whatever's now under the pointer,
+    // not the button, and these listeners would never have fired at all.
+    if (btn.hasPointerCapture(start.pointerId)) btn.releasePointerCapture(start.pointerId)
+    beginDrag(start)
+  }
+
+  btn.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (e.button !== 0 || !_dragEnabled) return
+    downEvent = e
+    dragging = false
+    btn.setPointerCapture(e.pointerId)
+    btn.addEventListener('pointermove', onMove)
+    btn.addEventListener('pointerup', stopTracking)
+    btn.addEventListener('pointercancel', stopTracking)
+  })
+
+  // A single listener, rather than the caller's own, so a press that turned
+  // into a drag can veto the click it would otherwise still fire.
+  btn.addEventListener('click', (e: MouseEvent) => {
+    if (dragging) {
+      dragging = false
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+    onClick(e)
+  })
 }
 
 function onResizeStart(e: PointerEvent, edge: 'left' | 'right'): void {
