@@ -559,6 +559,8 @@ async function rebuildSessionForShadowing(on: boolean) {
   if (previousState === 'paused') return
   if (sentencePlanUsesShadowStops === on) return
 
+  unwrapAllPhoneticsWords()
+  phoneticsWrappedIndices.clear()
   const lang = loadArticlePlan(on)
   if (sentences.length === 0) {
     clearLocalSession()
