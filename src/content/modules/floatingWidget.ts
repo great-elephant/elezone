@@ -1,4 +1,4 @@
-import { pause, resume, stop, getState, next, prev, seekTo, setSpeed, getSpeed, setVoice, setShadowing, setRepetition } from './readAloud'
+import { pause, resume, stop, getState, next, prev, seekTo, setSpeed, getSpeed, setVoice, setShadowing, setRepetition, setRepeatWholeSentence } from './readAloud'
 import { setFocusMode, isFocusMode } from './readAloudOverlay'
 import { Settings, TtsVoiceInfo } from '../../shared/types'
 
@@ -15,6 +15,10 @@ let progressTrack: HTMLElement | null = null
 let warningBanner: HTMLElement | null = null
 // H29/H30/H31 — learner controls.
 let shadowBtn: HTMLButtonElement | null = null
+// The Shadow button's own small dropdown (Clause repeat / Sentence repeat /
+// Turn off) — nested inside the overflow popover, same pattern as voiceMenu
+// nested off voiceChip.
+let shadowMenu: HTMLElement | null = null
 let repeatBtn: HTMLButtonElement | null = null
 // Secondary controls (voice, shadowing, repeat, speed) live in a "⋯" overflow
 // popover instead of the always-visible player, so the main widget only shows
@@ -25,6 +29,8 @@ let overflowMenu: HTMLElement | null = null
 // the right values.
 let curShadowing = false
 let curRepetition = 1
+// Only meaningful while curShadowing is on — see ReadAloudSettings.repeatWholeSentence.
+let curRepeatWholeSentence = false
 
 // Volume control — lives next to focus mode on the right of the transport row.
 // Unlike speed/shadowing/repetition, volume isn't part of the read-aloud
@@ -370,6 +376,7 @@ const WIDGET_CSS = `
   }
 
   /* Shadowing toggle + Repeat controls (now in the header) — H29/H31 */
+  .shadow-row { position: relative; display: inline-flex; }
   button.shadow-toggle {
     font-size: 14px;
     flex: 0 0 auto;
@@ -379,6 +386,35 @@ const WIDGET_CSS = `
     background: #232c56;
   }
   button.shadow-toggle.active:hover { background: #2b3568; }
+  /* Nested Shadow mode dropdown (Clause repeat / Sentence repeat / Turn off) —
+     mirrors .voice-menu's popover shell; items reuse .voice-option styling. */
+  .shadow-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    z-index: 1;
+    box-sizing: border-box;
+    width: 230px;
+    background: #16162a;
+    border: 1px solid #3a3a6a;
+    border-radius: 10px;
+    padding: 4px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+  }
+  /* Stack label + hint vertically for shadow-menu items only — .voice-option
+     is also reused by the voice menu, which needs its row layout untouched. */
+  .shadow-menu .voice-option {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+  .shadow-option-hint {
+    font-size: 10px;
+    color: #7a7aa8;
+    line-height: 1.3;
+    white-space: normal;
+    max-width: 100%;
+  }
   button.repeat {
     font-size: 11px;
     font-weight: 700;
@@ -553,19 +589,119 @@ function toggleFocusMode() {
 
 // ── Learner controls (H29 shadowing, H31 repeat, H30 save) ────────────────────
 
+// Human-readable summary of the current shadow mode, shared by the button's
+// own label/title and used to build the dropdown's active-item state.
+function shadowModeLabel(): string {
+  if (!curShadowing) return 'Shadowing mode: off'
+  return curRepeatWholeSentence ? 'Shadowing mode: on (Sentence repeat)' : 'Shadowing mode: on (Clause repeat)'
+}
+
 function refreshShadowButton() {
   if (!shadowBtn) return
   shadowBtn.classList.toggle('active', curShadowing)
-  const label = curShadowing ? 'Shadowing mode: on' : 'Shadowing mode: off'
+  const label = shadowModeLabel()
   shadowBtn.title = `${label}\nPauses between sentences so you can repeat aloud`
   shadowBtn.setAttribute('aria-label', label)
   shadowBtn.setAttribute('aria-pressed', String(curShadowing))
+  shadowBtn.setAttribute('aria-expanded', String(shadowMenu !== null))
+  if (shadowMenu) renderShadowMenuOptions()
 }
 
-function toggleShadowing() {
-  curShadowing = !curShadowing
-  setShadowing(curShadowing)
+// Which of the 3 dropdown options is active right now, derived from the same
+// two flags the background session actually runs on.
+type ShadowMode = 'off' | 'clause' | 'sentence'
+function currentShadowMode(): ShadowMode {
+  if (!curShadowing) return 'off'
+  return curRepeatWholeSentence ? 'sentence' : 'clause'
+}
+
+// Applies a mode immediately (per the confirmed UX: no separate "apply"
+// step) and closes the dropdown. Turning shadowing off doesn't also touch
+// repeatWholeSentence — it's meaningless while shadowing is off, and leaving
+// it as-is means turning shadowing back on later remembers the last repeat
+// style instead of always resetting to clause repeat.
+function selectShadowMode(mode: ShadowMode) {
+  if (mode === 'off') {
+    curShadowing = false
+    setShadowing(false)
+  } else {
+    curShadowing = true
+    curRepeatWholeSentence = mode === 'sentence'
+    // setShadowing() and setRepeatWholeSentence() both synchronously invoke the
+    // *same* onShadowInfoChange callback (registered in index.ts), which reads
+    // readAloud's CURRENT state via getShadowInfo() and overwrites curShadowing/
+    // curRepeatWholeSentence right here. Call setRepeatWholeSentence() first so
+    // repeatWholeSentenceOn is already updated by the time setShadowing()'s
+    // callback fires — calling them the other way around lets that callback read
+    // the still-stale repeatWholeSentence and clobber the value just set above,
+    // silently reverting a direct sentence<->clause switch back to the old mode.
+    setRepeatWholeSentence(curRepeatWholeSentence)
+    setShadowing(true)
+  }
   refreshShadowButton()
+  closeShadowMenu()
+}
+
+function toggleShadowMenu() {
+  if (shadowMenu) closeShadowMenu()
+  else openShadowMenu()
+}
+
+function onDocMouseDownForShadowMenu(e: MouseEvent) {
+  const path = e.composedPath()
+  if (shadowBtn && path.includes(shadowBtn)) return
+  if (shadowMenu && path.includes(shadowMenu)) return
+  closeShadowMenu()
+}
+
+function closeShadowMenu() {
+  shadowMenu?.remove()
+  shadowMenu = null
+  shadowBtn?.setAttribute('aria-expanded', 'false')
+  document.removeEventListener('mousedown', onDocMouseDownForShadowMenu, { capture: true })
+}
+
+function openShadowMenu() {
+  if (!shadowBtn || !shadowBtn.parentElement) return
+  shadowMenu = document.createElement('div')
+  shadowMenu.className = 'shadow-menu'
+  shadowMenu.setAttribute('role', 'listbox')
+  shadowMenu.setAttribute('aria-label', 'Shadow repeat mode')
+  shadowBtn.parentElement.appendChild(shadowMenu)
+  shadowBtn.setAttribute('aria-expanded', 'true')
+  document.addEventListener('mousedown', onDocMouseDownForShadowMenu, { capture: true })
+  renderShadowMenuOptions()
+}
+
+const SHADOW_MODE_OPTIONS: Array<{ mode: ShadowMode; label: string; hint?: string }> = [
+  { mode: 'clause', label: 'Clause repeat', hint: 'Pause and repeat at each comma/stop' },
+  { mode: 'sentence', label: 'Sentence repeat', hint: 'Pause at each stop, repeat whole sentence at the end' },
+  { mode: 'off', label: 'Turn off' },
+]
+
+function renderShadowMenuOptions() {
+  if (!shadowMenu) return
+  shadowMenu.replaceChildren()
+  const active = currentShadowMode()
+  for (const { mode, label, hint } of SHADOW_MODE_OPTIONS) {
+    const opt = document.createElement('button')
+    opt.className = 'voice-option'
+    opt.type = 'button'
+    opt.setAttribute('role', 'option')
+    const selected = mode === active
+    opt.setAttribute('aria-selected', String(selected))
+    const labelLine = document.createElement('span')
+    labelLine.textContent = `${selected ? '✓ ' : ''}${label}`
+    opt.appendChild(labelLine)
+    if (hint) {
+      const hintLine = document.createElement('span')
+      hintLine.className = 'shadow-option-hint'
+      hintLine.textContent = hint
+      opt.appendChild(hintLine)
+    }
+    opt.onclick = () => selectShadowMode(mode)
+    shadowMenu.appendChild(opt)
+  }
 }
 
 function refreshRepeatButton() {
@@ -593,9 +729,10 @@ function cycleRepeat() {
   refreshRepeatButton()
 }
 
-export function updateWidgetShadowInfo(shadowing: boolean, repetition: number) {
+export function updateWidgetShadowInfo(shadowing: boolean, repetition: number, repeatWholeSentence?: boolean) {
   if (typeof shadowing === 'boolean') curShadowing = shadowing
   if (typeof repetition === 'number' && repetition >= 1) curRepetition = Math.round(repetition)
+  if (typeof repeatWholeSentence === 'boolean') curRepeatWholeSentence = repeatWholeSentence
   refreshShadowButton()
   refreshRepeatButton()
 }
@@ -851,9 +988,11 @@ function onDocMouseDownForOverflow(e: MouseEvent) {
 }
 
 function closeOverflowMenu() {
-  // The voice submenu can be open nested inside; tear it down first so its own
-  // outside-click listener doesn't linger after we remove its parent.
+  // The voice/shadow submenus can be open nested inside; tear them down first
+  // so their own outside-click listeners don't linger after we remove their
+  // parent.
   closeVoiceMenu()
+  closeShadowMenu()
   overflowMenu?.remove()
   overflowMenu = null
   voiceChip = null
@@ -881,11 +1020,16 @@ function openOverflowMenu() {
 
   const row = document.createElement('div')
   row.className = 'overflow-row'
-  shadowBtn = makeButton('shadow-toggle', '🗣', 'Shadowing mode: off', toggleShadowing)
+  const shadowRow = document.createElement('div')
+  shadowRow.className = 'shadow-row'
+  shadowBtn = makeButton('shadow-toggle', '🗣', 'Shadowing mode: off', toggleShadowMenu)
   shadowBtn.setAttribute('aria-pressed', 'false')
+  shadowBtn.setAttribute('aria-haspopup', 'listbox')
+  shadowBtn.setAttribute('aria-expanded', 'false')
+  shadowRow.appendChild(shadowBtn)
   repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', cycleRepeat)
   speedBtn = makeButton('speed', `${getSpeed()}x`, 'Playback speed', cycleSpeed)
-  row.append(shadowBtn, repeatBtn, speedBtn)
+  row.append(shadowRow, repeatBtn, speedBtn)
 
   overflowMenu.append(voiceRow, row)
   overflowBtn.parentElement.appendChild(overflowMenu)
@@ -1178,9 +1322,10 @@ export function hideWidget() {
   curTotal = 0
   curVoice = ''
   curLang = ''
-  // Note: curShadowing / curRepetition are intentionally NOT reset here so the
-  // next session's mini-player renders the last-used values before the first
-  // background broadcast (they're re-seeded from settings on start anyway).
+  // Note: curShadowing / curRepetition / curRepeatWholeSentence are
+  // intentionally NOT reset here so the next session's mini-player renders
+  // the last-used values before the first background broadcast (they're
+  // re-seeded from settings on start anyway).
   hideWarning()
 }
 

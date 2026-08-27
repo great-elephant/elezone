@@ -85,6 +85,19 @@ type ActiveReadAloudSession = {
   // gap would otherwise read as a stall and kill a session that's actually
   // fine, just about to speak (the "random" mid-article stop).
   speakStartedAt?: number
+  // Parallel array to `sentences` — which real sentence each clause belongs
+  // to. Only populated when the plan was built with shadowing's clause-
+  // splitting on; undefined otherwise (repeatWholeSentence has no effect
+  // without it). See the matching doc on anchor.ts's buildSentencePlan
+  // return type for how this is derived.
+  sentenceGroupIds?: number[]
+  // How many whole-sentence passes have been completed for the sentence
+  // currently being repeated (repeatWholeSentence mode only) — deliberately
+  // separate from `currentRep`, which resets on every mid-sentence clause
+  // (including the ones a whole-sentence replay walks back through), so it
+  // can't double as this counter without being wiped before it reaches
+  // `repetition`.
+  sentenceRepCount?: number
 }
 
 const COLORS = Object.keys(BOOKMARK_COLORS) as BookmarkColor[]
@@ -729,10 +742,11 @@ async function broadcastReadAloudState(
   // the mini-player controls and the "shadowing…" indicator stay in sync (H29/H31).
   const shadowing = forThisTab?.shadowing
   const repetition = forThisTab?.settings.repetition
+  const repeatWholeSentence = forThisTab?.settings.repeatWholeSentence
 
   await chrome.tabs.sendMessage(tabId, {
     type: 'READ_ALOUD_UPDATE',
-    payload: { state, index, total, speed, voice, lang, finished, gap, shadowing, repetition },
+    payload: { state, index, total, speed, voice, lang, finished, gap, shadowing, repetition, repeatWholeSentence },
   }).catch(() => { })
 
   await chrome.runtime.sendMessage({
@@ -820,6 +834,72 @@ function handleTtsEvent(token: number, event: chrome.tts.TtsEvent) {
     if (session.state !== 'playing') return
     // The sentence that just finished — its length sizes the shadowing gap.
     const justSpoke = session.sentences[session.currentIndex] ?? ''
+
+    // repeatWholeSentence mode: still stop at every clause to shadow, but
+    // don't repeat there — only once every clause of the real sentence has
+    // been shadowed does the repeat phase start, and what repeats is the
+    // WHOLE sentence, not the last clause. Requires shadowing (the setting is
+    // documented as only meaningful together with it) and clause-grouping
+    // info (absent when the plan wasn't built with shadow-stop splitting).
+    if (session.settings.repeatWholeSentence && session.shadowing && session.sentenceGroupIds) {
+      const groupIds = session.sentenceGroupIds
+      // No groupIds[currentIndex + 1] (end of the whole plan) or a different
+      // group id both mean "this was the sentence's last clause".
+      const isLastClause = groupIds[session.currentIndex] !== groupIds[session.currentIndex + 1]
+
+      if (!isLastClause) {
+        // Mid-sentence clause: shadow-stop once, then move straight to the
+        // next clause — no repeat here. Note this fires again for every
+        // clause a whole-sentence replay (below) walks back through, so
+        // nothing sentence-repeat-related gets touched in this branch.
+        scheduleShadowingGap(token, justSpoke, () => {
+          advanceToNextSentence(token)
+        })
+        return
+      }
+
+      // Last clause of the sentence — the whole-sentence repeat phase.
+      session.sentenceRepCount = (session.sentenceRepCount ?? 0) + 1
+      if (session.sentenceRepCount < session.settings.repetition) {
+        // Re-speak the sentence clause by clause rather than as one merged
+        // utterance: walk backward from this (known last-clause) index to the
+        // first clause sharing the same group id. Clauses of one sentence
+        // group are always contiguous (buildSentencePlan emits them in
+        // document order), so this backward scan is O(clauses-in-sentence)
+        // and needs no lookup table. currentIndex then re-enters the normal
+        // clause-by-clause 'end'-handler pipeline via speakCurrentSentence,
+        // hitting each shadow-stop again until it reaches the last clause
+        // (this same check) once more. A single-clause sentence's group has
+        // only one member, so the scan is a no-op and this just re-speaks
+        // that one clause — matching clause-repeat behavior.
+        let groupStart = session.currentIndex
+        while (groupStart > 0 && groupIds[groupStart - 1] === groupIds[session.currentIndex]) {
+          groupStart--
+        }
+        // Don't jump currentIndex to groupStart until the gap actually
+        // elapses — scheduleShadowingGap keeps whatever's in currentIndex
+        // (still the last clause just spoken) highlighted for the gap's
+        // duration, same as every other branch here.
+        scheduleShadowingGap(token, justSpoke, () => {
+          const s = activeSession
+          if (!s || s.token !== token) return
+          s.currentIndex = groupStart
+          void speakCurrentSentence(token)
+        })
+        return
+      }
+
+      session.sentenceRepCount = 0
+      scheduleShadowingGap(token, justSpoke, () => {
+        advanceToNextSentence(token)
+      })
+      return
+    }
+
+    // Default (repeatWholeSentence off/undefined, or shadowing off): repeat
+    // whatever's at currentIndex — a clause when the plan was split, a whole
+    // sentence otherwise — exactly `repetition` times before moving on.
+    // Unchanged from before repeatWholeSentence existed.
     session.currentRep += 1
     if (session.currentRep < session.settings.repetition) {
       if (session.shadowing) {
@@ -983,11 +1063,12 @@ async function startReadAloudSession(
   const tabId = sender.tab?.id
   if (!tabId) return { ok: false }
 
-  const { sentences, startIndex, settings, lang } = payload as {
+  const { sentences, startIndex, settings, lang, sentenceGroupIds } = payload as {
     sentences: string[]
     startIndex: number
     settings: ReadAloudSettings
     lang?: string
+    sentenceGroupIds?: number[]
   }
 
   if (!Array.isArray(sentences) || sentences.length === 0) return { ok: false }
@@ -1028,6 +1109,7 @@ async function startReadAloudSession(
     // H29: seed shadowing from the persisted setting; the mini-player can toggle
     // it live afterwards.
     shadowing: settings.shadowing === true,
+    sentenceGroupIds: Array.isArray(sentenceGroupIds) ? sentenceGroupIds : undefined,
   }
 
   startSpeakingWatchdog(token)
@@ -1175,6 +1257,33 @@ async function controlReadAloud(
     return { ok: true }
   }
 
+  if (action === 'setRepeatWholeSentence') {
+    // Mirrors setRepetition above: takes effect from the next clause/sentence
+    // boundary (no re-speak) and is persisted to stored settings.
+    const on = (payload as { on?: boolean }).on
+    if (typeof on !== 'boolean') return { ok: false }
+    const session = activeSession
+    session.settings = { ...session.settings, repeatWholeSentence: on }
+    // Switching modes mid-sentence: currentRep/sentenceRepCount were counting
+    // for whichever mode was active before — carrying either over would
+    // either skip repeats or double-count them under the new mode's rules,
+    // so start clean from wherever playback happens to be next.
+    session.currentRep = 0
+    session.sentenceRepCount = 0
+
+    const settings = await getSettings()
+    // A stop (or a new session on another tab) may have landed while we
+    // awaited — don't mutate/broadcast a session that's no longer live.
+    if (activeSession !== session) return { ok: false }
+    settings.readAloud = { ...settings.readAloud, repeatWholeSentence: on }
+    await saveSettings(settings)
+    if (activeSession !== session) return { ok: false }
+
+    // Reflect the new value in the mini-player without disturbing playback.
+    await broadcastReadAloudState(tabId, session.state, session.currentIndex, false, session.inGap)
+    return { ok: true }
+  }
+
   if (action === 'next' || action === 'prev' || action === 'seek' || action === 'setSpeed') {
     const session = activeSession
     const lastIndex = session.sentences.length - 1
@@ -1182,14 +1291,17 @@ async function controlReadAloud(
     if (action === 'next') {
       session.currentIndex = Math.min(session.currentIndex + 1, lastIndex)
       session.currentRep = 0
+      session.sentenceRepCount = 0
     } else if (action === 'prev') {
       session.currentIndex = Math.max(session.currentIndex - 1, 0)
       session.currentRep = 0
+      session.sentenceRepCount = 0
     } else if (action === 'seek') {
       const target = (payload as { index?: number }).index
       if (typeof target !== 'number') return { ok: false }
       session.currentIndex = Math.max(0, Math.min(Math.round(target), lastIndex))
       session.currentRep = 0
+      session.sentenceRepCount = 0
     } else if (action === 'setSpeed') {
       const speed = (payload as { speed?: number }).speed
       if (typeof speed !== 'number' || !Number.isFinite(speed)) return { ok: false }

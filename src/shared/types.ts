@@ -61,6 +61,13 @@ export interface ReadAloudSettings {
   // H29 — shadowing mode: insert an intentional silent gap between sentences so
   // the learner can repeat aloud. Persisted so the choice sticks across sessions.
   shadowing?: boolean
+  // Only meaningful when `shadowing` is on. false/undefined (default): the old
+  // behaviour — stop and repeat each CLAUSE (split at commas/other shadowing
+  // stops) `repetition` times before moving to the next one. true: still stop
+  // at every clause to shadow, but don't repeat there — only once the whole
+  // original sentence has been read does it start repeating, and it repeats
+  // the FULL sentence (not just the last clause) `repetition` times.
+  repeatWholeSentence?: boolean
   // H32 — focus/spotlight mode: dim the rest of the page and highlight the current
   // sentence. Persisted so the choice sticks across sessions.
   focus?: boolean

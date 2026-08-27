@@ -16,6 +16,12 @@ import { wrapAndShowPhoneticsForWords, unwrapAllPhoneticsWords } from './readAlo
 let state: ReadAloudState = 'idle'
 let sentences: string[] = []
 let sentenceRanges: Range[] = []
+// Which real (Intl.Segmenter) sentence each `sentences[i]` clause belongs to
+// — parallel array to `sentences`, only meaningful when the plan was built
+// with splitAtShadowStops (shadowing on). Threaded through to the background
+// so "repeat whole sentence" mode can find every clause belonging to the
+// sentence currently being repeated.
+let sentenceGroupIds: number[] = []
 let sentencePlanUsesShadowStops = false
 let sessionSettings: ReadAloudSettings | null = null
 // The exact content block (paragraph/heading) each sentence came from — lets
@@ -31,6 +37,9 @@ let currentSpeed = 1
 let currentRepetition = 1
 // H29 — whether shadowing mode (inter-sentence gap) is on for this session.
 let shadowingOn = false
+// Only meaningful when shadowingOn is true — see the field doc on
+// ReadAloudSettings.repeatWholeSentence. Mirrors shadowingOn's lifecycle.
+let repeatWholeSentenceOn = false
 // IPA under every word of the sentence being spoken. Unlike shadowing this
 // never needs a session rebuild — it's purely local DOM rendering, so
 // toggling it just flips the flag and the next applySentenceIndex() call
@@ -86,8 +95,8 @@ export function setOnShadowInfoChange(cb: () => void) {
   onShadowInfoChange = cb
 }
 
-export function getShadowInfo(): { shadowing: boolean; repetition: number; inGap: boolean } {
-  return { shadowing: shadowingOn, repetition: currentRepetition, inGap: inShadowGap }
+export function getShadowInfo(): { shadowing: boolean; repetition: number; inGap: boolean; repeatWholeSentence: boolean } {
+  return { shadowing: shadowingOn, repetition: currentRepetition, inGap: inShadowGap, repeatWholeSentence: repeatWholeSentenceOn }
 }
 
 // Whether the most recent idle transition was a natural finish (F22). Only
@@ -126,6 +135,7 @@ function clearLocalSession() {
   sentences = []
   sentenceRanges = []
   sentenceElements = []
+  sentenceGroupIds = []
   sentencePlanUsesShadowStops = false
   sessionSettings = null
   currentIndex = 0
@@ -274,6 +284,7 @@ async function beginSession(
   // renders the right initial values before the first background broadcast.
   currentRepetition = Math.max(1, Math.round(settings.repetition || 1))
   shadowingOn = settings.shadowing === true
+  repeatWholeSentenceOn = settings.repeatWholeSentence === true
   phoneticsOn = settings.showPhonetics === true
   translationMode = translationModeIn
   // Best guess until the background's own detectLanguage broadcast corrects
@@ -287,7 +298,7 @@ async function beginSession(
 
   const response = await chrome.runtime.sendMessage({
     type: 'START_READ_ALOUD_SESSION',
-    payload: { sentences, startIndex, settings: sessionSettings, lang },
+    payload: { sentences, startIndex, settings: sessionSettings, lang, sentenceGroupIds },
   }) as { ok?: boolean }
 
   if (!response?.ok) {
@@ -313,6 +324,7 @@ function loadArticlePlan(splitAtShadowStops?: boolean): string {
   sentences = plan.map(p => p.text)
   sentenceRanges = plan.map(p => p.range)
   sentenceElements = plan.map(p => p.el)
+  sentenceGroupIds = plan.map(p => p.sentenceGroupId)
   sentencePlanUsesShadowStops = splitAtShadowStops === true
   return lang
 }
@@ -536,6 +548,14 @@ async function saveShadowingPreference(on: boolean): Promise<ReadAloudSettings |
     speed: currentSpeed,
     repetition: currentRepetition,
     shadowing: on,
+    // setRepeatWholeSentence()'s own persistence to storage (via a separate
+    // CONTROL_READ_ALOUD message, fire-and-forget from the caller) can still be
+    // in flight when this runs right after it (see selectShadowMode in
+    // floatingWidget.ts) — the GET_SETTINGS fetch above may race ahead of that
+    // write and return a stale `readAloud.repeatWholeSentence`. Override from
+    // the current runtime value here (same pattern as `shadowing: on` above) so
+    // the rebuilt session never regresses to a stale persisted value.
+    repeatWholeSentence: repeatWholeSentenceOn,
   }
   sessionSettings = nextReadAloud
 
@@ -628,6 +648,19 @@ export function setRepetition(count: number) {
   chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setRepetition', count: clamped } }).catch(() => {})
 }
 
+// Toggle "repeat whole sentence" mode live — only meaningful while shadowing
+// is also on. Unlike setShadowing(), this never rebuilds the session: the
+// plan's clause structure (sentenceGroupIds) already covers both modes, so
+// only the background's interpretation of currentRep/where it repeats needs
+// to change.
+export function setRepeatWholeSentence(on: boolean) {
+  repeatWholeSentenceOn = on
+  if (sessionSettings) sessionSettings = { ...sessionSettings, repeatWholeSentence: on }
+  onShadowInfoChange?.()
+  if (state === 'idle') return
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setRepeatWholeSentence', on } }).catch(() => {})
+}
+
 export function getProgress(): { index: number; total: number } {
   return { index: currentIndex, total: sentences.length }
 }
@@ -642,6 +675,7 @@ export function syncRemoteState(
   gap?: boolean,
   shadowing?: boolean,
   repetition?: number,
+  repeatWholeSentence?: boolean,
 ) {
   // Only meaningful on an idle transition; reset otherwise so a later plain stop
   // can't inherit a stale "finished" flag.
@@ -664,7 +698,10 @@ export function syncRemoteState(
     currentRepetition = Math.max(1, Math.round(repetition))
     shadowInfoChanged = true
   }
-
+  if (typeof repeatWholeSentence === 'boolean' && repeatWholeSentence !== repeatWholeSentenceOn) {
+    repeatWholeSentenceOn = repeatWholeSentence
+    shadowInfoChanged = true
+  }
   // The background reports the voice/language it actually resolved (incl. an
   // auto-picked one) so the mini-player chip can show it. Set BEFORE
   // applySentenceIndex below — that's where the phonetics gate reads

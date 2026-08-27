@@ -494,7 +494,24 @@ export function buildSentencePlan(
   elements: HTMLElement[],
   lang: string,
   splitAtShadowStops?: boolean,
-): Array<{ text: string; range: Range; el: HTMLElement }> {
+): Array<{
+  text: string
+  range: Range
+  el: HTMLElement
+  // Id of the real (Intl.Segmenter) sentence this clause was split from —
+  // shared by every clause a single sentence got broken into via
+  // splitSegmentAtShadowingStops. Lets consumers (shadowing "repeat whole
+  // sentence" mode) reassemble which clauses belong together without
+  // re-deriving sentence boundaries themselves. Monotonically increasing
+  // across the whole article, not just within one element.
+  sentenceGroupId: number
+  // True when this clause is the last one of its sentence group (always true
+  // when splitAtShadowStops is off, or when a sentence has no internal
+  // shadowing-stop punctuation to split on) — marks where "repeat whole
+  // sentence" mode should switch from advancing clause-by-clause to
+  // repeating the full sentence.
+  isLastInSentence: boolean
+}> {
   let segmenter: Intl.Segmenter
   try {
     segmenter = new Intl.Segmenter(lang, { granularity: 'sentence' })
@@ -502,7 +519,15 @@ export function buildSentencePlan(
     segmenter = new Intl.Segmenter('en', { granularity: 'sentence' })
   }
 
-  const plan: Array<{ text: string; range: Range; el: HTMLElement }> = []
+  const plan: Array<{
+    text: string
+    range: Range
+    el: HTMLElement
+    sentenceGroupId: number
+    isLastInSentence: boolean
+  }> = []
+
+  let sentenceGroupId = 0
 
   for (const el of elements) {
     const { entries, text: raw } = buildElementTextIndex(el)
@@ -517,17 +542,25 @@ export function buildSentencePlan(
       .map(s => s.segment.trim())
       .filter(s => s.length > 0)
 
-    const segments: string[] = []
+    // Each entry: the clause text plus which real sentence (by index into
+    // rawSegments, offset by sentenceGroupId below) it came from — carried
+    // alongside `segments` so the match loop below can tag every plan entry
+    // without re-deriving grouping from string identity.
+    const segments: Array<{ text: string; groupId: number; isLast: boolean }> = []
     for (const s of rawSegments) {
+      const groupId = sentenceGroupId++
       if (splitAtShadowStops) {
-        segments.push(...splitSegmentAtShadowingStops(s))
+        const clauses = splitSegmentAtShadowingStops(s)
+        clauses.forEach((clause, i) => {
+          segments.push({ text: clause, groupId, isLast: i === clauses.length - 1 })
+        })
       } else {
-        segments.push(s)
+        segments.push({ text: s, groupId, isLast: true })
       }
     }
 
     let searchFrom = 0
-    for (const sentence of segments) {
+    for (const { text: sentence, groupId, isLast } of segments) {
       // Build a regex that matches the sentence with flexible whitespace so
       // "a\n      b" in the raw text matches the collapsed segment "a b".
       let matchStart = -1
@@ -557,7 +590,7 @@ export function buildSentencePlan(
       const wholeElementFallback = segments.length === 1 ? wholeEntriesRange(entries) : null
 
       if (matchStart === -1) {
-        plan.push({ text: sentence, range: wholeElementFallback ?? new Range(), el })
+        plan.push({ text: sentence, range: wholeElementFallback ?? new Range(), el, sentenceGroupId: groupId, isLastInSentence: isLast })
         // BUG (found via user report): searchFrom used to stay put here, so a
         // single failed match within a multi-sentence element would make every
         // later sentence in that same element re-search from the SAME stale
@@ -576,7 +609,7 @@ export function buildSentencePlan(
       const endPos = resolveOffset(entries, matchEnd, true)
 
       if (!startPos || !endPos) {
-        plan.push({ text: sentence, range: wholeElementFallback ?? new Range(), el })
+        plan.push({ text: sentence, range: wholeElementFallback ?? new Range(), el, sentenceGroupId: groupId, isLastInSentence: isLast })
         // Unlike the matchStart === -1 case above, the regex DID succeed here
         // (only DOM-position resolution failed) — matchEnd is a real, known
         // position in the raw text, so use it exactly rather than guessing.
@@ -587,7 +620,7 @@ export function buildSentencePlan(
       const range = new Range()
       range.setStart(startPos.node, startPos.nodeOffset)
       range.setEnd(endPos.node, endPos.nodeOffset)
-      plan.push({ text: sentence, range, el })
+      plan.push({ text: sentence, range, el, sentenceGroupId: groupId, isLastInSentence: isLast })
       searchFrom = matchEnd
     }
   }
