@@ -2,7 +2,7 @@ import { getSelectionContext, applyHighlight, scrollToHighlight, removeHighlight
 import { start, startFrom, setOnStateChange, setOnVoiceInfoChange, getVoiceInfo, getState, syncRemoteState, getProgress, handleWordEvent, didFinishNaturally, setOnShadowInfoChange, getShadowInfo, setPhonetics } from './modules/readAloud'
 import { showWidget, hideWidget, updateWidgetState, updateWidgetProgress, updateWidgetVoice, updateWidgetShadowInfo, showFinishedCard, hideFinishedCard, setOnReplay } from './modules/floatingWidget'
 import { destroyReadingOverlays } from './modules/readAloudOverlay'
-import { installSpaNavigationGuard } from './modules/readAloudSpaGuard'
+import { subscribeToSpaNavigation } from './modules/spaNavigationGuard'
 import { savePosition } from './modules/readAloudPosition'
 import { enable as enableTranslation, disable as disableTranslation, isTranslatorAvailable, getTranslatorStatus } from './modules/translation'
 import { SavedItem, Settings, BOOKMARK_COLORS, BookmarkColor, VideoModeSettings, normaliseVideoModeSettings } from '../shared/types'
@@ -400,7 +400,7 @@ async function init() {
   // F25: on a soft (SPA) navigation the sentence ranges go stale — stop reading
   // cleanly and save the position so Resume works when the user returns. We do
   // NOT try to auto-continue on the new page.
-  installSpaNavigationGuard(() => {
+  subscribeToSpaNavigation(() => {
     if (getState() === 'idle') return
     // Capture the position now, before the DOM/URL context is fully gone.
     const { index, total } = getProgress()

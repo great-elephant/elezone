@@ -20,7 +20,8 @@ import type { VideoPlatform } from './platform'
 import { placeYouTubeOverlays, isStripOverlaid, defaultStripPosition } from './youtubeLayout'
 import { getSidebarWidth, getSidebarScrollTop, setSidebarScrollTop } from './dialogueSidebar'
 import { seekToSeconds, pauseVideo, playVideo, useClosedCaptions } from './videoControl'
-import { setNativeTranslationCues, clearNativeTranslationCues, hasNativeTranslations, setTranslationSource } from './cueTranslation'
+import { setNativeTranslationCues, clearNativeTranslationCues, hasNativeTranslations, setTranslationSource, clearTranslationCache } from './cueTranslation'
+import { subscribeToSpaNavigation } from '../spaNavigationGuard'
 import { phoneticsForWords, clearPhoneticsCache } from '../wordPhonetics'
 import { configurePacing, updatePacingConfig, handleCueEnd, resumeFromWait, isWaitingForLearner, cancelPacing } from './linePacing'
 import { installVideoModeKeys, uninstallVideoModeKeys, setVideoModeKeysEnabled } from './videoModeKeys'
@@ -758,9 +759,13 @@ export function disableVideoMode(): void {
   clearNativeTranslationCues()
   clearPhoneticsCache()
   _domFallbackCues = []
-  if (_urlWatch !== null) {
-    clearInterval(_urlWatch)
-    _urlWatch = null
+  if (_layoutHealWatch !== null) {
+    clearInterval(_layoutHealWatch)
+    _layoutHealWatch = null
+  }
+  if (_urlNavUnsubscribe !== null) {
+    _urlNavUnsubscribe()
+    _urlNavUnsubscribe = null
   }
 }
 
@@ -772,46 +777,51 @@ export function isVideoModeActive(): boolean {
 
 // Both sites move between videos without a page load, so nothing would
 // otherwise clear the previous title's cues — the sidebar would keep showing
-// the wrong dialogue. Polling the URL is cheap and, unlike patching
-// history.pushState, doesn't collide with the read-aloud SPA guard.
-let _urlWatch: number | null = null
+// the wrong dialogue. URL-change detection is routed through the shared SPA
+// navigation guard (a single history.pushState/replaceState/popstate patch
+// also used by Read Aloud) rather than each feature polling the URL itself.
+let _layoutHealWatch: number | null = null
+let _urlNavUnsubscribe: (() => void) | null = null
 
 function watchForTitleChange() {
-  if (_urlWatch !== null) return
-  let lastUrl = location.href
-  _urlWatch = window.setInterval(() => {
-    // Cheap self-heal: both sites re-render around the player — Netflix after a
-    // fullscreen transition, YouTube whenever it loads more recommendations —
-    // which leaves the overlays parented to a node that is no longer on screen.
-    if (_active) {
-      reparentOverlays()
-      syncLayoutMetrics()
-    }
-    if (location.href === lastUrl) return
-    lastUrl = location.href
+  if (_urlNavUnsubscribe === null) {
+    _urlNavUnsubscribe = subscribeToSpaNavigation(() => {
+      if (!_active) return
+      // Left the player entirely (browse, a title page, search). Tearing down is
+      // the page watcher's job — rebuilding here would put the strip and sidebar
+      // over a page that has no dialogue at all.
+      if (!isPlaybackPage()) return
+      _interceptorCues = []
+      _domFallbackCues = []
+      resetSubtitleInterceptor()
+      clearNativeTranslationCues()
+      clearPhoneticsCache()
+      clearTranslationCache()
+      _verified = false
+      _verifyHits = 0
+      _verifyMisses = 0
+      // The MAIN world clears its cache on the same URL change; ask it for the
+      // new episode's tracks once it has them.
+      requestSubtitleReplay(_targetLang, _learningLang)
+      stopSubtitleSyncer()
+      destroyDialogueSidebar()
+      platform().showNativeSubtitles()
+      buildUi()
+      setSubtitleCardStatus(waitingStatus())
+      updateSubtitleCard(null, _savedItems)
+      installSubtitleDomParser(onDomCue, platform().nativeSubtitleSelectors)
+    })
+  }
+
+  if (_layoutHealWatch !== null) return
+  // Cheap self-heal: both sites re-render around the player — Netflix after a
+  // fullscreen transition, YouTube whenever it loads more recommendations —
+  // which leaves the overlays parented to a node that is no longer on screen.
+  // Unrelated to navigation detection, so it stays on its own interval.
+  _layoutHealWatch = window.setInterval(() => {
     if (!_active) return
-    // Left the player entirely (browse, a title page, search). Tearing down is
-    // the page watcher's job — rebuilding here would put the strip and sidebar
-    // over a page that has no dialogue at all.
-    if (!isPlaybackPage()) return
-    _interceptorCues = []
-    _domFallbackCues = []
-    resetSubtitleInterceptor()
-    clearNativeTranslationCues()
-    clearPhoneticsCache()
-    _verified = false
-    _verifyHits = 0
-    _verifyMisses = 0
-    // The MAIN world clears its cache on the same URL change; ask it for the
-    // new episode's tracks once it has them.
-    requestSubtitleReplay(_targetLang, _learningLang)
-    stopSubtitleSyncer()
-    destroyDialogueSidebar()
-    platform().showNativeSubtitles()
-    buildUi()
-    setSubtitleCardStatus(waitingStatus())
-    updateSubtitleCard(null, _savedItems)
-    installSubtitleDomParser(onDomCue, platform().nativeSubtitleSelectors)
+    reparentOverlays()
+    syncLayoutMetrics()
   }, 1000)
 }
 

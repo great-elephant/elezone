@@ -9,13 +9,12 @@
 // than by index.
 
 import type { SubtitleCue } from './subtitleInterceptor'
-import { translate } from '../translation'
+import { translate, clearTranslationCache as clearSharedTranslationCache } from '../translation'
 
 let _native: SubtitleCue[] = []
 // 'machine' makes the learner's choice explicit: Netflix's own translation
 // reads better, but a literal rendering is sometimes what you want to study.
 let _source: 'auto' | 'machine' = 'auto'
-const _machineCache = new Map<string, string>()
 
 export function setNativeTranslationCues(cues: SubtitleCue[]): void {
   // Overlap matching relies on the list being ordered by start time.
@@ -64,23 +63,25 @@ export function nativeTranslationFor(cue: SubtitleCue): string | null {
   return parts.length > 0 ? parts.join(' ') : null
 }
 
-/** Native subtitle if available, otherwise a cached machine translation. */
+/**
+ * Native subtitle if available, otherwise a machine translation. Machine
+ * translations are cached/deduped by the shared cache in `translation.ts` —
+ * `subtitleCard.ts` and `dialogueSidebar.ts` racing to translate the same cue
+ * end up sharing a single in-flight request instead of each firing their own.
+ */
 export async function translationFor(cue: SubtitleCue, targetLang: string): Promise<string> {
   const native = nativeTranslationFor(cue)
   if (native) return native
 
-  const cached = _machineCache.get(cue.text)
-  if (cached !== undefined) return cached
-
   try {
     const { text } = await translate(cue.text, targetLang)
-    _machineCache.set(cue.text, text)
     return text
   } catch {
     return ''
   }
 }
 
+/** Clears the shared machine-translation cache — see `translation.ts`. */
 export function clearTranslationCache(): void {
-  _machineCache.clear()
+  clearSharedTranslationCache()
 }

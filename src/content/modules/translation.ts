@@ -87,12 +87,59 @@ async function googleTranslate(text: string, tgt: string): Promise<string> {
 
 type Source = 'on-device' | 'google'
 type TranslationMode = 'paragraph' | 'sentence'
+type TranslateResult = { text: string; source: Source }
 
-export async function translate(text: string, tgtLang = targetLang): Promise<{ text: string; source: Source }> {
-  if (onDeviceTranslator && onDeviceTargetLang === tgtLang) {
-    return { text: await onDeviceTranslator.translate(text), source: 'on-device' }
+// Shared cache + in-flight dedup so callers that race to translate the same
+// text (Read Aloud's repeat/shadowing re-broadcasts, video mode's subtitle
+// card and dialogue sidebar both translating the same cue) don't each fire
+// their own network/on-device request. Keyed by target language + text so
+// identical text translated to different languages never collides.
+const MAX_CACHE_ENTRIES = 500
+const translationCache = new Map<string, TranslateResult>()
+const pendingTranslations = new Map<string, Promise<TranslateResult>>()
+
+function cacheKey(text: string, tgtLang: string): string {
+  return `${tgtLang}::${text}`
+}
+
+function cacheSet(key: string, value: TranslateResult): void {
+  if (translationCache.size >= MAX_CACHE_ENTRIES) {
+    const oldest = translationCache.keys().next().value
+    if (oldest !== undefined) translationCache.delete(oldest)
   }
-  return { text: await googleTranslate(text, tgtLang), source: 'google' }
+  translationCache.set(key, value)
+}
+
+export async function translate(text: string, tgtLang = targetLang): Promise<TranslateResult> {
+  const key = cacheKey(text, tgtLang)
+
+  const cached = translationCache.get(key)
+  if (cached !== undefined) return cached
+
+  const pending = pendingTranslations.get(key)
+  if (pending !== undefined) return pending
+
+  const request = (async (): Promise<TranslateResult> => {
+    if (onDeviceTranslator && onDeviceTargetLang === tgtLang) {
+      return { text: await onDeviceTranslator.translate(text), source: 'on-device' }
+    }
+    return { text: await googleTranslate(text, tgtLang), source: 'google' }
+  })()
+    .then(result => {
+      cacheSet(key, result)
+      return result
+    })
+    .finally(() => {
+      pendingTranslations.delete(key)
+    })
+
+  pendingTranslations.set(key, request)
+  return request
+}
+
+export function clearTranslationCache(): void {
+  translationCache.clear()
+  pendingTranslations.clear()
 }
 
 

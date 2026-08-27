@@ -259,8 +259,16 @@ function applySentenceIndex(index: number) {
       }
     }
   }
-  prefetchAhead(index, sentences, 3)
-  void wrapPhoneticsAhead(index)
+
+  // Prefetching/wrapping ahead only makes sense the first time we land on
+  // `index` — the background re-broadcasts the same index on pause/resume
+  // (which can also flip `wordIndexSentence` above without `index` itself
+  // changing), and those sentences are already fetched from the last time we
+  // arrived here.
+  if (changed) {
+    prefetchAhead(index, sentences, 3)
+    void wrapPhoneticsAhead(index)
+  }
 }
 
 // Called when the background reports a spoken-word position (karaoke). Guarded
