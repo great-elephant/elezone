@@ -80,6 +80,17 @@ const WRAPPER_CSS = [
   // together with no gap at all. pre-wrap keeps the space's width while
   // still letting the line wrap normally at it.
   'white-space:pre-wrap !important',
+  // A flex item's default `min-width: auto` shrinks to min-content — normally
+  // the width of the whole word, since unbreakable text can't get any
+  // narrower. But word-break/overflow-wrap are inherited, and this wrapper
+  // doesn't reset them, so a host page that sets either (break-word,
+  // break-all, anywhere — common on narrow columns) lets min-content collapse
+  // down to a single character, and the word gets split mid-way to fit
+  // whatever space is left on the line ("architecture" → "archit"/"ecture").
+  // Force both back to their non-breaking default so the word always wraps
+  // as one atomic unit, same as it did before phonetics wrapped it.
+  'word-break:normal !important',
+  'overflow-wrap:normal !important',
 ].join(';')
 
 const IPA_ROW_CSS = [

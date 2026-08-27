@@ -875,6 +875,21 @@ let wordIndexTextOffset = 0
 // Raw concatenated text of the sentence range (whitespace preserved) — used to
 // find a word's end when the TTS event omits `length`.
 let wordIndexRawText = ''
+// `wordIndexRawText` with every whitespace run collapsed to a single space —
+// matching how buildSentencePlan derived the sentence text actually handed to
+// chrome.tts (`normRaw.replace(/\s+/g, ' ')`). `wordIndexCollapsedMap[k]` is
+// that collapsed string's k-th character's offset in `wordIndexRawText`.
+// `wordIndexTextOffset` used to be added straight onto a charIndex and used
+// as a raw-text offset directly — correct only for the sentence's *leading*
+// whitespace, since that's the only place TTS text and raw text necessarily
+// have the same length. Source-code indentation/newlines inside a sentence
+// (e.g. a `<p>` whose text wraps across lines in the page's own HTML) collapse
+// to a single space in the TTS text but stay multiple characters in the raw
+// DOM text, so every word after such a run was being resolved several
+// characters too early — landing mid-word. Observed: a phonetics wrap for
+// "software" split into "sof"/"f"/"tware" wrapper spans because its Range
+// started inside the word instead of at its front.
+let wordIndexCollapsedMap: number[] = []
 
 /**
  * Build a character index over the text nodes inside `range`, so a character
@@ -890,6 +905,7 @@ export function prepareWordIndex(rawRange: Range, ttsText: string): void {
   wordIndexEntries = []
   wordIndexTextOffset = 0
   wordIndexRawText = ''
+  wordIndexCollapsedMap = []
 
   if (!rawRange || !rawRange.startContainer || rawRange.collapsed) return
   const range = clipBeforeTranslation(rawRange)
@@ -943,17 +959,48 @@ export function prepareWordIndex(rawRange: Range, ttsText: string): void {
   wordIndexEntries = entries
   wordIndexRawText = parts.join('')
 
-  // Align the TTS text to the raw range text. TTS `.text` is often the raw text
-  // trimmed and unicode-normalised. We only need the *leading* alignment: find
-  // where the normalised, trimmed TTS text begins inside the normalised raw text.
-  const trimmedTts = ttsText.trimStart()
-  const normRaw = normText(wordIndexRawText)
-  const normTts = normText(trimmedTts)
-  if (normTts) {
-    const head = normTts.slice(0, Math.min(24, normTts.length))
-    const at = normRaw.indexOf(head)
-    wordIndexTextOffset = at >= 0 ? at : 0
+  // Build the whitespace-collapsed view of the raw text plus its per-character
+  // map back to raw offsets — see wordIndexCollapsedMap's comment above.
+  {
+    const raw = wordIndexRawText
+    const map: number[] = []
+    let collapsed = ''
+    let i = 0
+    while (i < raw.length) {
+      if (/\s/.test(raw[i])) {
+        collapsed += ' '
+        map.push(i)
+        while (i < raw.length && /\s/.test(raw[i])) i++
+      } else {
+        collapsed += raw[i]
+        map.push(i)
+        i++
+      }
+    }
+    map.push(raw.length) // sentinel: one past the last real character
+    wordIndexCollapsedMap = map
+
+    // Align the TTS text to the *collapsed* raw text — both now use single
+    // spaces throughout, so this only needs to find where the (also
+    // trimmed/unicode-normalised) TTS text begins, same as before, just
+    // against the right string.
+    const trimmedTts = ttsText.trimStart()
+    const normCollapsed = normText(collapsed)
+    const normTts = normText(trimmedTts)
+    if (normTts) {
+      const head = normTts.slice(0, Math.min(24, normTts.length))
+      const at = normCollapsed.indexOf(head)
+      wordIndexTextOffset = at >= 0 ? at : 0
+    }
   }
+}
+
+// Resolve an offset into the whitespace-collapsed (single-space) sentence
+// text — the space charIndex/rawOffset arithmetic below operates in — to the
+// real offset in `wordIndexRawText`.
+function collapsedOffsetToRaw(collapsedOffset: number): number {
+  const clamped = Math.max(0, Math.min(collapsedOffset, wordIndexCollapsedMap.length - 1))
+  return wordIndexCollapsedMap[clamped] ?? wordIndexRawText.length
 }
 
 // Resolve a character offset (relative to the raw range text) to (node, offset).
@@ -997,8 +1044,14 @@ function resolveWordOffset(rawOffset: number, preferNextEntry = false): { node: 
 function resolveWordAt(charIndex: number, length?: number): { text: string; rect: DOMRect; range: Range } | null {
   if (!wordIndexEntries.length) return null
 
-  // Map TTS-text offset → raw-range offset.
-  const rawStart = charIndex + wordIndexTextOffset
+  // Map TTS-text offset → collapsed-text offset → raw-range offset. The
+  // charIndex/wordIndexTextOffset arithmetic happens in collapsed-text space
+  // (single spaces throughout, matching the TTS text); collapsedOffsetToRaw
+  // is what accounts for any multi-character whitespace run in the real DOM
+  // text collapsing to one of those spaces.
+  const collapsedStart = charIndex + wordIndexTextOffset
+  if (collapsedStart < 0 || collapsedStart >= wordIndexCollapsedMap.length - 1) return null
+  const rawStart = collapsedOffsetToRaw(collapsedStart)
   if (rawStart < 0 || rawStart >= wordIndexRawText.length) return null
 
   // Determine the word's end: prefer the reported length, else extend to the
