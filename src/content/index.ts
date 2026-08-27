@@ -112,7 +112,7 @@ setOnStateChange(newState => {
     const { voice, lang } = getVoiceInfo()
     updateWidgetVoice(voice, lang)
     const shadow = getShadowInfo()
-    updateWidgetShadowInfo(shadow.shadowing, shadow.repetition, shadow.repeatWholeSentence)
+    updateWidgetShadowInfo(shadow.shadowing, shadow.repetition, shadow.repeatWholeSentence, shadow.shadowingRatio)
   }
 })
 
@@ -129,8 +129,8 @@ setOnVoiceInfoChange(() => {
 // Refresh the shadowing toggle and Repeat control when the background reports
 // new values (H29/H31).
 setOnShadowInfoChange(() => {
-  const { shadowing, repetition, repeatWholeSentence } = getShadowInfo()
-  updateWidgetShadowInfo(shadowing, repetition, repeatWholeSentence)
+  const { shadowing, repetition, repeatWholeSentence, shadowingRatio } = getShadowInfo()
+  updateWidgetShadowInfo(shadowing, repetition, repeatWholeSentence, shadowingRatio)
 })
 
 // Shared "start reading from the top" path, mirroring the popup's Start Reading:
@@ -550,8 +550,8 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
       return { ok: true }
 
     case 'READ_ALOUD_UPDATE': {
-      const { state, index, total, speed, voice, lang, finished, gap, shadowing, repetition, repeatWholeSentence } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number; total?: number; speed?: number; voice?: string; lang?: string; finished?: boolean; gap?: boolean; shadowing?: boolean; repetition?: number; repeatWholeSentence?: boolean }
-      syncRemoteState(state, index, speed, voice, lang, finished, gap, shadowing, repetition, repeatWholeSentence)
+      const { state, index, total, speed, voice, lang, finished, gap, shadowing, repetition, repeatWholeSentence, shadowingRatio } = msg.payload as { state: 'idle' | 'playing' | 'paused'; index?: number; total?: number; speed?: number; voice?: string; lang?: string; finished?: boolean; gap?: boolean; shadowing?: boolean; repetition?: number; repeatWholeSentence?: boolean; shadowingRatio?: number }
+      syncRemoteState(state, index, speed, voice, lang, finished, gap, shadowing, repetition, repeatWholeSentence, shadowingRatio)
       if (state !== 'idle') {
         const progress = getProgress()
         // Prefer content-side counts; fall back to the background's authoritative total.

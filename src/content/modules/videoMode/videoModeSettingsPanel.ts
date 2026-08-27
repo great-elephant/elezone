@@ -337,7 +337,7 @@ function render(): void {
   ))
 
   advBody.appendChild(numberRow(
-    'Shadowing gap', settings.shadowGapFactor, { min: 0.5, max: 2, step: 0.1 },
+    'Shadowing gap', settings.shadowGapFactor, { min: 0.5, max: 3, step: 0.1 },
     'Multiplier on how long the line took to say.',
     next => _onChange?.({ shadowGapFactor: next }),
   ))

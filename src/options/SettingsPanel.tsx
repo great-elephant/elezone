@@ -333,6 +333,12 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
             onChange={e => set('readAloud', 'speed', parseFloat(e.target.value))} />
         </Field>
 
+        <Field label={`Shadowing gap ratio: ${(ra.shadowingRatio ?? 1).toFixed(1)}×`}>
+          <input type="range" min={0.5} max={3} step={0.1} value={ra.shadowingRatio ?? 1}
+            style={styles.range}
+            onChange={e => set('readAloud', 'shadowingRatio', parseFloat(e.target.value))} />
+        </Field>
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
           <Field label="Repeat each sentence">
             <input type="number" min={1} max={99} value={ra.repetition}

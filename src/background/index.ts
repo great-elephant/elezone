@@ -608,11 +608,15 @@ function clearShadowingGap() {
 const GAP_MIN_MS = 1200
 const GAP_MAX_MS = 8000
 const GAP_WORDS_PER_SEC = 2
-function computeShadowingGapMs(sentence: string, speed: number): number {
+// `ratio` mirrors Video Mode's shadowGapFactor: a learner-tunable multiplier on
+// the estimated gap, applied before clamping so it can still push the result
+// past the default MIN/MAX. Default 1 = old behaviour (identical output).
+function computeShadowingGapMs(sentence: string, speed: number, ratio: number): number {
   const words = sentence.trim().split(/\s+/).filter(Boolean).length || 1
   const rate = Number.isFinite(speed) && speed > 0 ? speed : 1
   const speakSec = words / (GAP_WORDS_PER_SEC * rate)
-  const ms = speakSec * 1000
+  const r = Number.isFinite(ratio) && ratio > 0 ? ratio : 1
+  const ms = speakSec * 1000 * r
   return Math.round(Math.max(GAP_MIN_MS, Math.min(GAP_MAX_MS, ms)))
 }
 
@@ -669,7 +673,7 @@ function scheduleShadowingGap(token: number, justSpoke: string, onComplete: () =
   // a subtle "shadowing…" hint.
   void broadcastReadAloudState(session.tabId, 'playing', session.currentIndex, false, true)
 
-  const gapMs = computeShadowingGapMs(justSpoke, session.settings.speed)
+  const gapMs = computeShadowingGapMs(justSpoke, session.settings.speed, session.settings.shadowingRatio ?? 1)
   shadowingGapTimeout = setTimeout(() => {
     shadowingGapTimeout = null
     const s = activeSession
@@ -743,10 +747,11 @@ async function broadcastReadAloudState(
   const shadowing = forThisTab?.shadowing
   const repetition = forThisTab?.settings.repetition
   const repeatWholeSentence = forThisTab?.settings.repeatWholeSentence
+  const shadowingRatio = forThisTab?.settings.shadowingRatio
 
   await chrome.tabs.sendMessage(tabId, {
     type: 'READ_ALOUD_UPDATE',
-    payload: { state, index, total, speed, voice, lang, finished, gap, shadowing, repetition, repeatWholeSentence },
+    payload: { state, index, total, speed, voice, lang, finished, gap, shadowing, repetition, repeatWholeSentence, shadowingRatio },
   }).catch(() => { })
 
   await chrome.runtime.sendMessage({
@@ -1249,6 +1254,29 @@ async function controlReadAloud(
     // awaited — don't mutate/broadcast a session that's no longer live.
     if (activeSession !== session) return { ok: false }
     settings.readAloud = { ...settings.readAloud, repetition: count }
+    await saveSettings(settings)
+    if (activeSession !== session) return { ok: false }
+
+    // Reflect the new value in the mini-player without disturbing playback.
+    await broadcastReadAloudState(tabId, session.state, session.currentIndex, false, session.inGap)
+    return { ok: true }
+  }
+
+  if (action === 'setShadowingRatio') {
+    // Mirrors setRepetition above: takes effect from the NEXT gap (no re-arm of
+    // whatever gap timer might already be running) and is persisted to stored
+    // settings.
+    const raw = (payload as { ratio?: number }).ratio
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) return { ok: false }
+    const ratio = Math.max(0.5, Math.min(3, raw))
+    const session = activeSession
+    session.settings = { ...session.settings, shadowingRatio: ratio }
+
+    const settings = await getSettings()
+    // A stop (or a new session on another tab) may have landed while we
+    // awaited — don't mutate/broadcast a session that's no longer live.
+    if (activeSession !== session) return { ok: false }
+    settings.readAloud = { ...settings.readAloud, shadowingRatio: ratio }
     await saveSettings(settings)
     if (activeSession !== session) return { ok: false }
 

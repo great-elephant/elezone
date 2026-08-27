@@ -1,4 +1,4 @@
-import { pause, resume, stop, getState, next, prev, seekTo, setSpeed, getSpeed, setVoice, setShadowing, setRepetition, setRepeatWholeSentence } from './readAloud'
+import { pause, resume, stop, getState, next, prev, seekTo, setSpeed, getSpeed, setVoice, setShadowing, setRepetition, setRepeatWholeSentence, setShadowingRatio } from './readAloud'
 import { setFocusMode, isFocusMode } from './readAloudOverlay'
 import { Settings, TtsVoiceInfo } from '../../shared/types'
 
@@ -20,6 +20,9 @@ let shadowBtn: HTMLButtonElement | null = null
 // nested off voiceChip.
 let shadowMenu: HTMLElement | null = null
 let repeatBtn: HTMLButtonElement | null = null
+// Gap-ratio button — only functional while curShadowing is on (the setting is
+// meaningless while shadowing is off).
+let gapRatioBtn: HTMLButtonElement | null = null
 // Secondary controls (voice, shadowing, repeat, speed) live in a "⋯" overflow
 // popover instead of the always-visible player, so the main widget only shows
 // transport controls (prev/play/next), focus mode, + progress at rest.
@@ -31,6 +34,8 @@ let curShadowing = false
 let curRepetition = 1
 // Only meaningful while curShadowing is on — see ReadAloudSettings.repeatWholeSentence.
 let curRepeatWholeSentence = false
+// Only meaningful while curShadowing is on — see ReadAloudSettings.shadowingRatio.
+let curShadowingRatio = 1
 
 // Volume control — lives next to focus mode on the right of the transport row.
 // Unlike speed/shadowing/repetition, volume isn't part of the read-aloud
@@ -47,6 +52,9 @@ let curVolume = 1
 
 // Per-sentence repetition presets shown by the Repeat control (H31).
 const REPEAT_STEPS = [1, 2, 3]
+// Shadowing gap ratio presets shown by the gap-ratio control — mirrors Video
+// Mode's shadowGapFactor range (0.5-3), with 1 (unchanged) as the default step.
+const GAP_RATIO_STEPS = [0.5, 1, 1.5, 2, 3]
 
 // Finished card (F22) — a separate lightweight host so it doesn't entangle the
 // player refs; shown when reading ends naturally.
@@ -171,6 +179,8 @@ const WIDGET_CSS = `
     justify-content: center;
   }
   button:hover { background: #2a2a4a; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button:disabled:hover { background: transparent; }
   button:focus-visible {
     outline: 2px solid #6b8aff;
     outline-offset: 2px;
@@ -729,12 +739,47 @@ function cycleRepeat() {
   refreshRepeatButton()
 }
 
-export function updateWidgetShadowInfo(shadowing: boolean, repetition: number, repeatWholeSentence?: boolean) {
+function refreshGapRatioButton() {
+  if (!gapRatioBtn) return
+  gapRatioBtn.textContent = `⏱ ${curShadowingRatio}×`
+  gapRatioBtn.classList.toggle('active', curShadowingRatio !== 1)
+  // Meaningless while shadowing is off — disable + explain, rather than let a
+  // click silently do nothing (mirrors the disabled-button pattern used
+  // elsewhere in the extension, e.g. dictionary.ts's saveBtn).
+  gapRatioBtn.disabled = !curShadowing
+  const label = curShadowing
+    ? `Shadowing gap ratio ${curShadowingRatio}×`
+    : 'Shadowing gap ratio (turn on shadowing first)'
+  gapRatioBtn.title = curShadowing ? `${label}\nClick to change` : label
+  gapRatioBtn.setAttribute('aria-label', label)
+  gapRatioBtn.setAttribute('aria-disabled', String(!curShadowing))
+}
+
+function cycleGapRatio() {
+  if (!curShadowing) return
+  // Advance to the next preset (wrapping), snapping the current value onto the
+  // nearest step first so an out-of-range value from settings still cycles cleanly.
+  let idx = GAP_RATIO_STEPS.indexOf(curShadowingRatio)
+  if (idx < 0) {
+    let bestDiff = Infinity
+    for (let i = 0; i < GAP_RATIO_STEPS.length; i++) {
+      const d = Math.abs(GAP_RATIO_STEPS[i] - curShadowingRatio)
+      if (d < bestDiff) { bestDiff = d; idx = i }
+    }
+  }
+  curShadowingRatio = GAP_RATIO_STEPS[(idx + 1) % GAP_RATIO_STEPS.length]
+  setShadowingRatio(curShadowingRatio)
+  refreshGapRatioButton()
+}
+
+export function updateWidgetShadowInfo(shadowing: boolean, repetition: number, repeatWholeSentence?: boolean, shadowingRatio?: number) {
   if (typeof shadowing === 'boolean') curShadowing = shadowing
   if (typeof repetition === 'number' && repetition >= 1) curRepetition = Math.round(repetition)
   if (typeof repeatWholeSentence === 'boolean') curRepeatWholeSentence = repeatWholeSentence
+  if (typeof shadowingRatio === 'number' && shadowingRatio > 0) curShadowingRatio = shadowingRatio
   refreshShadowButton()
   refreshRepeatButton()
+  refreshGapRatioButton()
 }
 
 function renderProgress() {
@@ -998,6 +1043,7 @@ function closeOverflowMenu() {
   voiceChip = null
   shadowBtn = null
   repeatBtn = null
+  gapRatioBtn = null
   speedBtn = null
   overflowBtn?.setAttribute('aria-expanded', 'false')
   document.removeEventListener('mousedown', onDocMouseDownForOverflow, { capture: true })
@@ -1028,8 +1074,9 @@ function openOverflowMenu() {
   shadowBtn.setAttribute('aria-expanded', 'false')
   shadowRow.appendChild(shadowBtn)
   repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', cycleRepeat)
+  gapRatioBtn = makeButton('gap-ratio', '⏱ 1×', 'Shadowing gap ratio', cycleGapRatio)
   speedBtn = makeButton('speed', `${getSpeed()}x`, 'Playback speed', cycleSpeed)
-  row.append(shadowRow, repeatBtn, speedBtn)
+  row.append(shadowRow, repeatBtn, gapRatioBtn, speedBtn)
 
   overflowMenu.append(voiceRow, row)
   overflowBtn.parentElement.appendChild(overflowMenu)
@@ -1040,6 +1087,7 @@ function openOverflowMenu() {
   refreshSpeedLabel()
   refreshShadowButton()
   refreshRepeatButton()
+  refreshGapRatioButton()
 }
 
 // ── Volume popover ────────────────────────────────────────────────────────
@@ -1322,7 +1370,7 @@ export function hideWidget() {
   curTotal = 0
   curVoice = ''
   curLang = ''
-  // Note: curShadowing / curRepetition / curRepeatWholeSentence are
+  // Note: curShadowing / curRepetition / curRepeatWholeSentence / curShadowingRatio are
   // intentionally NOT reset here so the next session's mini-player renders
   // the last-used values before the first background broadcast (they're
   // re-seeded from settings on start anyway).

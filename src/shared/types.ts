@@ -68,6 +68,11 @@ export interface ReadAloudSettings {
   // original sentence has been read does it start repeating, and it repeats
   // the FULL sentence (not just the last clause) `repetition` times.
   repeatWholeSentence?: boolean
+  // Multiplier on the estimated shadowing gap length (analogous to Video
+  // Mode's `shadowGapFactor`). Only meaningful when `shadowing` is on.
+  // Default/undefined = 1 = old behaviour (no change to the gap estimate).
+  // Range 0.5-3.
+  shadowingRatio?: number
   // H32 — focus/spotlight mode: dim the rest of the page and highlight the current
   // sentence. Persisted so the choice sticks across sessions.
   focus?: boolean

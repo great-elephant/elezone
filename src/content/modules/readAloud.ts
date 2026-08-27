@@ -40,6 +40,10 @@ let shadowingOn = false
 // Only meaningful when shadowingOn is true — see the field doc on
 // ReadAloudSettings.repeatWholeSentence. Mirrors shadowingOn's lifecycle.
 let repeatWholeSentenceOn = false
+// Multiplier on the estimated shadowing gap length — see the field doc on
+// ReadAloudSettings.shadowingRatio. Only meaningful when shadowingOn is true;
+// mirrors shadowingOn's lifecycle. Default 1 = old behaviour.
+let shadowingRatioOn = 1
 // IPA under every word of the sentence being spoken. Unlike shadowing this
 // never needs a session rebuild — it's purely local DOM rendering, so
 // toggling it just flips the flag and the next applySentenceIndex() call
@@ -95,8 +99,8 @@ export function setOnShadowInfoChange(cb: () => void) {
   onShadowInfoChange = cb
 }
 
-export function getShadowInfo(): { shadowing: boolean; repetition: number; inGap: boolean; repeatWholeSentence: boolean } {
-  return { shadowing: shadowingOn, repetition: currentRepetition, inGap: inShadowGap, repeatWholeSentence: repeatWholeSentenceOn }
+export function getShadowInfo(): { shadowing: boolean; repetition: number; inGap: boolean; repeatWholeSentence: boolean; shadowingRatio: number } {
+  return { shadowing: shadowingOn, repetition: currentRepetition, inGap: inShadowGap, repeatWholeSentence: repeatWholeSentenceOn, shadowingRatio: shadowingRatioOn }
 }
 
 // Whether the most recent idle transition was a natural finish (F22). Only
@@ -285,6 +289,7 @@ async function beginSession(
   currentRepetition = Math.max(1, Math.round(settings.repetition || 1))
   shadowingOn = settings.shadowing === true
   repeatWholeSentenceOn = settings.repeatWholeSentence === true
+  shadowingRatioOn = settings.shadowingRatio ?? 1
   phoneticsOn = settings.showPhonetics === true
   translationMode = translationModeIn
   // Best guess until the background's own detectLanguage broadcast corrects
@@ -661,6 +666,18 @@ export function setRepeatWholeSentence(on: boolean) {
   chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setRepeatWholeSentence', on } }).catch(() => {})
 }
 
+// Set the shadowing gap ratio live — only meaningful while shadowing is also
+// on. Mirrors setRepetition()/setRepeatWholeSentence(): takes effect from the
+// next gap (no re-arm of a gap timer already in flight).
+export function setShadowingRatio(ratio: number) {
+  const clamped = Math.max(0.5, Math.min(3, ratio))
+  shadowingRatioOn = clamped
+  if (sessionSettings) sessionSettings = { ...sessionSettings, shadowingRatio: clamped }
+  onShadowInfoChange?.()
+  if (state === 'idle') return
+  chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'setShadowingRatio', ratio: clamped } }).catch(() => {})
+}
+
 export function getProgress(): { index: number; total: number } {
   return { index: currentIndex, total: sentences.length }
 }
@@ -676,6 +693,7 @@ export function syncRemoteState(
   shadowing?: boolean,
   repetition?: number,
   repeatWholeSentence?: boolean,
+  shadowingRatio?: number,
 ) {
   // Only meaningful on an idle transition; reset otherwise so a later plain stop
   // can't inherit a stale "finished" flag.
@@ -700,6 +718,10 @@ export function syncRemoteState(
   }
   if (typeof repeatWholeSentence === 'boolean' && repeatWholeSentence !== repeatWholeSentenceOn) {
     repeatWholeSentenceOn = repeatWholeSentence
+    shadowInfoChanged = true
+  }
+  if (typeof shadowingRatio === 'number' && Number.isFinite(shadowingRatio) && shadowingRatio !== shadowingRatioOn) {
+    shadowingRatioOn = shadowingRatio
     shadowInfoChanged = true
   }
   // The background reports the voice/language it actually resolved (incl. an
