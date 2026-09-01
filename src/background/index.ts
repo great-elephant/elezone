@@ -1041,6 +1041,18 @@ async function speakCurrentSentence(token: number) {
   // Real speech is (re)starting, so we're no longer in an intentional gap.
   session.inGap = false
   session.state = 'playing'
+  // Force a clean engine reset before every speak() call, not just the
+  // resume()/setVoice() ones that already did this. Without it, an engine
+  // that hasn't fully released the previous utterance yet starts generating
+  // audio for the new one mid-teardown and drops its first word — inaudible
+  // on an article's very first sentence (nothing preceded it to race with),
+  // but exactly what H29 shadowing/H31 repetition expose: they re-speak the
+  // *same* text right after itself, so the listener has just heard the
+  // correct version and immediately notices the clipped repeat. Unlike
+  // pause()/resume()'s stop() calls, this one targets an utterance that has
+  // already fully ended, so it doesn't need suppressStopUntil's guard against
+  // a stray interrupted/cancelled event.
+  chrome.tts.stop()
   // Give the watchdog a grace window: some engines (esp. remote voices) take a
   // moment after this call before isSpeaking() actually reports true.
   session.speakStartedAt = Date.now()
