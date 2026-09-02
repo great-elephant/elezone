@@ -249,9 +249,7 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
                   onChange={e => set('srsNotifications', 'activeHoursStart', parseInt(e.target.value))}
                 >
                   {Array.from({ length: 24 }).map((_, i) => (
-                    <option key={i} value={i} disabled={i >= (settings.srsNotifications?.activeHoursEnd ?? 22)}>
-                      {String(i).padStart(2, '0')}:00
-                    </option>
+                    <option key={i} value={i}>{String(i).padStart(2, '0')}:00</option>
                   ))}
                 </select>
                 <span style={{ color: '#8888aa' }}>to</span>
@@ -261,12 +259,20 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
                   onChange={e => set('srsNotifications', 'activeHoursEnd', parseInt(e.target.value))}
                 >
                   {Array.from({ length: 24 }).map((_, i) => (
-                    <option key={i} value={i} disabled={i <= (settings.srsNotifications?.activeHoursStart ?? 8)}>
-                      {String(i).padStart(2, '0')}:00
-                    </option>
+                    <option key={i} value={i}>{String(i).padStart(2, '0')}:00</option>
                   ))}
                 </select>
               </div>
+              {/* End hour picked before start hour means the window wraps past
+                  midnight (e.g. 08:00 to 02:00 = active 8am through 2am, quiet
+                  2am-8am) — the background check (isWithinActiveHours) already
+                  handles this, but it's worth spelling out since it's not the
+                  obvious reading of two plain hour dropdowns. */}
+              {(settings.srsNotifications?.activeHoursEnd ?? 22) <= (settings.srsNotifications?.activeHoursStart ?? 8) && (
+                <div style={{ fontSize: 12, color: '#8888aa', marginTop: 4 }}>
+                  Wraps past midnight — active until {String(settings.srsNotifications?.activeHoursEnd ?? 22).padStart(2, '0')}:00 the next morning.
+                </div>
+              )}
             </Field>
           </>
         )}

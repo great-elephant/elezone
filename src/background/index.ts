@@ -163,6 +163,21 @@ async function setupSrsAlarm() {
   }
 }
 
+// Active-hours window check, shared by the SRS due-notification tick and the
+// slacking "roast" notification below — both gate on the same
+// srsNotifications.activeHoursStart/End setting. Handles a window that wraps
+// past midnight (e.g. start=8, end=2 meaning "8am to 2am", active overnight
+// until 2am then quiet until 8am) as well as a same-day window (start=8,
+// end=22). A naive `currentHour >= start && currentHour < end` only works
+// for the same-day case — for a wrapped window every hour of the day falls
+// outside that range, which would silence notifications entirely.
+function isWithinActiveHours(startHour: number, endHour: number, currentHour: number): boolean {
+  if (startHour === endHour) return true // degenerate "0-length" window reads as always-active, not never
+  return startHour < endHour
+    ? (currentHour >= startHour && currentHour < endHour)
+    : (currentHour >= startHour || currentHour < endHour)
+}
+
 // Result surfaced back to the "Test Notification" button so a no-op isn't
 // silent — previously this function just `return`ed on every skip path with
 // no way for the caller to tell "a notification was created" apart from
@@ -182,7 +197,7 @@ async function triggerSrsNotification(testMode = false): Promise<SrsNotification
     const startHour = settings.srsNotifications?.activeHoursStart ?? 8
     const endHour = settings.srsNotifications?.activeHoursEnd ?? 22
     const currentHour = new Date().getHours()
-    if (currentHour < startHour || currentHour >= endHour) {
+    if (!isWithinActiveHours(startHour, endHour, currentHour)) {
       return { created: false, reason: 'outside-active-hours' }
     }
   }
@@ -529,7 +544,7 @@ async function evaluateSlackingState(testMode = false) {
     const startHour = settings.srsNotifications?.activeHoursStart ?? 8
     const endHour = settings.srsNotifications?.activeHoursEnd ?? 22
     const currentHour = new Date().getHours()
-    const isAwakeTime = currentHour >= startHour && currentHour < endHour
+    const isAwakeTime = isWithinActiveHours(startHour, endHour, currentHour)
 
     if (now - last_roast_time > HOURS_48 && isAwakeTime) {
       chrome.notifications.create(`roast-${now}`, {
