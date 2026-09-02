@@ -21,7 +21,12 @@ export interface SavedItem {
   prefix: string        // For anchoring
   suffix: string        // For anchoring
   occurrenceIndex: number // For anchoring
-  color: BookmarkColor  // Used for semantics/filtering
+  // Deck color — any CSS color value (a freeform hex from an `<input
+  // type="color">` picker, or one of the legacy `BookmarkColor` names like
+  // 'red'/'yellow'/... — both work directly as a CSS value, so old items
+  // never needed migrating when this widened from the fixed 10-name union).
+  // Used as the deck's identity: items sharing a color are the same deck.
+  color: string
   createdAt: number
   updatedAt?: number
   orphaned: boolean
@@ -32,11 +37,25 @@ export interface SavedItem {
   phonetics?: string
   translation?: string
 
-  // SRS fields
+  // SRS fields (SM-2 — kept; StudyUI now schedules with FSRS below, but a
+  // card reviewed before this switch keeps its SM-2 history instead of
+  // losing it, and notifications fall back to `nextReview` for any item
+  // FSRS hasn't touched yet — see `due` below).
   nextReview?: number
   interval?: number
   ease?: number
   repetitions?: number
+
+  // FSRS fields — written by `updateFsrsMetrics()` (shared/library.ts),
+  // read by StudyUI's scheduler and the srs-tick notification alarm
+  // (background/index.ts). `due` is the field that actually matters for
+  // "is this due" once a card has been through FSRS at least once — undefined
+  // until then, so callers should read `item.due ?? item.nextReview`.
+  stability?: number
+  difficulty?: number
+  due?: number
+  state?: 'new' | 'learning' | 'review' | 'relearning'
+  lastReview?: number
 
   // Video context (optional, only present when saved from a video subtitle)
   videoTimestamp?: number  // seconds into the video when the word appeared
@@ -243,10 +262,13 @@ export interface Settings {
   sync: { enabled: boolean; debounceSeconds: number }
   gamification: GamificationSettings
   ocr: OcrSettings
-  // User-given names for each bookmark color, turning colors into named decks.
-  deckLabels?: Partial<Record<BookmarkColor, string>>
-  // User-defined display order for deck colors (persisted as an array of BookmarkColor).
-  deckOrder?: BookmarkColor[]
+  // User-given names for each deck color, turning colors into named decks.
+  // Keyed by the same freeform color string as `SavedItem.color` — not just
+  // the 10 `BookmarkColor` presets, so a custom hex deck can be named too.
+  deckLabels?: Record<string, string>
+  // User-defined display order for deck colors (persisted as an array of
+  // color strings — presets and custom hex alike).
+  deckOrder?: string[]
 
   srsNotifications?: {
     enabled: boolean;
@@ -254,6 +276,17 @@ export interface Settings {
     activeHoursStart: number;
     activeHoursEnd: number;
   }
+  // Opt-out lists for the background SRS notification's due-item candidate
+  // pool — NOT for the in-app "Due today" stat or "Study now" (both still
+  // count everything, muted or not; muting only means "don't interrupt me
+  // about this", not "hide it from me when I look myself"). An item is only
+  // notification-eligible if BOTH its deck AND its source are absent from
+  // these lists. Each list has two ways to edit it: an individual per-row
+  // bell icon (deck or source), or the bulk "Focus" action (tick several
+  // rows, then set the list to everything EXCEPT the ticked ones) — both
+  // just write to the same list, there's no separate "focus mode" concept.
+  mutedNotificationDecks?: string[]
+  mutedNotificationSources?: string[]
   roast?: RoastSettings
   pomodoro?: PomodoroSettings
   tasks?: TodoTask[]
@@ -261,7 +294,8 @@ export interface Settings {
   dailyTasks?: TodoTask[]
   videoMode?: VideoModeSettings
   // Deck colour the learner last saved with, reused as the default next time.
-  lastBookmarkColor?: BookmarkColor
+  // Freeform (same string as `SavedItem.color`), not just the 10 presets.
+  lastBookmarkColor?: string
 }
 
 /**
@@ -290,6 +324,8 @@ const SETTINGS_SECTION_KEYS: Record<SettingsSection, true> = {
   deckLabels: true,
   deckOrder: true,
   srsNotifications: true,
+  mutedNotificationDecks: true,
+  mutedNotificationSources: true,
   roast: true,
   pomodoro: true,
   tasks: true,
@@ -424,6 +460,11 @@ export const DEFAULT_SETTINGS: Settings = {
   dailyTasks: []
 }
 
+/**
+ * Old preset deck colors, still valid CSS keywords but not the curated softer
+ * palette this app uses. A raw 'red' would still render something, but this
+ * lookup keeps the nicer shade for anyone still on an un-customized preset.
+ */
 export const BOOKMARK_COLORS: Record<BookmarkColor, string> = {
   red: '#ff6b6b',
   yellow: '#ffd93d',
@@ -436,6 +477,33 @@ export const BOOKMARK_COLORS: Record<BookmarkColor, string> = {
   teal: '#6bffd9',
   gray: '#c0c0c0',
 }
+
+/**
+ * Resolves a deck/item color string to an actual CSS value. `SavedItem.color`
+ * and `Settings.deckLabels`/`deckOrder` are freeform strings now (any hex
+ * from a color-picker), but the 10 legacy `BookmarkColor` names are still
+ * valid literal CSS keywords on their own — so a raw un-migrated 'red' would
+ * still render *something*, just CSS's saturated primary red instead of this
+ * app's curated softer palette. Looking it up here keeps the nicer shade for
+ * anyone still on an un-customized preset, while passing an actual custom hex
+ * straight through unchanged.
+ */
+export function colorHex(color: string): string {
+  return (BOOKMARK_COLORS as Record<string, string>)[color] || color
+}
+
+/**
+ * Reserved sentinel color for the "Uncategorized" bucket — not a real preset
+ * or user-chosen deck. Items land here (via `deckOrder`/item.color reassignment)
+ * when their deck is deleted; it can't be renamed and has no `deckLabels`
+ * entry. Any UI that renders a deck/color's display name (deck lists, the
+ * save-text deck picker, context menu, etc.) must special-case this value —
+ * otherwise it falls through to the raw color string, e.g. showing "#5a5a8a"
+ * instead of "Uncategorized". Exported here (rather than kept private to
+ * Library.tsx, where it originated) so every consumer of `Settings.deckOrder`
+ * shares the same sentinel and label logic.
+ */
+export const UNCATEGORIZED_COLOR = '#5a5a8a'
 
 export type MessageType =
   | 'SAVE_ITEM'

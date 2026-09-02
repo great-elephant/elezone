@@ -4,7 +4,8 @@
 // Clicking a word opens the dictionary popup.
 
 import type { SubtitleCue } from './subtitleInterceptor'
-import type { SavedItem, BookmarkColor } from '../../../shared/types'
+import type { SavedItem } from '../../../shared/types'
+import { colorHex } from '../../../shared/types'
 import { translationFor, nativeTranslationFor } from './cueTranslation'
 import { dueWordSet } from './subtitleCard'
 import type { SeekTarget } from './subtitleCard'
@@ -21,7 +22,7 @@ let _cueEls: HTMLElement[] = []
 let _onLookup: LookupCallback | null = null
 let _onSave: SaveCallback | null = null
 let _isCollapsed = false
-let _savedColorsMap: Map<string, BookmarkColor> = new Map()
+let _savedColorsMap: Map<string, string> = new Map()
 let _savedItemsMap: Map<string, SavedItem> = new Map()
 let _dueWords: Set<string> = new Set()
 let _showTranslation = true
@@ -42,12 +43,6 @@ let _activeIndex = -1
 // immediately scrolls the list out from under them. Back off briefly after any
 // manual scroll.
 let _userScrolledAt = 0
-
-const BOOKMARK_COLOR_HEX: Record<string, string> = {
-  red: '#ff6b6b', yellow: '#ffd93d', cyan: '#6bcfff', green: '#6bff9e',
-  blue: '#6b9eff', orange: '#ffb36b', purple: '#c06bff', pink: '#ff6bc0',
-  teal: '#6bffd9', gray: '#c0c0c0',
-}
 
 function formatTs(seconds: number): string {
   const h = Math.floor(seconds / 3600)
@@ -312,7 +307,7 @@ function applySavedState(span: HTMLElement, clean: string): void {
   span.onmouseleave = null
 
   if (!color) return
-  span.style.setProperty('--wc', BOOKMARK_COLOR_HEX[color] ?? '#ffd93d')
+  span.style.setProperty('--wc', colorHex(color))
   span.title = _dueWords.has(key) ? 'Due for review' : ''
   span.onmouseenter = () => {
     const item = _savedItemsMap.get(key)

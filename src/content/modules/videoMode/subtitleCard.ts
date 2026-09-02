@@ -13,7 +13,8 @@
 // settings live at the foot of the dialogue sidebar, where they hold still.
 
 import type { SubtitleCue } from './subtitleInterceptor'
-import type { SavedItem, BookmarkColor } from '../../../shared/types'
+import type { SavedItem } from '../../../shared/types'
+import { colorHex } from '../../../shared/types'
 import { translationFor } from './cueTranslation'
 import { phoneticsForWords } from '../wordPhonetics'
 import { showSavedWordTooltip, scheduleHideSavedWordTooltip } from './savedWordTooltip'
@@ -45,11 +46,6 @@ export function dueWordSet(items: SavedItem[]): Set<string> {
   )
 }
 
-const BOOKMARK_COLOR_HEX: Record<string, string> = {
-  red: '#ff6b6b', yellow: '#ffd93d', cyan: '#6bcfff', green: '#6bff9e',
-  blue: '#6b9eff', orange: '#ffb36b', purple: '#c06bff', pink: '#ff6bc0',
-  teal: '#6bffd9', gray: '#c0c0c0',
-}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -72,7 +68,7 @@ let _phoneticsUnderWords = false
 // French or Japanese subtitle line never fires a lookup that would just come
 // back empty for every word.
 let _learningLang = 'en'
-let _savedColorsMap: Map<string, BookmarkColor> = new Map()
+let _savedColorsMap: Map<string, string> = new Map()
 // Full items, for the hover tooltip's content (translation/phonetics) — the
 // colour map above only carries what the underline needs.
 let _savedItemsMap: Map<string, SavedItem> = new Map()
@@ -510,7 +506,7 @@ function buildWordUnit(token: string, cue: SubtitleCue): HTMLElement {
   const savedColor = _savedColorsMap.get(key)
   if (savedColor) {
     wordSpan.classList.add('saved')
-    wordSpan.style.setProperty('--save-color', BOOKMARK_COLOR_HEX[savedColor] ?? '#ffd93d')
+    wordSpan.style.setProperty('--save-color', colorHex(savedColor))
     if (_dueWords.has(key)) {
       wordSpan.classList.add('due')
       unit.title = 'Due for review'

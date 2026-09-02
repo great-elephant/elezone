@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Settings, BookmarkColor, BOOKMARK_COLORS, DEFAULT_SETTINGS, PhoneticsSource, PhoneticsSourceSetting } from '../shared/types'
+import { Settings, DEFAULT_SETTINGS, PhoneticsSource, PhoneticsSourceSetting } from '../shared/types'
 import { RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
 import {
   DndContext,
@@ -18,11 +18,6 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-
-const ALL_COLORS: BookmarkColor[] = [
-  'red', 'yellow', 'cyan', 'green', 'blue',
-  'orange', 'purple', 'pink', 'teal', 'gray'
-]
 
 const TEST_TEXTS: Record<string, string> = {
   en: "The quick brown fox jumps over the lazy dog.",
@@ -61,10 +56,6 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
       focusBreatheRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
   }, [initialExpandedSection])
-
-  const deckOrder: BookmarkColor[] = settings.deckOrder?.length === ALL_COLORS.length
-    ? settings.deckOrder
-    : ALL_COLORS
 
   const phoneticsSourceOrder: PhoneticsSourceSetting[] = settings.translation.phoneticsSourceOrder?.length
     ? settings.translation.phoneticsSourceOrder
@@ -139,22 +130,6 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
         setTestingVoice(null)
       }
     })
-  }
-
-  function setDeckLabel(color: BookmarkColor, name: string) {
-    const labels = { ...(settings.deckLabels || {}) }
-    if (name.trim()) labels[color] = name
-    else delete labels[color]
-    onChange({ ...settings, deckLabels: labels, updatedAt: Date.now() })
-  }
-
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
-    const from = deckOrder.indexOf(active.id as BookmarkColor)
-    const to = deckOrder.indexOf(over.id as BookmarkColor)
-    const next = arrayMove(deckOrder, from, to)
-    onChange({ ...settings, deckOrder: next, updatedAt: Date.now() })
   }
 
   function handlePhoneticsDragEnd(event: DragEndEvent) {
@@ -298,32 +273,34 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
 
         <button
           style={{ ...styles.testBtn, marginTop: 8, alignSelf: 'flex-start' }}
-          onClick={() => chrome.runtime.sendMessage({ type: 'TEST_NOTIFICATION' })}
+          onClick={async () => {
+            // Previously fire-and-forget — every skip path inside
+            // triggerSrsNotification (no due items, everything muted, already
+            // mid-review, etc.) looked identical to "nothing happened, the
+            // button is broken", with zero feedback either way.
+            const result = await chrome.runtime.sendMessage({ type: 'TEST_NOTIFICATION' })
+            if (result?.created) return
+            // 'disabled'/'outside-active-hours' can't actually come back here
+            // — the test button always bypasses both gates — but the reason
+            // type is shared with the real background tick, which does hit them.
+            const messages: Record<string, string> = {
+              'no-due-items': 'No saved items to notify about — save some words first.',
+              'all-muted': "Every deck/source is muted from notifications (see the 🎯 Focus controls in Library) — that's why nothing showed up.",
+              'already-mid-review': 'The next due item already has an unanswered notification open.',
+            }
+            window.alert(messages[result?.reason] || 'No notification was created.')
+          }}
         >
           🔔 Test Notification
         </button>
       </CollapsibleSection>
 
-      <CollapsibleSection title="Decks">
-        <p style={{ fontSize: 13, color: '#8888aa', margin: '0 0 4px' }}>
-          Give each color a name to turn it into a deck. Drag to reorder — the order applies
-          to the Library filter chips and the right-click save menu.
-        </p>
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-          <SortableContext items={deckOrder} strategy={verticalListSortingStrategy}>
-            <div style={styles.deckList}>
-              {deckOrder.map(color => (
-                <SortableDeckItem
-                  key={color}
-                  color={color}
-                  label={settings.deckLabels?.[color] ?? ''}
-                  onLabelChange={name => setDeckLabel(color, name)}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
-      </CollapsibleSection>
+      {/* Deck naming/reordering now lives in the Library tab itself, on the
+          real Deck entities (create, rename, drag-reorder — same order the
+          right-click save menu's top decks read from). This used to be a
+          fixed-10-color naming/ordering table (`Settings.deckLabels`/
+          `deckOrder`) — moved out, not duplicated, so there's exactly one
+          place decks are managed. */}
 
       <CollapsibleSection title="Read Aloud">
 
@@ -896,62 +873,6 @@ const aiStyles: Record<string, React.CSSProperties> = {
   },
 }
 
-function SortableDeckItem({
-  color,
-  label,
-  onLabelChange,
-}: {
-  color: BookmarkColor
-  label: string
-  onLabelChange: (name: string) => void
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: color })
-
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-    padding: '8px 10px',
-    borderRadius: 8,
-    background: isDragging ? '#2a2a4a' : '#0f0f1a',
-    border: isDragging ? '1px solid #6b8aff' : '1px solid #2a2a4a',
-    boxShadow: isDragging ? '0 8px 20px rgba(0,0,0,0.5)' : 'none',
-    zIndex: isDragging ? 10 : undefined,
-    position: 'relative',
-  }
-
-  return (
-    <div ref={setNodeRef} style={style}>
-      <span
-        {...attributes}
-        {...listeners}
-        style={itemStyles.handle}
-        title="Drag to reorder"
-        aria-label={`Drag to reorder ${color} deck`}
-      >
-        ⠿
-      </span>
-      <span style={{ ...itemStyles.swatch, background: BOOKMARK_COLORS[color] }} />
-      <input
-        type="text"
-        value={label}
-        placeholder={color}
-        onChange={e => onLabelChange(e.target.value)}
-        style={itemStyles.input}
-      />
-    </div>
-  )
-}
-
 const PHONETICS_SOURCE_LABELS: Record<PhoneticsSource, string> = {
   dictionaryapi: '📖 Free Dictionary API · real dictionary IPA',
   'google-rm': '🌐 Google romanization · approximate, not true IPA',
@@ -1025,22 +946,6 @@ const itemStyles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     lineHeight: 1,
     touchAction: 'none',
-  },
-  swatch: {
-    width: 14,
-    height: 14,
-    borderRadius: '50%',
-    flexShrink: 0,
-  },
-  input: {
-    flex: 1,
-    minWidth: 0,
-    background: 'transparent',
-    border: 'none',
-    color: '#e0e0e0',
-    padding: '2px 0',
-    fontSize: 13,
-    outline: 'none',
   },
 }
 

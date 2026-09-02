@@ -141,13 +141,14 @@ export default function Options() {
     setItems((prev) => prev.filter((i) => i.id !== id));
   }
 
-  async function updateItemColor(id: string, color: BookmarkColor) {
+  async function updateItemColor(id: string, color: string) {
     const item = items.find((i) => i.id === id);
     if (!item) return;
     const updated = { ...item, color };
     await chrome.runtime.sendMessage({ type: "UPDATE_ITEM", payload: updated });
     setItems((prev) => prev.map((i) => (i.id === id ? updated : i)));
   }
+
 
   return (
     <div style={styles.root}>
@@ -156,7 +157,25 @@ export default function Options() {
           background-color: #0d0d1a !important;
           background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1.5px, transparent 1.5px) !important;
           background-size: 24px 24px !important;
+        }
+        /* Baseline: always show the page scrollbar so switching between tabs
+           of differing height (Dashboard/Library/Settings) never shifts. */
+        html {
           overflow-y: scroll !important;
+        }
+        /* Drawer/modal scroll lock: actually hide the (now-dead, can't-scroll)
+           outer scrollbar instead of leaving it on screen next to the
+           drawer's own — a dead scrollbar rendered right beside a live one
+           reads as "two scrollbars". Toggled via
+           document.documentElement.setAttribute('data-scroll-lock', ...).
+           Higher specificity than the bare "html" rule above (both
+           !important) so this wins while locked. The width this reclaims is
+           compensated by an inline padding-right on body (computed from the
+           real scrollbar width in JS), so hiding it doesn't shift layout —
+           this replaces an earlier attempt with scrollbar-gutter: stable,
+           which reserved the space but left it as a dead blank strip. */
+        html[data-scroll-lock="true"] {
+          overflow-y: hidden !important;
         }
       `}</style>
       <header style={styles.header}>

@@ -1,4 +1,7 @@
 import { Settings, DEFAULT_SETTINGS, SavedItem, ActivityLog, SettingsSection, SETTINGS_SECTIONS } from './types'
+import { createEmptyCard, fsrs, generatorParameters, Rating, State, type Card, type Grade } from 'ts-fsrs'
+export { Rating } from 'ts-fsrs'
+export type { Grade } from 'ts-fsrs'
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
@@ -272,13 +275,73 @@ export async function getRawItems(): Promise<SavedItem[]> {
 
 export async function getAllItems(): Promise<SavedItem[]> {
   const raw = await getRawItems()
-  return raw.filter(i => !i.deleted).map(i => ({
-    ...i,
-    color: i.color || 'red'
-  }))
+  // Retroactive repair, persisted (not just backfilled on read like createdAt
+  // below): the same old videoMode bug that left createdAt undefined also
+  // left `id` undefined on those items. An undefined id is worse than an
+  // undefined createdAt — every notification's id is `srs-q-${item.id}`, so
+  // a missing id serializes as the literal string "srs-q-undefined". Its
+  // `due` reads as 0 (via the `?? 0` fallback everywhere due-ness is
+  // checked), the smallest possible timestamp, so it wins "which item is
+  // most due" on every single tick — the notification never rotates to a
+  // different word. Worse, clicking "Show Answer" extracts the id back out
+  // of the notification id via string replace, getting the *string*
+  // "undefined" — which never matches the real item's *value* undefined, so
+  // the lookup silently fails and no follow-up "Answer" notification is ever
+  // created. A computed-on-read default (like createdAt's) isn't enough
+  // here: every other piece of code identifies an item BY id (saveItem's
+  // update-vs-insert check, DELETE_ITEM, the notification id itself), so a
+  // fresh random id generated on every read instead of persisted would
+  // itself keep breaking those lookups. Fix and write back once.
+  let repaired = false
+  for (const i of raw as any[]) {
+    if (!i.id) {
+      i.id = crypto.randomUUID()
+      repaired = true
+    }
+  }
+  if (repaired) {
+    await chrome.storage.local.set({ [LIBRARY_KEY]: raw })
+    cachedLibrary = raw
+  }
+  return raw
+    .filter(i => !i.deleted)
+    // Defensive: an earlier (never-shipped, now-reverted) experimental
+    // design briefly stored Group/Deck-shaped entries inside this same
+    // `elezone_library` array (`isGroup`/`isDeck` + placeholder
+    // `text`/`translation`). This array should only ever hold real
+    // SavedItems — but a browser that ran that old code still has those
+    // stray entries sitting in storage, and they'd otherwise render as
+    // bogus "saved words". Filter them out regardless of how they got there.
+    .filter((i: any) => !i.isGroup && !i.isDeck)
+    .map(i => ({
+      ...i,
+      color: i.color || 'red',
+      // Defensive: videoMode's saveWordFromSubtitle used to send a SAVE_ITEM
+      // payload with no `createdAt` at all (fixed at the source below, but
+      // storage that already went through the old code has items with
+      // createdAt: undefined sitting in it forever otherwise). A single item
+      // with a non-numeric createdAt turns Math.max/subtraction-based sort
+      // comparators (Library.tsx's "By Source" newest/oldest sort) into NaN,
+      // which can corrupt the ordering of the WHOLE list, not just that one
+      // item — Array.sort's behavior is unspecified once the comparator ever
+      // returns NaN. updatedAt is always set by saveItem, even historically,
+      // so it's a real timestamp to fall back to instead of "now" or 0.
+      createdAt: (typeof i.createdAt === 'number' && !isNaN(i.createdAt)) ? i.createdAt : (i.updatedAt || 0),
+    }))
 }
 
 export async function saveItem(item: SavedItem): Promise<void> {
+  // Defensive: at least one caller (videoMode's saveWordFromSubtitle) used to
+  // send a payload missing `id`/`createdAt` entirely, expecting this function
+  // to fill them in — it never did, so those items got stored with `id`/
+  // `createdAt` literally undefined. Undefined `id` means every subsequent
+  // such save's `findIndex` below matches and silently overwrites the
+  // previous one instead of adding a new item; undefined `createdAt` poisons
+  // any Math.max/subtraction-based sort (see getAllItems). Filling both in
+  // here means no caller can ever corrupt storage this way again, regardless
+  // of what it forgets to set.
+  item.id ||= crypto.randomUUID()
+  item.createdAt ||= Date.now()
   item.updatedAt = Date.now()
   const library = await getRawItems()
   const existingIdx = library.findIndex(i => i.id === item.id)
@@ -368,6 +431,76 @@ export function updateSrsMetrics(item: SavedItem, passed: boolean): SavedItem {
     repetitions,
     nextReview
   }
+}
+
+// ── FSRS ─────────────────────────────────────────────────────────────────────
+// Replaces `updateSrsMetrics` (SM-2, above) as the scheduler StudyUI actually
+// calls. `updateSrsMetrics` and its fields (`ease`/`interval`/`nextReview`)
+// are kept, not deleted, so a card reviewed before this switch keeps its
+// history instead of losing it — but nothing writes to them anymore.
+const fsrsScheduler = fsrs(generatorParameters())
+
+const FSRS_STATE_TO_ITEM: Record<State, NonNullable<SavedItem['state']>> = {
+  [State.New]: 'new',
+  [State.Learning]: 'learning',
+  [State.Review]: 'review',
+  [State.Relearning]: 'relearning',
+}
+const ITEM_STATE_TO_FSRS: Record<NonNullable<SavedItem['state']>, State> = {
+  new: State.New,
+  learning: State.Learning,
+  review: State.Review,
+  relearning: State.Relearning,
+}
+
+function itemToFsrsCard(item: SavedItem): Card {
+  // No `due`/`state` yet means this item has never been through FSRS (either
+  // brand new, or it only has SM-2 history from before this switch) — start
+  // it as a fresh card rather than guessing at a conversion from SM-2 fields.
+  if (item.due == null || !item.state) {
+    return createEmptyCard(item.lastReview ? new Date(item.lastReview) : new Date())
+  }
+  return {
+    due: new Date(item.due),
+    stability: item.stability ?? 0,
+    difficulty: item.difficulty ?? 0,
+    elapsed_days: 0,
+    scheduled_days: 0,
+    learning_steps: 0,
+    reps: item.repetitions ?? 0,
+    lapses: 0,
+    state: ITEM_STATE_TO_FSRS[item.state] ?? State.New,
+    last_review: item.lastReview ? new Date(item.lastReview) : undefined,
+  }
+}
+
+export function updateFsrsMetrics(item: SavedItem, grade: Grade): SavedItem {
+  const card = itemToFsrsCard(item)
+  const { card: next } = fsrsScheduler.next(card, new Date(), grade)
+  return {
+    ...item,
+    stability: next.stability,
+    difficulty: next.difficulty,
+    due: next.due.getTime(),
+    state: FSRS_STATE_TO_ITEM[next.state],
+    lastReview: Date.now(),
+    repetitions: next.reps,
+  }
+}
+
+// Non-committing preview of what each of the 4 grades WOULD schedule this
+// card to (the "10m / 1d / 4d / 9d" hints under Again/Hard/Good/Easy buttons
+// in the study UI) — doesn't touch storage, just runs the scheduler forward
+// for every grade at once via ts-fsrs's own `repeat`.
+export function previewFsrsDue(item: SavedItem): Record<Grade, Date> {
+  const card = itemToFsrsCard(item)
+  const preview = fsrsScheduler.repeat(card, new Date())
+  return {
+    [Rating.Again]: preview[Rating.Again].card.due,
+    [Rating.Hard]: preview[Rating.Hard].card.due,
+    [Rating.Good]: preview[Rating.Good].card.due,
+    [Rating.Easy]: preview[Rating.Easy].card.due,
+  } as Record<Grade, Date>
 }
 
 // ── Google Drive Sync ────────────────────────────────────────────────────────

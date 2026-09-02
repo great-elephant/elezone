@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
-import { SavedItem, BOOKMARK_COLORS, Settings, StudyMode } from '../shared/types'
-import { updateSrsMetrics } from '../shared/library'
+import { SavedItem, Settings, StudyMode, colorHex } from '../shared/types'
+import { updateFsrsMetrics, previewFsrsDue, Rating, type Grade } from '../shared/library'
 
 interface StudyUIProps {
   items: SavedItem[]
@@ -75,6 +75,15 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     })
   }, [rewardNonce])
 
+  // Non-committing "what would each grade schedule this to" preview, shown as
+  // a small "in 3d" hint under the Again/Hard/Good/Easy buttons — the same
+  // reassurance Anki-style apps give that the buttons actually drive the
+  // schedule, not just a cosmetic "how did that feel" prompt.
+  const gradePreview = useMemo(
+    () => (activeItem ? previewFsrsDue(activeItem) : null),
+    [activeItem]
+  )
+
   // Track the highest combo reached this session for the summary "Best streak".
   useEffect(() => {
     setMaxCombo(m => (combo > m ? combo : m))
@@ -137,6 +146,20 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     return () => clearTimeout(timer)
   }, [verificationPassed, showAnswer, wrongOptions.size, activeItem, showSessionSummary])
 
+  // "in 10m" / "in 3d" / "in 2mo" — short relative label for a grade preview.
+  function formatDueIn(due: Date): string {
+    const ms = due.getTime() - Date.now()
+    const minutes = Math.round(ms / 60000)
+    if (minutes < 60) return `${Math.max(1, minutes)}m`
+    const hours = Math.round(minutes / 60)
+    if (hours < 24) return `${hours}h`
+    const days = Math.round(hours / 24)
+    if (days < 30) return `${days}d`
+    const months = Math.round(days / 30)
+    if (months < 12) return `${months}mo`
+    return `${Math.round(months / 12)}y`
+  }
+
   function speakText(text: string, lang?: string) {
     chrome.tts.stop()
     if (settings?.readAloud) {
@@ -172,18 +195,23 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     setMcOptions(options)
   }
 
-  function handleNext() {
+  // `grade` is explicit for the 4 Again/Hard/Good/Easy buttons at the bottom
+  // of a revealed card. Passed as undefined only from the one remaining path
+  // that never reveals the full 4-way choice — multiple choice's own inline
+  // "Next" after a wrong pick (line ~424) — which keeps the old binary
+  // inference (passive/no-fail → Good, otherwise → Again) since the user
+  // already told us the outcome by picking wrong; asking again would be
+  // redundant.
+  function handleNext(grade?: Grade) {
     if (isAdvancingRef.current) return
     isAdvancingRef.current = true
     if (mode === 'passive' || earnedSpark) {
       chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'review' }).catch(() => {})
     }
     if (activeItem) {
-      // Passive mode has no correctness check — being shown counts as a pass.
-      // Every other mode only counts as a pass if the card was never answered
-      // wrong (and wasn't given up on) before moving on.
       const passed = mode === 'passive' || !cardFailed
-      const updated = updateSrsMetrics(activeItem, passed)
+      const finalGrade = grade ?? (passed ? Rating.Good : Rating.Again)
+      const updated = updateFsrsMetrics(activeItem, finalGrade)
       chrome.runtime.sendMessage({ type: 'UPDATE_ITEM', payload: updated }).catch(() => {})
     }
     setEarnedSpark(false)
@@ -285,14 +313,14 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         <div
           style={{
             ...styles.colorDot,
-            backgroundColor: BOOKMARK_COLORS[activeItem.color],
+            backgroundColor: colorHex(activeItem.color),
             display: 'inline-block',
             marginLeft: 8
           }}
         />
       </div>
 
-      <div key={activeItem.id} style={{ ...styles.card, borderColor: BOOKMARK_COLORS[activeItem.color], position: 'relative' }}>
+      <div key={activeItem.id} style={{ ...styles.card, borderColor: colorHex(activeItem.color), position: 'relative' }}>
         {earnedSpark && (
           <>
             <style>{rewardStyles}</style>
@@ -503,13 +531,24 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
           Show Answer
         </button>
       ) : (
-        <button
-          ref={nextBtnRef}
-          style={{ ...styles.startBtn, background: '#6bcfff', color: '#111122' }}
-          onClick={handleNext}
-        >
-          Next
-        </button>
+        <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+          {([
+            { grade: Rating.Again as Grade, label: 'Again', bg: '#5a2a2a', color: '#ff8080' },
+            { grade: Rating.Hard as Grade, label: 'Hard', bg: '#5a4420', color: '#ffb36b' },
+            { grade: Rating.Good as Grade, label: 'Good', bg: '#22406b', color: '#6bcfff' },
+            { grade: Rating.Easy as Grade, label: 'Easy', bg: '#1f4a30', color: '#6bff9e' },
+          ] as const).map(({ grade, label, bg, color }) => (
+            <button
+              key={label}
+              ref={grade === Rating.Good ? nextBtnRef : undefined}
+              style={{ ...styles.gradeBtn, background: bg, color }}
+              onClick={() => handleNext(grade)}
+            >
+              <span>{label}</span>
+              {gradePreview && <span style={styles.gradeBtnHint}>{formatDueIn(gradePreview[grade])}</span>}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   )
@@ -643,6 +682,24 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     borderRadius: 8,
     cursor: 'pointer'
+  },
+  gradeBtn: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 2,
+    padding: '10px 4px',
+    fontSize: 15,
+    fontWeight: 700,
+    border: 'none',
+    borderRadius: 10,
+    cursor: 'pointer',
+  },
+  gradeBtnHint: {
+    fontSize: 11,
+    fontWeight: 500,
+    opacity: 0.7,
   },
   speakerBtn: {
     background: 'none',

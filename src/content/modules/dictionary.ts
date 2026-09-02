@@ -1,6 +1,6 @@
 import { translate } from './translation'
 import { getSelectionContext, applyHighlight, pulseHighlight, selectionTextExcludingIpa } from './anchor'
-import { BookmarkColor, BOOKMARK_COLORS } from '../../shared/types'
+import { BookmarkColor, BOOKMARK_COLORS, colorHex, UNCATEGORIZED_COLOR } from '../../shared/types'
 import type { SavedItem } from '../../shared/types'
 import type { ContextTranslateResult } from '../../background/aiTranslate'
 
@@ -389,7 +389,7 @@ function handleClickOutside(e: MouseEvent) {
   }
 }
 
-export async function showPopoverFromSelection(selectedText?: string, color: BookmarkColor = 'red') {
+export async function showPopoverFromSelection(selectedText?: string, color: string = 'red') {
   const sel = window.getSelection()
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return
 
@@ -412,7 +412,7 @@ export async function showPopoverFromSelection(selectedText?: string, color: Boo
 async function showPopover(
   word: string,
   rect: DOMRect,
-  color: BookmarkColor,
+  color: string,
   context: PopoverContext | null
 ) {
   hidePopover()
@@ -614,13 +614,13 @@ async function showPopover(
 
   // Deck (color) picker — routes this save to any named deck. Pre-selected to the
   // incoming color (default 'red' from the quick-save chip, or the color chosen
-  // from the right-click menu).
+  // from the right-click menu). `deckOrder`/`deckLabels` are freeform strings
+  // now (custom hex decks made in Library show up here too), falling back to
+  // the 10 presets only when nothing's been customized yet.
   const COLOR_KEYS = Object.keys(BOOKMARK_COLORS) as BookmarkColor[]
-  const deckOrder: BookmarkColor[] = settings?.deckOrder?.length === COLOR_KEYS.length
-    ? settings.deckOrder
-    : COLOR_KEYS
-  const deckLabels: Partial<Record<BookmarkColor, string>> = settings?.deckLabels || {}
-  let selectedColor: BookmarkColor = color
+  const deckOrder: string[] = settings?.deckOrder?.length ? settings.deckOrder : COLOR_KEYS
+  const deckLabels: Record<string, string> = settings?.deckLabels || {}
+  let selectedColor: string = color
 
   const deckRow = document.createElement('div')
   deckRow.className = 'deck-row'
@@ -629,19 +629,21 @@ async function showPopover(
   deckLabelEl.textContent = 'Deck'
   const deckDots = document.createElement('div')
   deckDots.className = 'deck-dots'
-  const dotEls: Partial<Record<BookmarkColor, HTMLButtonElement>> = {}
+  const dotEls: Record<string, HTMLButtonElement> = {}
   for (const c of deckOrder) {
     const dot = document.createElement('button')
     dot.type = 'button'
     dot.className = 'deck-dot' + (c === selectedColor ? ' selected' : '')
-    dot.style.background = BOOKMARK_COLORS[c]
-    const name = deckLabels[c] || (c.charAt(0).toUpperCase() + c.slice(1))
+    dot.style.background = colorHex(c)
+    const name = c === UNCATEGORIZED_COLOR
+      ? 'Uncategorized'
+      : deckLabels[c] || (c.charAt(0).toUpperCase() + c.slice(1))
     dot.title = name
     dot.setAttribute('aria-label', `Save to ${name} deck`)
     dot.setAttribute('aria-pressed', String(c === selectedColor))
     dot.onclick = () => {
       selectedColor = c
-      for (const key of Object.keys(dotEls) as BookmarkColor[]) {
+      for (const key of Object.keys(dotEls)) {
         const on = key === c
         dotEls[key]!.classList.toggle('selected', on)
         dotEls[key]!.setAttribute('aria-pressed', String(on))
@@ -707,7 +709,7 @@ async function showPopover(
     if (!context?.sourceContext) {
       applyHighlight(item)
       // Pulse the just-saved word on the page to tie the reward to it.
-      pulseHighlight(item.id, BOOKMARK_COLORS[selectedColor])
+      pulseHighlight(item.id, colorHex(selectedColor))
     }
 
     saveBtn.textContent = 'Saved!'
@@ -834,7 +836,7 @@ export async function showDictionaryPopoverForWord(
   // Words from a film have no selection colour to inherit, so carry over the
   // deck used last time instead of always dropping them in yellow.
   const stored = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).catch(() => null)
-  const color: BookmarkColor = stored?.lastBookmarkColor ?? 'yellow'
+  const color: string = stored?.lastBookmarkColor ?? 'yellow'
 
   // Split the subtitle line around the word, so the popover gets the same
   // prefix/suffix a page selection would — that is what drives the

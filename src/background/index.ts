@@ -9,7 +9,8 @@ import {
   syncToDrive,
   logActivity,
   getActivityLog,
-  updateSrsMetrics,
+  updateFsrsMetrics,
+  Rating,
   getLocalYMD
 } from '../shared/library'
 import {
@@ -23,6 +24,7 @@ import {
   PomodoroStatus,
   PomodoroPhase,
   PomodoroState,
+  UNCATEGORIZED_COLOR,
 } from '../shared/types'
 import { translateInContext, ContextTranslateRequest, fetchPhoneticsForWords } from './aiTranslate'
 import { getRandomRoast, RoastLevel, RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
@@ -161,35 +163,91 @@ async function setupSrsAlarm() {
   }
 }
 
-async function triggerSrsNotification(testMode = false) {
+// Result surfaced back to the "Test Notification" button so a no-op isn't
+// silent — previously this function just `return`ed on every skip path with
+// no way for the caller to tell "a notification was created" apart from
+// "nothing was due" apart from "everything's muted", so pressing the test
+// button when e.g. every deck/source happened to be muted (see
+// mutedNotificationDecks/mutedNotificationSources) looked identical to the
+// feature being completely broken.
+type SrsNotificationResult =
+  | { created: true }
+  | { created: false, reason: 'disabled' | 'outside-active-hours' | 'no-due-items' | 'all-muted' | 'already-mid-review' }
+
+async function triggerSrsNotification(testMode = false): Promise<SrsNotificationResult> {
   const settings = await getSettings()
-  if (!settings.srsNotifications?.enabled && !testMode) return
+  if (!settings.srsNotifications?.enabled && !testMode) return { created: false, reason: 'disabled' }
 
   if (!testMode) {
     const startHour = settings.srsNotifications?.activeHoursStart ?? 8
     const endHour = settings.srsNotifications?.activeHoursEnd ?? 22
     const currentHour = new Date().getHours()
     if (currentHour < startHour || currentHour >= endHour) {
-      return
+      return { created: false, reason: 'outside-active-hours' }
     }
   }
 
   const items = await getAllItems()
-  let dueItems = items.filter(i => !i.orphaned && i.text)
+  // getAllItems() now repairs a missing id on read, but that's a second
+  // layer of defense, not the guarantee itself — an item without a usable
+  // id must never become a notification candidate: its notification id
+  // would serialize as the literal "srs-q-undefined", it wins "most due"
+  // forever (due reads as the 0 fallback), and the id round-trip out of
+  // "Show Answer" back to an item lookup can never match it either. See
+  // getAllItems's comment for the full chain this breaks.
+  // Opt-out lists edited from Library.tsx (per-row bell icon, or the bulk
+  // "Focus" action) — an item stays a candidate if EITHER its deck or its
+  // source is unmuted (OR, not AND). This is deliberate, not an oversight:
+  // "Focus" mutes the entire *other* axis when only one is selected (e.g.
+  // focusing a single source mutes every deck), so an AND check would mean
+  // that source's own items — which still belong to some now-muted deck —
+  // could never pass, making single-axis Focus notify nothing at all. OR
+  // means a plain per-row bell mute on ONE axis only takes effect if the
+  // item's other axis is *also* muted somewhere — e.g. muting a single deck
+  // by itself, with no source ever muted, won't suppress that deck's items
+  // (every item passes via the unmuted-source side). In practice that's
+  // fine: the common single-toggle case is "mute this deck" or "mute this
+  // source" as the ONLY mute in play, and OR only fails to suppress when
+  // the other axis's list is entirely empty — once anything on either axis
+  // is muted (which Focus always does), the combination behaves as expected.
+  // Doesn't affect the in-app "Due today" stat or "Study now": muting only
+  // means "don't interrupt me", not "hide this from me when I open the app
+  // myself".
+  const mutedDecks = new Set(settings.mutedNotificationDecks ?? [])
+  const mutedSources = new Set(settings.mutedNotificationSources ?? [])
+  const eligibleItems = items.filter(i => !i.orphaned && i.text && i.id)
+  let dueItems = eligibleItems.filter(i =>
+    !mutedDecks.has(i.color) ||
+    !mutedSources.has(i.url || 'Dictionary (No URL)')
+  )
+  // Distinguish "nothing to notify about at all" from "everything's muted"
+  // — the latter is easy to hit via the Focus feature (focusing one axis
+  // mutes the whole other axis) and previously looked identical to the
+  // feature being broken outright, with zero feedback either way.
+  if (eligibleItems.length > 0 && dueItems.length === 0) {
+    return { created: false, reason: 'all-muted' }
+  }
+
+  // `due` (FSRS) is what actually matters once a card has been through FSRS
+  // at least once (StudyUI/notification-answer flow both write it now); an
+  // item that's only ever had SM-2 history (or has never been reviewed at
+  // all) has no `due` yet, so fall back to the legacy `nextReview` for those
+  // — same "?? " pattern used everywhere else FSRS due-ness is checked.
+  const dueAt = (i: SavedItem) => i.due ?? i.nextReview ?? 0
 
   // Same selection logic in test mode as the real tick (only the enabled/active-hours
   // gating above is test-only) — otherwise the Test Notification button always takes
   // the random-fallback branch and can never surface a bug in the due-item query.
-  const strictlyDue = dueItems.filter(i => (i.nextReview || 0) <= Date.now())
+  const strictlyDue = dueItems.filter(i => dueAt(i) <= Date.now())
   if (strictlyDue.length > 0) {
     dueItems = strictlyDue
-    dueItems.sort((a, b) => (a.nextReview || 0) - (b.nextReview || 0))
+    dueItems.sort((a, b) => dueAt(a) - dueAt(b))
   } else {
     // Fallback: If no items are strictly due, just pick a random one to keep the user engaged!
     dueItems.sort(() => Math.random() - 0.5)
   }
 
-  if (dueItems.length === 0) return
+  if (dueItems.length === 0) return { created: false, reason: 'no-due-items' }
 
   const item = dueItems[0]
 
@@ -206,13 +264,13 @@ async function triggerSrsNotification(testMode = false) {
 
   // If the selected item is itself already mid-review (the user clicked "Show
   // Answer" on an earlier tick's prompt and hasn't picked "I knew it"/"Forgot"
-  // yet), its nextReview hasn't moved, so it's still picked as the top due item
+  // yet), its due date hasn't moved, so it's still picked as the top due item
   // here. Without this check we'd create a brand-new `srs-q-<id>` alongside the
   // still-open `srs-a-<id>` — a different id, so the dedupe loop above (which
   // only matches the `srs-q-` prefix) can't catch it — leaving two prompts for
   // the same card on screen at once, which is exactly the pileup this function
   // is supposed to prevent.
-  if (existingIds.includes(`srs-a-${item.id}`)) return
+  if (existingIds.includes(`srs-a-${item.id}`)) return { created: false, reason: 'already-mid-review' }
 
   chrome.notifications.create(`srs-q-${item.id}`, {
     type: 'basic',
@@ -222,6 +280,7 @@ async function triggerSrsNotification(testMode = false) {
     buttons: [{ title: 'Show Answer' }],
     requireInteraction: true
   })
+  return { created: true }
 }
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -503,16 +562,46 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
     }
 
     const settings = await getSettings()
+
+    // If Read Aloud is actively speaking on some tab, this notification's
+    // chrome.tts.stop() would otherwise interrupt it and — via
+    // handleTtsEvent's unsuppressed 'interrupted' branch — tear the whole
+    // session down. Same pause-then-auto-resume pattern as the SPEAK_TEXT
+    // message handler below: pause it first (suppressing that teardown),
+    // then resume it once this notification's own utterance finishes.
+    // `wasReading` deliberately excludes 'paused' — if the user had already
+    // paused Read Aloud themselves, this must not un-pause it for them.
+    const wasReading = activeSession?.state === 'playing'
+    if (activeSession) {
+      activeSession.suppressStopUntil = Date.now() + 3000
+      if (wasReading) {
+        activeSession.state = 'paused'
+        await broadcastReadAloudState(activeSession.tabId, 'paused', activeSession.currentIndex)
+      }
+    }
+    const resumeToken = activeSession?.token
+
+    const onAnswerSpoken = (event: chrome.tts.TtsEvent) => {
+      if (!['end', 'interrupted', 'cancelled', 'error'].includes(event.type)) return
+      if (wasReading && activeSession && resumeToken === activeSession.token) {
+        activeSession.state = 'playing'
+        activeSession.suppressStopUntil = Date.now() + 500
+        void broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
+        void speakCurrentSentence(resumeToken)
+      }
+    }
+
     chrome.tts.stop()
     if (settings.readAloud?.voice) {
       chrome.tts.speak(item.text, {
         pitch: settings.readAloud.pitch,
         rate: settings.readAloud.speed,
         voiceName: settings.readAloud.voice,
-        volume: settings.readAloud.volume
+        volume: settings.readAloud.volume,
+        onEvent: onAnswerSpoken,
       })
     } else {
-      chrome.tts.speak(item.text)
+      chrome.tts.speak(item.text, { onEvent: onAnswerSpoken })
     }
 
     chrome.notifications.create(`srs-a-${item.id}`, {
@@ -533,8 +622,8 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
     if (!item) return
     
     const passed = buttonIndex === 0
-    const updated = updateSrsMetrics(item, passed)
-    
+    const updated = updateFsrsMetrics(item, passed ? Rating.Good : Rating.Again)
+
     await saveItem(updated)
     await logActivity('review')
     await evaluateSlackingState(false)
@@ -548,19 +637,97 @@ chrome.tabs.onRemoved.addListener(tabId => {
   }
 })
 
-function colorMenuTitle(color: BookmarkColor, deckLabels: Partial<Record<BookmarkColor, string>>) {
-  const label = deckLabels[color]
-  return label
-    ? `${COLOR_EMOJI[color]} ${label}`
-    : `${COLOR_EMOJI[color]} ${color.charAt(0).toUpperCase() + color.slice(1)}`
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return null
+  const n = parseInt(m[1], 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 }
 
-async function setupContextMenus() {
+// Chrome's contextMenus.create() has no `icons` field for per-item custom
+// icons (that's Firefox-only) — menu items are text-title only, so a custom
+// deck's actual color can never be rendered exactly here. Approximate it by
+// picking whichever preset's emoji is closest in RGB space, instead of
+// always falling back to a plain white dot regardless of the chosen color.
+function nearestPresetEmoji(color: string): string {
+  const rgb = hexToRgb(color)
+  if (!rgb) return '⚪'
+  let best: BookmarkColor | null = null
+  let bestDist = Infinity
+  for (const preset of COLORS) {
+    const prgb = hexToRgb(BOOKMARK_COLORS[preset])
+    if (!prgb) continue
+    const dist = (rgb[0] - prgb[0]) ** 2 + (rgb[1] - prgb[1]) ** 2 + (rgb[2] - prgb[2]) ** 2
+    if (dist < bestDist) { bestDist = dist; best = preset }
+  }
+  return best ? COLOR_EMOJI[best] : '⚪'
+}
+
+function colorMenuTitle(color: string, deckLabels: Record<string, string>) {
+  // Custom decks (a hex from the color picker, e.g. "+ New deck") have no
+  // discrete entry in COLOR_EMOJI — approximate with the closest-matching
+  // preset emoji rather than excluding them from the menu entirely (they
+  // were previously filtered out here, which meant a freshly created deck
+  // could never appear in the context menu no matter how it was reordered,
+  // unlike the save-text popover in dictionary.ts which never had this
+  // restriction).
+  const emoji = (COLOR_EMOJI as Record<string, string>)[color] || nearestPresetEmoji(color)
+  const label = deckLabels[color]
+  return label
+    ? `${emoji} ${label}`
+    : `${emoji} ${color.charAt(0).toUpperCase() + color.slice(1)}`
+}
+
+function createContextMenuItem(props: chrome.contextMenus.CreateProperties) {
+  chrome.contextMenus.create(props, () => {
+    // create() doesn't throw on failure (e.g. a duplicate id left over from
+    // an overlapping rebuild) — it just silently drops the item unless this
+    // callback checks lastError, so surface it instead of failing silently.
+    if (chrome.runtime.lastError) {
+      console.warn(`contextMenus.create(${props.id}) failed:`, chrome.runtime.lastError.message)
+    }
+  })
+}
+
+// setupContextMenus is called every time settings changes at all (see the
+// storage.onChanged listener below), so back-to-back settings writes (e.g.
+// two quick drags while reordering decks) can trigger overlapping calls.
+// Each call's removeAll()+create() sequence used to run un-awaited and
+// unserialized, so a newer call's removeAll() could race an older call's
+// still-pending create()s — leaving stale items in place or dropping new
+// ones as "duplicate id" errors nobody was checking for. Chaining every
+// call onto this promise forces them to run strictly one at a time, each
+// reading fresh settings only once the previous rebuild has fully finished.
+let contextMenusChain: Promise<void> = Promise.resolve()
+
+function setupContextMenus(): Promise<void> {
+  contextMenusChain = contextMenusChain
+    .then(() => rebuildContextMenus())
+    .catch(err => console.error('setupContextMenus failed:', err))
+  return contextMenusChain
+}
+
+async function rebuildContextMenus() {
   const settings = await getSettings()
   const deckLabels = settings?.deckLabels || {}
-  const order: BookmarkColor[] = settings?.deckOrder?.length === COLORS.length
-    ? settings.deckOrder
-    : COLORS
+  // `deckOrder` is a freeform string[] — both the 10 preset `BookmarkColor`
+  // names and custom hex decks made via "+ New deck" in Library. Exclude
+  // only the reserved Uncategorized bucket (not a deck the user actively
+  // chose to save into).
+  const knownOrder = (settings?.deckOrder || []).filter(c => c !== UNCATEGORIZED_COLOR)
+  // Append any preset colors missing from `knownOrder` (never customized yet,
+  // or — critically — deleted as a deck in Library, which only strips the
+  // color from `deckOrder`'s ordering, not from the set of valid colors) so
+  // a user's drag-reorder is never discarded wholesale just because the two
+  // lists don't match exactly. Previously this required an exact length
+  // match against all 10 presets, so deleting even one deck permanently
+  // fell back to the unordered preset list forever, ignoring every future
+  // reorder — see issues.md.
+  const missing = COLORS.filter(c => !knownOrder.includes(c))
+  const fullOrder: string[] = [...knownOrder, ...missing]
+  // Context menu space is limited — only show the top 5 decks, in the
+  // user's own reorder from the Library page (deckOrder), not all 10 presets.
+  const order = fullOrder.slice(0, 5)
 
   const ocrLangMap: Record<string, string> = {
     eng: 'EN',
@@ -570,17 +737,24 @@ async function setupContextMenus() {
   const ocrLang = settings?.ocr?.language || 'eng';
   const displayLang = ocrLangMap[ocrLang] || ocrLang.toUpperCase();
 
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: 'ocr', title: `Image to text(Alt + O) [${displayLang}]`, contexts: ['page', 'image', 'selection'] })
-    chrome.contextMenus.create({ id: 'listen', title: 'Listen (Alt + R)', contexts: ['page', 'selection'] })
-    chrome.contextMenus.create({ id: 'read-from-here', title: 'Read from this sentence', contexts: ['selection'] })
-    for (const color of order) {
-      chrome.contextMenus.create({
-        id: `bookmark-${color}`,
-        title: colorMenuTitle(color, deckLabels),
-        contexts: ['selection'],
-      })
-    }
+  // Wrapped in a promise so this rebuild genuinely finishes (including every
+  // create() call below) before setupContextMenus's returned promise
+  // resolves — previously the async function returned right after
+  // getSettings(), well before removeAll's callback ever ran.
+  await new Promise<void>(resolve => {
+    chrome.contextMenus.removeAll(() => {
+      createContextMenuItem({ id: 'ocr', title: `Image to text(Alt + O) [${displayLang}]`, contexts: ['page', 'image', 'selection'] })
+      createContextMenuItem({ id: 'listen', title: 'Listen (Alt + R)', contexts: ['page', 'selection'] })
+      createContextMenuItem({ id: 'read-from-here', title: 'Read from this sentence', contexts: ['selection'] })
+      for (const color of order) {
+        createContextMenuItem({
+          id: `bookmark-${color}`,
+          title: colorMenuTitle(color, deckLabels),
+          contexts: ['selection'],
+        })
+      }
+      resolve()
+    })
   })
 }
 
@@ -1496,8 +1670,7 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       await saveItem(msg.payload as any)
       return { ok: true }
     case 'TEST_NOTIFICATION':
-      await triggerSrsNotification(true)
-      return { ok: true }
+      return triggerSrsNotification(true)
     case 'TEST_ROAST_NOTIFICATION':
       await evaluateSlackingState(true)
       return { ok: true }
