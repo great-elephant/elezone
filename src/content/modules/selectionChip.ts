@@ -1,6 +1,7 @@
 import { showPopoverFromSelection } from './dictionary'
 import { Settings, BookmarkColor } from '../../shared/types'
 import { selectionTextExcludingIpa } from './anchor'
+import { segmentWords, detectContentLangSync } from './segmentation'
 
 // The default color the extension uses for a quick save.
 const DEFAULT_COLOR: BookmarkColor = 'red'
@@ -98,8 +99,10 @@ function removeChip() {
 }
 
 // Mirror the dictionary guard: reasonable-length, non-empty selection only.
+// Segmented rather than split on spaces, for the same reason as there — Chinese
+// has none, so every selection used to count as a single word.
 function isSavableWord(word: string): boolean {
-  return !!word && word.split(/\s+/).length <= 10
+  return !!word && segmentWords(word, detectContentLangSync(word) ?? 'en').length <= 10
 }
 
 // Skip editable fields and the extension's own popover so we don't fight them.

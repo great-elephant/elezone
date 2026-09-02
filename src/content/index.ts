@@ -472,7 +472,6 @@ function initVideoModeForPage() {
           vmSettings,
           savedItems || [],
           settings.translation?.defaultTargetLanguage || 'vi',
-          settings.translation?.learningLanguage || 'en',
         )
       } catch {
         // Extension context not ready or navigating away
@@ -620,7 +619,6 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
             resolved,
             savedItems || [],
             settings2.translation?.defaultTargetLanguage || 'vi',
-            settings2.translation?.learningLanguage || 'en',
           )
         } catch { /* ignore */ }
       } else {

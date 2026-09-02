@@ -10,7 +10,7 @@ import { installSubtitleInterceptor, uninstallSubtitleInterceptor, resetSubtitle
 import type { SubtitleCue } from './subtitleInterceptor'
 import { installSubtitleDomParser, uninstallSubtitleDomParser } from './subtitleDomParser'
 import { startSubtitleSyncer, stopSubtitleSyncer, updateSyncerSavedItems, updateSyncerCues, setSyncerAutoPause, setSyncerSuspended, getCues } from './subtitleSyncer'
-import { initSubtitleCard, updateSubtitleCard, destroySubtitleCard, applySubtitleCardSettings, setSubtitleCardStatus, showSubtitleNotice, showWaitingForResume, hideShadowingGap, getCurrentCue, setSubtitleCardDrag } from './subtitleCard'
+import { initSubtitleCard, updateSubtitleCard, destroySubtitleCard, applySubtitleCardSettings, setSubtitleCardStatus, showSubtitleNotice, showWaitingForResume, hideShadowingGap, getCurrentCue, setSubtitleCardDrag, setSubtitleContentLang, getSubtitleContentLang } from './subtitleCard'
 import type { SeekTarget } from './subtitleCard'
 import { initDialogueSidebar, updateDialogueSidebarCue, updateDialogueSidebarSavedItems, appendDialogueSidebarCue, destroyDialogueSidebar, setSidebarVisible, recentreActiveCue } from './dialogueSidebar'
 import type { SavedItem, VideoModeSettings } from '../../../shared/types'
@@ -23,6 +23,8 @@ import { seekToSeconds, pauseVideo, playVideo, useClosedCaptions } from './video
 import { setNativeTranslationCues, clearNativeTranslationCues, hasNativeTranslations, setTranslationSource, clearTranslationCache } from './cueTranslation'
 import { subscribeToSpaNavigation } from '../spaNavigationGuard'
 import { phoneticsForWords, clearPhoneticsCache } from '../wordPhonetics'
+import { phoneticsForWords as pinyinForWords, clearPhoneticsCache as clearPinyinCache } from '../pinyinLookup'
+import { segmentWords } from '../segmentation'
 import { configurePacing, updatePacingConfig, handleCueEnd, resumeFromWait, isWaitingForLearner, cancelPacing } from './linePacing'
 import { installVideoModeKeys, uninstallVideoModeKeys, setVideoModeKeysEnabled } from './videoModeKeys'
 import { openSettingsPanel, closeSettingsPanel, refreshSettingsPanel, isSettingsPanelOpen } from './videoModeSettingsPanel'
@@ -37,7 +39,19 @@ let _targetLang = 'vi'
 let _savedItems: SavedItem[] = []
 let _interceptorCues: SubtitleCue[] = []  // cues from network interception
 let _domFallbackCues: SubtitleCue[] = []  // cues from DOM parsing
-let _learningLang = 'en'
+// Which caption track to ask YouTube's player for (see youtubeMainWorld's
+// pickPrimary). This is a *track selection* input and has to be known before
+// any cue exists, so it cannot come from detecting the cues themselves — what
+// the lines turn out to be written in is answered separately, per session, by
+// DETECT_CONTENT_LANGUAGE below.
+//
+// 'en' is what shipped: the setting this used to read had no UI anywhere, so it
+// was always its 'en' default in practice. Kept identical rather than widened,
+// because "which videos should Video Mode light up on at all" is a product
+// decision, not an implementation detail.
+const _captionTrackLang = 'en'
+// Guards the once-per-session content-language detection below.
+let _langDetected = false
 
 // Which site we are on. Resolved once per page: a content script never outlives
 // a change of origin.
@@ -148,13 +162,12 @@ export async function enableVideoMode(
   settings: VideoModeSettings,
   savedItems: SavedItem[],
   targetLang = 'vi',
-  learningLang = 'en',
 ): Promise<void> {
   if (_active) disableVideoMode()
   _active = true
   _settings = { ...settings }
   _targetLang = targetLang
-  _learningLang = learningLang
+  _langDetected = false
   _savedItems = savedItems
 
   // Build the UI up front, before any cue exists. Deferring this until a track
@@ -181,11 +194,12 @@ export async function enableVideoMode(
       _verified = false
       _verifyHits = 0
       _verifyMisses = 0
+      void detectContentLanguageOnce(cues)
       onCuesReady(cues)
     },
     {
       targetLang: _targetLang,
-      learningLang: _learningLang,
+      learningLang: _captionTrackLang,
       onTranslationCues: (cues) => {
         setNativeTranslationCues(cues)
         // Rebuild so lines already rendered swap machine output for the site's.
@@ -561,7 +575,6 @@ function buildUi() {
       fontSize: _settings.subtitleFontSize,
       targetLang: _targetLang,
       phoneticsUnderWords: _settings.phoneticsUnderWords,
-      learningLang: _learningLang,
     })
   }
   if (!document.getElementById('elezone-dialogue-sidebar')) {
@@ -657,11 +670,15 @@ const PHONETICS_PREFETCH_LINES = 3
 // which is the one actually about to need them. Sequencing keeps the
 // closest-to-be-shown line's words at the front of the queue.
 async function prefetchUpcomingPhonetics(cues: SubtitleCue[]): Promise<void> {
+  // Must tokenize and route exactly the way the card itself does, or the
+  // look-ahead warms cache entries under keys the card never asks for.
+  const lang = getSubtitleContentLang()
+  const lookUp = lang.toLowerCase().startsWith('zh') ? pinyinForWords : phoneticsForWords
   for (const cue of cues) {
-    const words = (cue.text.match(/\S+/g) ?? [])
+    const words = segmentWords(cue.text, lang)
       .map(w => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
       .filter(Boolean)
-    if (words.length > 0) await phoneticsForWords(words, 'low')
+    if (words.length > 0) await lookUp(words, 'low')
   }
 }
 
@@ -669,7 +686,9 @@ function onCueChange(state: { currentCueIndex: number; currentCue: SubtitleCue |
   updateSubtitleCard(state.currentCue, _savedItems)
   updateDialogueSidebarCue(state.currentCueIndex)
 
-  if (_settings.phoneticsUnderWords && _learningLang.toLowerCase().startsWith('en') && state.currentCueIndex >= 0) {
+  const lang = getSubtitleContentLang().toLowerCase()
+  const hasPhonetics = lang.startsWith('en') || lang.startsWith('zh')
+  if (_settings.phoneticsUnderWords && hasPhonetics && state.currentCueIndex >= 0) {
     // Only reachable with a known cue list (the DOM fallback calls
     // updateSubtitleCard directly and never goes through the syncer), so
     // there's always a real lookahead here — no separate fallback branch.
@@ -689,6 +708,33 @@ function visibleCues(cues: SubtitleCue[]): SubtitleCue[] {
   return cues
     .filter(cue => !isSoundDescription(cue.text))
     .map((cue, index) => ({ ...cue, index }))
+}
+
+/**
+ * Work out what the subtitles are written in, once per session, from the first
+ * cues that arrive.
+ *
+ * The page's own `lang` attribute is no use here — it describes YouTube's or
+ * Netflix's interface, not the film — so this goes to the background, which is
+ * where `chrome.i18n.detectLanguage` is reachable. A handful of lines is enough
+ * for the detector and a video does not change language partway through, so the
+ * answer is taken once and kept.
+ */
+async function detectContentLanguageOnce(cues: SubtitleCue[]): Promise<void> {
+  if (_langDetected) return
+  const text = cues.slice(0, 3).map(c => c.text).join(' ').trim()
+  if (!text) return
+  _langDetected = true
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: 'DETECT_CONTENT_LANGUAGE',
+      payload: { text },
+    }) as { lang?: string } | undefined
+    if (res?.lang) setSubtitleContentLang(res.lang)
+  } catch {
+    // Detection is an improvement on the default, never a requirement: leaving
+    // the card on its 'en' default is better than tearing down Video Mode.
+  }
 }
 
 function onCuesReady(rawCues: SubtitleCue[]) {
@@ -771,6 +817,7 @@ export function disableVideoMode(): void {
   _resumeAfterLookup = false
   clearNativeTranslationCues()
   clearPhoneticsCache()
+  clearPinyinCache()
   _domFallbackCues = []
   if (_layoutHealWatch !== null) {
     clearInterval(_layoutHealWatch)
@@ -809,13 +856,14 @@ function watchForTitleChange() {
       resetSubtitleInterceptor()
       clearNativeTranslationCues()
       clearPhoneticsCache()
+      clearPinyinCache()
       clearTranslationCache()
       _verified = false
       _verifyHits = 0
       _verifyMisses = 0
       // The MAIN world clears its cache on the same URL change; ask it for the
       // new episode's tracks once it has them.
-      requestSubtitleReplay(_targetLang, _learningLang)
+      requestSubtitleReplay(_targetLang, _captionTrackLang)
       stopSubtitleSyncer()
       destroyDialogueSidebar()
       platform().showNativeSubtitles()
@@ -856,7 +904,6 @@ export function applyVideoModeSettings(settings: VideoModeSettings): void {
     fontSize: _settings.subtitleFontSize,
     sidebarVisible: _settings.sidebarVisible,
     phoneticsUnderWords: _settings.phoneticsUnderWords,
-    learningLang: _learningLang,
   })
   // Re-render the strip so the change lands on the line already on screen.
   updateSubtitleCard(getCurrentCue(), _savedItems)

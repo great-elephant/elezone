@@ -3,6 +3,7 @@ import { getSelectionContext, applyHighlight, pulseHighlight, selectionTextExclu
 import { BookmarkColor, BOOKMARK_COLORS, colorHex, UNCATEGORIZED_COLOR } from '../../shared/types'
 import type { SavedItem } from '../../shared/types'
 import type { ContextTranslateResult } from '../../background/aiTranslate'
+import { segmentWords, detectContentLangSync } from './segmentation'
 
 let host: HTMLElement | null = null
 let shadow: ShadowRoot | null = null
@@ -395,7 +396,10 @@ export async function showPopoverFromSelection(selectedText?: string, color: str
 
   const word = selectedText ? selectedText.trim() : selectionTextExcludingIpa(sel).trim()
   if (!word) return
-  if (word.split(/\s+/).length > 10) {
+  // Counted with the segmenter, not by spaces: Chinese writes no spaces, so a
+  // whole paragraph of it counted as one "word" and sailed straight past this.
+  // Language comes from the text itself — `getSelectionContext` runs below.
+  if (segmentWords(word, detectContentLangSync(word) ?? 'en').length > 10) {
     // Right-click "Save" can still reach here with a long selection (the chip
     // guards this earlier). Show a brief hint instead of failing silently.
     showToast('Selection too long — pick a shorter phrase.')
@@ -535,7 +539,6 @@ async function showPopover(
       payload: {
         word, sentence, targetLang,
         sourceLang: context?.sourceLang,
-        learningLanguage: settings?.translation?.learningLanguage,
         disableAI: settings?.translation?.disableAI ?? true,
         disableGoogleContext: settings?.translation?.disableGoogleContext ?? false,
         disableGoogleSenses: settings?.translation?.disableGoogleSenses ?? false,

@@ -26,7 +26,7 @@ import {
   PomodoroState,
   UNCATEGORIZED_COLOR,
 } from '../shared/types'
-import { translateInContext, ContextTranslateRequest, fetchPhoneticsForWords } from './aiTranslate'
+import { translateInContext, ContextTranslateRequest, fetchPhoneticsForWords, fetchPinyinForWords } from './aiTranslate'
 import { getRandomRoast, RoastLevel, RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
 
 let creatingOffscreen: Promise<void> | null = null;
@@ -1262,6 +1262,30 @@ async function speakCurrentSentence(token: number) {
   })
 }
 
+/**
+ * The language of a passage, judged from the text itself.
+ *
+ * Lives in the background because `chrome.i18n.detectLanguage` is not exposed
+ * to content scripts. Read Aloud uses it to pick a voice; Video Mode uses it to
+ * decide what a subtitle line is written in, which no `lang` attribute on a
+ * player page ever says truthfully.
+ *
+ * Returns undefined when the detector is unavailable or unsure, leaving the
+ * caller's own default in place rather than guessing.
+ */
+async function detectContentLanguageAsync(text: string): Promise<string | undefined> {
+  if (!chrome.i18n?.detectLanguage || !text.trim()) return undefined
+  try {
+    const result = await new Promise<chrome.i18n.LanguageDetectionResult>(resolve => {
+      chrome.i18n.detectLanguage(text, resolve)
+    })
+    if (result.isReliable && result.languages.length > 0) return result.languages[0].language
+  } catch (err) {
+    console.warn('Failed to detect language', err)
+  }
+  return undefined
+}
+
 async function startReadAloudSession(
   sender: chrome.runtime.MessageSender,
   payload: unknown,
@@ -1286,20 +1310,9 @@ async function startReadAloudSession(
   }
 
   let detectedLang = lang
-  if (sentences.length > 0 && chrome.i18n?.detectLanguage) {
-    const textToDetect = sentences.slice(startIndex, startIndex + 3).join(' ')
-    if (textToDetect.trim()) {
-      try {
-        const result = await new Promise<chrome.i18n.LanguageDetectionResult>(resolve => {
-          chrome.i18n.detectLanguage(textToDetect, resolve)
-        })
-        if (result.isReliable && result.languages.length > 0) {
-          detectedLang = result.languages[0].language
-        }
-      } catch (err) {
-        console.warn('Failed to detect language', err)
-      }
-    }
+  if (sentences.length > 0) {
+    const detected = await detectContentLanguageAsync(sentences.slice(startIndex, startIndex + 3).join(' '))
+    if (detected) detectedLang = detected
   }
 
   const token = ++sessionCounter
@@ -1769,6 +1782,20 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       // want on every line of a movie.
       const { words, priority } = msg.payload as { words: string[]; priority?: 'high' | 'low' }
       return fetchPhoneticsForWords(words, priority)
+    }
+    case 'FETCH_PINYIN': {
+      // The Chinese counterpart of FETCH_PHONETICS. Kept as its own message
+      // rather than a `lang` flag on that one: the two run on entirely
+      // different sources (dictionaryapi.dev vs Google's `dt=rm`), and reading
+      // one case that forks into both would hide that.
+      const { words } = msg.payload as { words: string[] }
+      return fetchPinyinForWords(words)
+    }
+    case 'DETECT_CONTENT_LANGUAGE': {
+      // Video Mode asks once per session, off the first cues it receives: a
+      // player page's `lang` attribute describes the site's UI, not the film.
+      const { text } = msg.payload as { text: string }
+      return { lang: await detectContentLanguageAsync(text) }
     }
     case 'START_READ_ALOUD_SESSION':
       return startReadAloudSession(sender, msg.payload)

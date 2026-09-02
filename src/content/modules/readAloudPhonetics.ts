@@ -27,6 +27,8 @@
 // not be part of what "focus on this sentence" visually means.
 
 import { phoneticsForWords, type PhoneticsResult } from './wordPhonetics'
+import { phoneticsForWords as pinyinForWords } from './pinyinLookup'
+import { toneSpans, toneColor } from './pinyinTones'
 
 export const WRAP_CLASS = 'elezone-word-wrap'
 const IPA_CLASS = 'elezone-word-ipa'
@@ -275,8 +277,15 @@ export function unwrapAllPhoneticsWords(): void {
 export function wrapAndShowPhoneticsForWords(
   ranges: { text: string; range: Range }[],
   priority: 'high' | 'low' = 'high',
+  lang = 'en',
 ): { wrappers: HTMLElement[]; ready: Promise<void> } {
   if (ranges.length === 0) return { wrappers: [], ready: Promise.resolve() }
+
+  // Chinese reads its pronunciation off Google's romanization instead of
+  // dictionaryapi.dev's IPA. The two modules expose the same shape, so the
+  // choice is made once here rather than threaded through every call.
+  const isChinese = lang.toLowerCase().startsWith('zh')
+  const lookUp = isChinese ? pinyinForWords : phoneticsForWords
 
   const wrapped = wrapWords(ranges)
   wrappedWords.push(...wrapped.map(w => w.wrapper))
@@ -306,7 +315,24 @@ export function wrapAndShowPhoneticsForWords(
       if (!wrapper.isConnected) continue
       const ipa = wrapper.querySelector<HTMLElement>(`.${IPA_CLASS}`)
       if (!ipa || ipa.textContent) continue
-      ipa.textContent = entry.text
+      const tones = isChinese ? toneSpans(word, entry.text) : null
+      if (tones) {
+        // One span per syllable so each carries its own tone colour. Built as
+        // elements rather than innerHTML — the reading is remote data, and it
+        // is about to be put into the page's own DOM.
+        ipa.textContent = ''
+        for (const syllable of tones) {
+          const span = document.createElement('span')
+          span.textContent = syllable.text
+          // Overrides the row's own blue, which is set inline with !important.
+          span.style.setProperty('color', toneColor(syllable.tone), 'important')
+          ipa.appendChild(span)
+        }
+      } else {
+        // Either English, or a reading whose syllables couldn't be matched to
+        // the word's characters — shown plainly rather than coloured on a guess.
+        ipa.textContent = entry.text
+      }
       // A reading borrowed from a fallback (plural's singular, one half of a
       // hyphenated compound...) rather than the word's own exact dictionary
       // entry — dimmed to signal "close, not guaranteed exact".
@@ -337,7 +363,7 @@ export function wrapAndShowPhoneticsForWords(
   // fill it in one clean reveal once every word in it has settled instead.
   const RETRY_DELAYS_MS = [5000, 12000]
   const attempt = (attemptIndex: number): Promise<void> =>
-    phoneticsForWords(cleanWords, priority, priority === 'high' ? fillWord : undefined).then(result => {
+    lookUp(cleanWords, priority, priority === 'high' ? fillWord : undefined).then(result => {
       if (priority === 'low') for (const [word, entry] of result) fillWord(word, entry)
       const stillMissing = wrapped.some((w, i) => w.wrapper.isConnected && !result.get(cleanWords[i])
         && !w.wrapper.querySelector(`.${IPA_CLASS}`)?.textContent)

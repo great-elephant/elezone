@@ -17,6 +17,9 @@ import type { SavedItem } from '../../../shared/types'
 import { colorHex } from '../../../shared/types'
 import { translationFor } from './cueTranslation'
 import { phoneticsForWords } from '../wordPhonetics'
+import { phoneticsForWords as pinyinForWords } from '../pinyinLookup'
+import { segmentWords } from '../segmentation'
+import { toneSpans, toneColor } from '../pinyinTones'
 import { showSavedWordTooltip, scheduleHideSavedWordTooltip } from './savedWordTooltip'
 
 export type SeekTarget = 'prev' | 'replay' | 'next'
@@ -24,16 +27,46 @@ export type SeekTarget = 'prev' | 'replay' | 'next'
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function tokenize(text: string): string[] {
-  // Split on word boundaries, keeping punctuation attached to the word before it
-  return text.match(/\S+/g) ?? []
+  // Split on word boundaries, keeping punctuation attached to the word before
+  // it. Chinese writes no spaces, so it goes through the segmenter instead —
+  // otherwise the whole line came back as a single token and rendered as one
+  // block with nothing in it to click.
+  return segmentWords(text, _contentLang)
 }
 
 function strippedWord(token: string): string {
   return token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
 }
 
-function isEnglishLearningLang(): boolean {
-  return _learningLang.toLowerCase().startsWith('en')
+function isEnglishContent(): boolean {
+  return _contentLang.toLowerCase().startsWith('en')
+}
+
+export function isChineseContent(): boolean {
+  return _contentLang.toLowerCase().startsWith('zh')
+}
+
+/**
+ * Whether this video's language has a pronunciation source at all — IPA for
+ * English, Pinyin for Chinese. Anything else would fire lookups that come back
+ * empty for every word, so the row isn't offered.
+ */
+function hasPhoneticsSource(): boolean {
+  return isEnglishContent() || isChineseContent()
+}
+
+/** The language of the current video's subtitles, for callers outside this module. */
+export function getSubtitleContentLang(): string {
+  return _contentLang
+}
+
+/**
+ * Record what this video's subtitles are written in. Called once per session,
+ * off the first cues that arrive — a video does not change language midway, and
+ * re-detecting per cue would spend a background round trip on every line.
+ */
+export function setSubtitleContentLang(lang: string): void {
+  if (lang) _contentLang = lang
 }
 
 /** Saved words whose SRS review is due right now. */
@@ -64,10 +97,15 @@ let _showTranslation = true
 let _fontSize = 28
 let _targetLang = 'vi'
 let _phoneticsUnderWords = false
-// The dictionaryapi.dev source only covers English; gating here means a
-// French or Japanese subtitle line never fires a lookup that would just come
-// back empty for every word.
-let _learningLang = 'en'
+// What this video's subtitles are actually written in, detected from the first
+// cues of the session (see setSubtitleContentLang). It decides how a line is
+// split into words and which pronunciation source those words go to — the
+// dictionaryapi.dev one only covers English, so a French or Japanese line must
+// not fire a lookup that comes back empty for every word.
+//
+// 'en' until detection lands, matching what this module assumed before it could
+// detect anything at all.
+let _contentLang = 'en'
 let _savedColorsMap: Map<string, string> = new Map()
 // Full items, for the hover tooltip's content (translation/phonetics) — the
 // colour map above only carries what the underline needs.
@@ -520,7 +558,7 @@ function buildWordUnit(token: string, cue: SubtitleCue): HTMLElement {
 
   unit.appendChild(wordSpan)
 
-  if (_phoneticsUnderWords && isEnglishLearningLang()) {
+  if (_phoneticsUnderWords && hasPhoneticsSource()) {
     // Added even for a punctuation-only token (empty `clean`, no lookup ever
     // fired for it) so every word-unit in the row reserves the same second
     // line — otherwise that one token sits shorter than its neighbours.
@@ -572,7 +610,6 @@ export function initSubtitleCard(opts: {
   fontSize: number
   targetLang: string
   phoneticsUnderWords: boolean
-  learningLang: string
 }): void {
   _onSaveWord = opts.onSaveWord
   _onLookupWord = opts.onLookupWord
@@ -582,7 +619,6 @@ export function initSubtitleCard(opts: {
   _fontSize = opts.fontSize
   _targetLang = opts.targetLang
   _phoneticsUnderWords = opts.phoneticsUnderWords
-  _learningLang = opts.learningLang
 
   host = document.createElement('div')
   host.id = 'elezone-subtitle-card'
@@ -1012,18 +1048,34 @@ export function updateSubtitleCard(cue: SubtitleCue | null, savedItems: SavedIte
     _wordsRow!.appendChild(buildWordUnit(token, cue))
   })
 
-  if (_phoneticsUnderWords && isEnglishLearningLang()) {
+  if (_phoneticsUnderWords && hasPhoneticsSource()) {
     const key = cue.text
     const words = tokens.map(strippedWord).filter(Boolean)
     if (words.length > 0) {
-      void phoneticsForWords(words).then(result => {
+      // Same shape either side, so the language only picks the module.
+      const lookUp = isChineseContent() ? pinyinForWords : phoneticsForWords
+      void lookUp(words).then(result => {
         // The line has moved on by the time this resolves — the spans it would
         // fill no longer belong to what's on screen.
         if (_currentCue?.text !== key || !_wordsRow) return
         _wordsRow.querySelectorAll<HTMLElement>('.phonetics-text').forEach(span => {
-          const entry = result.get(span.dataset.word ?? '')
+          const word = span.dataset.word ?? ''
+          const entry = result.get(word)
           if (!entry) return
-          span.textContent = entry.text
+          const tones = isChineseContent() ? toneSpans(word, entry.text) : null
+          if (tones) {
+            // A span per syllable so each carries its own tone colour, built as
+            // elements rather than markup — the reading is remote data.
+            span.textContent = ''
+            for (const syllable of tones) {
+              const part = document.createElement('span')
+              part.textContent = syllable.text
+              part.style.color = toneColor(syllable.tone)
+              span.appendChild(part)
+            }
+          } else {
+            span.textContent = entry.text
+          }
           // A reading borrowed from a fallback (plural's singular, one half
           // of a hyphenated compound...) rather than the word's own exact
           // entry — shown dimmer to signal "close, not guaranteed exact".
@@ -1071,12 +1123,10 @@ export function applySubtitleCardSettings(opts: {
   fontSize?: number
   sidebarVisible?: boolean
   phoneticsUnderWords?: boolean
-  learningLang?: string
 }): void {
   if (opts.showTranslation !== undefined) _showTranslation = opts.showTranslation
   if (opts.fontSize !== undefined) _fontSize = opts.fontSize
   if (opts.phoneticsUnderWords !== undefined) _phoneticsUnderWords = opts.phoneticsUnderWords
-  if (opts.learningLang !== undefined) _learningLang = opts.learningLang
   if (opts.sidebarVisible !== undefined) {
     _sidebarVisible = opts.sidebarVisible
     shadow?.querySelector('.sidebar-toggle')?.classList.toggle('on', _sidebarVisible)

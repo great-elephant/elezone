@@ -1,6 +1,7 @@
 import { SavedItem } from '../../shared/types'
 import { updateReadingOverlays, hideReadingOverlays } from './readAloudOverlay'
 import { IPA_SELECTOR, WRAP_CLASS } from './readAloudPhonetics'
+import { detectContentLangSync, segmentWords } from './segmentation'
 
 // ── window.find() helper ─────────────────────────────────────────────────────
 
@@ -100,6 +101,13 @@ export function getSelectionContext(searchString?: string): {
     }
     langNode = langNode.parentNode
   }
+
+  // The walk above stops before <body>, so it never reads <html lang> — on a
+  // page whose only declaration lives there (most of them), sourceLang came
+  // back undefined and the background had to fall back to a global "language
+  // being learnt" setting to decide whether the word was English. Resolving it
+  // here instead keeps that decision with the only code that can see the page.
+  if (!sourceLang) sourceLang = detectContentLangSync(text)
 
   // Find the closest block container
   let block: HTMLElement = document.body
@@ -1106,10 +1114,20 @@ export function highlightSpokenWord(charIndex: number, length?: number): { text:
  * rect, hence a dedicated resolver rather than reusing `highlightSpokenWord`/
  * a single-word lookup in a loop.
  */
-export function resolveSentenceWordRanges(sentenceText: string): { text: string; range: Range }[] {
+export function resolveSentenceWordRanges(sentenceText: string, lang: string): { text: string; range: Range }[] {
   const out: { text: string; range: Range }[] = []
-  for (const m of sentenceText.matchAll(/\S+/g)) {
-    const token = m[0]
+  // Tokens come from the segmenter rather than a whitespace split, so Chinese
+  // wraps one word at a time instead of the whole line at once. It returns the
+  // words without their offsets, so each one's position is found by scanning
+  // forward from where the previous token ended — sequential rather than a
+  // plain indexOf, so a word repeated in the sentence resolves to the right
+  // occurrence. For every other language this yields the exact same tokens the
+  // `\S+` match did, offsets included.
+  let cursor = 0
+  for (const token of segmentWords(sentenceText, lang)) {
+    const index = sentenceText.indexOf(token, cursor)
+    if (index < 0) continue
+    cursor = index + token.length
     // Trim leading/trailing punctuation from the span we resolve/wrap, not
     // just from the text used for the dictionary lookup — a trailing comma
     // or a citation bracket right after a </b>/</a> genuinely lives in a
@@ -1129,7 +1147,7 @@ export function resolveSentenceWordRanges(sentenceText: string): { text: string;
     // row there breaks the browser's own superscript sizing/positioning,
     // which is what caused the number to visibly detach from its brackets.
     if (!/\p{L}/u.test(core)) continue
-    const resolved = resolveWordAt(m.index + lead, core.length)
+    const resolved = resolveWordAt(index + lead, core.length)
     if (!resolved) continue
 
     // Grow the wrap forward through any run of punctuation/whitespace that

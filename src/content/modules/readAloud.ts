@@ -173,8 +173,18 @@ function wrapPhoneticsForSentence(i: number, priority: 'high' | 'low'): Promise<
   const zoneRange = sentenceRanges[i]
   if (!zoneRange) return Promise.resolve()
 
+  // Decides both how the sentence is split into words and which pronunciation
+  // source those words go to. `currentLang` is the language the background
+  // actually resolved for this session (content-detected, so truer than the
+  // page's attribute); it is seeded from the page at session start, and the
+  // literal fallback only matters if wrapping somehow runs outside a session.
+  const lang = currentLang || document.documentElement.lang || 'en'
   prepareWordIndex(zoneRange, sentences[i] ?? '')
-  const { wrappers, ready } = wrapAndShowPhoneticsForWords(resolveSentenceWordRanges(sentences[i] ?? ''), priority)
+  const { wrappers, ready } = wrapAndShowPhoneticsForWords(
+    resolveSentenceWordRanges(sentences[i] ?? '', lang),
+    priority,
+    lang,
+  )
   if (wrappers.length > 0) {
     const rebuilt = document.createRange()
     rebuilt.setStartBefore(wrappers[0])

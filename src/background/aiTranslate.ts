@@ -50,8 +50,6 @@ export interface ContextTranslateRequest {
   // which only covers a fixed set of languages and would mislabel e.g. a
   // French word that happens to spell like an English one.
   sourceLang?: string
-  // Falls back to this when `sourceLang` isn't available for the lookup.
-  learningLanguage?: string
   phoneticsSourceOrder?: PhoneticsSourceSetting[]
 }
 
@@ -533,6 +531,60 @@ export async function fetchPhoneticsForWords(
   return out
 }
 
+const pinyinCache = new Map<string, string>()
+
+/**
+ * Pinyin for a batch of Chinese words — Read Aloud's per-word wraps and Video
+ * Mode's subtitle lines.
+ *
+ * A sibling of `fetchPhoneticsForWords` rather than a language branch inside
+ * it. That one is dictionaryapi.dev's, and every fallback it owns — stripping
+ * possessives, splitting hyphenated compounds, de-pluralising, and a last
+ * resort that asks Google to translate an English word *into English* — is
+ * English word formation. None of it means anything for Chinese, and the
+ * endpoint has no `/zh/` to call in the first place.
+ *
+ * The reading comes from the romanization Google already returns in `dt=rm`
+ * for a Chinese word — the same field the dictionary popup has always shown.
+ * Measured to carry tone diacritics (学习 → "Xuéxí"), which is what lets the
+ * caller colour by tone.
+ *
+ * No pacing queue, unlike the dictionaryapi.dev path: 80 requests back-to-back
+ * and 80 at concurrency 20 both came back clean, so a queue would only add
+ * latency. Repeats are absorbed here and again in the content script's cache.
+ *
+ * A word with no reading is left out of the result entirely rather than
+ * returned as null — same contract as `fetchPhoneticsForWords`, so a failed
+ * request is retried later instead of being remembered as "has no Pinyin".
+ */
+export async function fetchPinyinForWords(
+  words: string[],
+): Promise<Record<string, { text: string | null; approximate: boolean }>> {
+  const unique = [...new Set(words.map(w => w.trim()).filter(Boolean))]
+  const out: Record<string, { text: string | null; approximate: boolean }> = {}
+
+  await Promise.all(unique.map(async word => {
+    const cached = pinyinCache.get(word)
+    if (cached !== undefined) {
+      out[word] = { text: cached, approximate: false }
+      return
+    }
+    const { phonetics } = await googleSenses(word, 'zh')
+    if (phonetics) {
+      if (pinyinCache.size >= PHONETICS_CACHE_MAX) {
+        const oldestKey = pinyinCache.keys().next().value
+        if (oldestKey !== undefined) pinyinCache.delete(oldestKey)
+      }
+      pinyinCache.set(word, phonetics)
+      // Never approximate: there is no fallback chain here, so a reading is
+      // either the word's own or absent.
+      out[word] = { text: phonetics, approximate: false }
+    }
+  }))
+
+  return out
+}
+
 // dictionaryapi.dev has no phrase endpoint — split, look up each word, and
 // join with a space. A phrase with any word missing is dropped as a whole
 // (returning null) rather than shown half-transcribed, so the caller falls
@@ -572,7 +624,7 @@ export async function translateInContext(
     ? req.phoneticsSourceOrder
     : DEFAULT_SETTINGS.translation.phoneticsSourceOrder!
   const enabledPhoneticsSources = phoneticsOrder.filter(s => s.enabled).map(s => s.source)
-  const dictApiPromise = enabledPhoneticsSources.includes('dictionaryapi') && isEnglish(req.sourceLang || req.learningLanguage)
+  const dictApiPromise = enabledPhoneticsSources.includes('dictionaryapi') && isEnglish(req.sourceLang)
     ? fetchDictionaryApiPhonetics(word)
     : Promise.resolve(null as string | null)
 

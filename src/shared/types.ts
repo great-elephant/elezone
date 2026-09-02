@@ -114,15 +114,6 @@ export interface PhoneticsSourceSetting {
 
 export interface TranslationSettings {
   defaultTargetLanguage: string
-  /**
-   * The language being studied — the one subtitles, lookups and Read Aloud are
-   * expected to be in. Everything before Video Mode simply assumed English,
-   * which held on Netflix because the learner chose the film. It does not hold
-   * on YouTube, where most of what turns up is in the learner's own language;
-   * without this, Video Mode would light up on a Vietnamese vlog and offer to
-   * "translate" it into Vietnamese.
-   */
-  learningLanguage?: string
   enabled: boolean
   mode: 'paragraph' | 'sentence'
   asideForceGoogle?: boolean   // translation overlay uses Google by default (skip on-device)
@@ -406,7 +397,6 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   translation: {
     defaultTargetLanguage: 'vi',
-    learningLanguage: 'en',
     enabled: true,
     mode: 'paragraph',
     disableAI: true,
@@ -533,6 +523,8 @@ export type MessageType =
   | 'TOGGLE_TRANSLATION'
   | 'TRANSLATE_IN_CONTEXT'
   | 'FETCH_PHONETICS'
+  | 'FETCH_PINYIN'
+  | 'DETECT_CONTENT_LANGUAGE'
   | 'GET_TRANSLATION_API_AVAILABLE'
   | 'GET_TRANSLATOR_STATUS'
   | 'SHOW_DICTIONARY_POPOVER'
