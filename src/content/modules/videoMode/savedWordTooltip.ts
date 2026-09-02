@@ -10,7 +10,7 @@
 // from the hovered element's `getBoundingClientRect()`, which works across a
 // shadow boundary same as on the page.
 
-import type { SavedItem, BookmarkColor } from '../../../shared/types'
+import type { SavedItem, BookmarkColor, Settings } from '../../../shared/types'
 import { BOOKMARK_COLORS } from '../../../shared/types'
 
 let tooltip: HTMLDivElement | null = null
@@ -20,6 +20,29 @@ let hideTimer: ReturnType<typeof setTimeout> | null = null
 let _word: string | null = null
 let _onChangeColor: ((word: string, color: BookmarkColor) => void) | null = null
 let _onDelete: ((word: string) => void) | null = null
+
+// Keep deck labels in sync so the color dots' titles show the user's own
+// deck names instead of the raw color key (mirrors content/index.ts's
+// cachedDeckLabels/tooltipDots pattern for the ordinary-page tooltip).
+let cachedDeckLabels: Partial<Record<BookmarkColor, string>> = {}
+
+chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).then((s: Settings) => {
+  cachedDeckLabels = s?.deckLabels || {}
+  refreshColorDotTitles()
+}).catch(() => { })
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes['settings']) {
+    cachedDeckLabels = (changes['settings'].newValue as Settings)?.deckLabels || {}
+    refreshColorDotTitles()
+  }
+})
+
+function refreshColorDotTitles(): void {
+  for (const [color, dot] of Object.entries(colorDots)) {
+    dot.title = cachedDeckLabels[color as BookmarkColor] || color
+  }
+}
 
 function renderContent(item: SavedItem): void {
   if (!contentEl) return
@@ -65,7 +88,7 @@ function ensureTooltip(): HTMLDivElement {
   for (const [color, hex] of Object.entries(BOOKMARK_COLORS)) {
     const dot = document.createElement('div')
     dot.style.cssText = `width:16px;height:16px;border-radius:50%;background:${hex};cursor:pointer;border:1px solid transparent;transition:transform 0.1s;`
-    dot.title = color
+    dot.title = cachedDeckLabels[color as BookmarkColor] || color
     colorDots[color as BookmarkColor] = dot
     dot.addEventListener('mouseenter', () => { dot.style.transform = 'scale(1.2)' })
     dot.addEventListener('mouseleave', () => { dot.style.transform = 'scale(1)' })
@@ -144,6 +167,7 @@ export function initSavedWordTooltip(opts: {
 export function showSavedWordTooltip(word: string, item: SavedItem, anchor: HTMLElement): void {
   cancelHide()
   const t = ensureTooltip()
+  refreshColorDotTitles()
   _word = word
   renderContent(item)
   t.style.display = 'flex'
