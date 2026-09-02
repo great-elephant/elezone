@@ -69,20 +69,33 @@ function videoSourceFields(): Pick<SavedItem, 'sourceUrl' | 'sourceTitle'> {
 }
 
 async function saveWordFromSubtitle(word: string, cue: SubtitleCue): Promise<void> {
-  const item: Omit<SavedItem, 'id' | 'createdAt' | 'orphaned'> = {
+  // id/createdAt/orphaned set here directly (not left for the background to
+  // fill in — it doesn't: saveItem() only backfills them now as a last-resort
+  // safety net, this call site shouldn't rely on that). This used to omit all
+  // three, which corrupted storage: an undefined id made every subsequent
+  // save's id-match overwrite the previous one instead of adding a new item,
+  // and an undefined createdAt could corrupt the "By Source" sort order for
+  // the WHOLE library, not just this item (see getAllItems's comment).
+  const item: SavedItem = {
+    id: crypto.randomUUID(),
     text: word,
     url: window.location.href,
     prefix: '',
     suffix: '',
     occurrenceIndex: 0,
     color: 'yellow',
+    createdAt: Date.now(),
+    orphaned: false,
     sourceContext: cue.text,
     videoTimestamp: cue.startTime,
     ...videoSourceFields(),
   }
   try {
-    const saved: SavedItem = await chrome.runtime.sendMessage({ type: 'SAVE_ITEM', payload: item })
-    if (saved) registerSavedItem(saved)
+    // The background's SAVE_ITEM handler replies with { ok: true }, not the
+    // saved item — register the locally-built (now-complete) item instead of
+    // trusting that reply's shape.
+    await chrome.runtime.sendMessage({ type: 'SAVE_ITEM', payload: item })
+    registerSavedItem(item)
   } catch {
     // sendMessage failure — extension reloaded or no background
   }
