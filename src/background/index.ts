@@ -607,17 +607,35 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
     }
 
     chrome.tts.stop()
-    if (settings.readAloud?.voice) {
-      chrome.tts.speak(item.text, {
-        pitch: settings.readAloud.pitch,
-        rate: settings.readAloud.speed,
-        voiceName: settings.readAloud.voice,
-        volume: settings.readAloud.volume,
-        onEvent: onAnswerSpoken,
-      })
-    } else {
-      chrome.tts.speak(item.text, { onEvent: onAnswerSpoken })
-    }
+    // `item.sourceLang` was never passed here before — every card was spoken
+    // with whichever voice happened to be configured as the global default
+    // (or the system default, with no language hint at all), so a card in any
+    // other language either came out in the wrong accent or, when that
+    // voice's engine can't render the script at all (Latin-only engine given
+    // Chinese text), produced no audio and no error. Resolve per-item like
+    // every other speak path does (D14/D17).
+    const answerVoice = await resolveVoiceForSettings(settings.readAloud, item.sourceLang)
+    chrome.tts.speak(item.text, {
+      pitch: settings.readAloud.pitch,
+      rate: settings.readAloud.speed,
+      lang: item.sourceLang,
+      voiceName: answerVoice,
+      volume: settings.readAloud.volume,
+      onEvent: onAnswerSpoken,
+    }, () => {
+      // Same silent-failure gap fixed elsewhere (SPEAK_TEXT, StudyUI's
+      // speakText, Library's playAudio): a forced lang/voiceName matching no
+      // installed voice makes chrome.tts refuse to start at all. Retry once
+      // unconstrained so the card is still heard, just possibly mispronounced.
+      if (chrome.runtime.lastError) {
+        chrome.tts.speak(item.text, {
+          pitch: settings.readAloud.pitch,
+          rate: settings.readAloud.speed,
+          volume: settings.readAloud.volume,
+          onEvent: onAnswerSpoken,
+        })
+      }
+    })
 
     chrome.notifications.create(`srs-a-${item.id}`, {
       type: 'basic',
@@ -1847,24 +1865,43 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
 
       const resolvedVoice = await resolveVoiceForSettings(settings.readAloud, lang)
       const token = activeSession?.token
-      chrome.tts.speak(text, {
+      const onDone = (event: chrome.tts.TtsEvent) => {
+        if (['end', 'interrupted', 'cancelled', 'error'].includes(event.type)) {
+          if (wasReading && activeSession && token === activeSession.token) {
+            activeSession.state = 'playing'
+            activeSession.suppressStopUntil = Date.now() + 500
+            void broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
+            void speakCurrentSentence(token)
+          }
+        }
+      }
+      const trySpeak = (opts: chrome.tts.SpeakOptions) => new Promise<boolean>(resolve => {
+        chrome.tts.speak(text, opts, () => resolve(!chrome.runtime.lastError))
+      })
+
+      const started = await trySpeak({
         enqueue: false,
         pitch: settings.readAloud.pitch,
         rate: settings.readAloud.speed,
         lang,
         voiceName: resolvedVoice,
         volume: settings.readAloud.volume,
-        onEvent: (event: chrome.tts.TtsEvent) => {
-          if (['end', 'interrupted', 'cancelled', 'error'].includes(event.type)) {
-            if (wasReading && activeSession && token === activeSession.token) {
-              activeSession.state = 'playing'
-              activeSession.suppressStopUntil = Date.now() + 500
-              void broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
-              void speakCurrentSentence(token)
-            }
-          }
-        }
+        onEvent: onDone,
       })
+      // A forced lang/voiceName that matches no installed voice makes chrome.tts
+      // refuse to start at all — no event ever fires, so the popover's speak
+      // button just sits there silent instead of erroring. Retry once fully
+      // unconstrained (the same as never specifying lang/voice), so at worst the
+      // learner hears the wrong accent instead of nothing.
+      if (!started) {
+        await trySpeak({
+          enqueue: false,
+          pitch: settings.readAloud.pitch,
+          rate: settings.readAloud.speed,
+          volume: settings.readAloud.volume,
+          onEvent: onDone,
+        })
+      }
       return { ok: true }
     }
     case 'GET_READ_ALOUD_STATE': {
