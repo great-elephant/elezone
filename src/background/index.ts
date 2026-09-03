@@ -735,6 +735,25 @@ chrome.tabs.onRemoved.addListener(tabId => {
   }
 })
 
+// A full top-frame navigation (F5 reload, typing a new URL, following a link)
+// tears down and re-creates the content script, but that content script never
+// gets a chance to send an explicit `stop()` — its in-memory state just
+// vanishes. The background's `activeSession`/`readAloudStateByTab` live
+// independently of the page, so without this, chrome.tts keeps speaking the
+// old page's sentences and the popup keeps showing "Reading…" against a tab
+// that no longer has any read-aloud UI to control it. `onBeforeNavigate` (not
+// `onHistoryStateUpdated`, which fires for SPA pushState and must NOT stop an
+// in-progress session) is the earliest reliable signal a real navigation is
+// about to replace the document.
+chrome.webNavigation.onBeforeNavigate.addListener(details => {
+  if (details.frameId !== 0) return
+  if (activeSession?.tabId === details.tabId) {
+    void stopActiveSession()
+  } else if ((readAloudStateByTab.get(details.tabId) ?? 'idle') !== 'idle') {
+    void broadcastReadAloudState(details.tabId, 'idle')
+  }
+})
+
 function hexToRgb(hex: string): [number, number, number] | null {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex)
   if (!m) return null
