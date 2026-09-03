@@ -483,6 +483,21 @@ export function colorHex(color: string): string {
 }
 
 /**
+ * Which deck a save popover should preselect before the learner picks one
+ * themselves: the deck they saved into last time (`lastBookmarkColor`), or —
+ * before there's a "last time" to go on (a fresh install, or sync just wiped
+ * it) — the top entry of their own reordered deck list, or the built-in
+ * preset order if they've never reordered at all.
+ */
+export function resolveDefaultDeckColor(
+  settings: Pick<Settings, 'lastBookmarkColor' | 'deckOrder'> | null | undefined,
+): string {
+  return settings?.lastBookmarkColor
+    || settings?.deckOrder?.[0]
+    || Object.keys(BOOKMARK_COLORS)[0]
+}
+
+/**
  * Reserved sentinel color for the "Uncategorized" bucket — not a real preset
  * or user-chosen deck. Items land here (via `deckOrder`/item.color reassignment)
  * when their deck is deleted; it can't be renamed and has no `deckLabels`

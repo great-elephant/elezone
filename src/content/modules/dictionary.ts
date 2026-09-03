@@ -1,9 +1,9 @@
 import { translate } from './translation'
 import { getSelectionContext, applyHighlight, pulseHighlight, selectionTextExcludingIpa } from './anchor'
-import { BookmarkColor, BOOKMARK_COLORS, colorHex, UNCATEGORIZED_COLOR } from '../../shared/types'
-import type { SavedItem } from '../../shared/types'
+import { BookmarkColor, BOOKMARK_COLORS, colorHex, resolveDefaultDeckColor, UNCATEGORIZED_COLOR } from '../../shared/types'
+import type { SavedItem, Settings } from '../../shared/types'
 import type { ContextTranslateResult } from '../../background/aiTranslate'
-import { segmentWords, detectContentLangSync } from './segmentation'
+import { segmentWords, detectContentLangAsync } from './segmentation'
 
 let host: HTMLElement | null = null
 let shadow: ShadowRoot | null = null
@@ -396,10 +396,13 @@ export async function showPopoverFromSelection(selectedText?: string, color: str
 
   const word = selectedText ? selectedText.trim() : selectionTextExcludingIpa(sel).trim()
   if (!word) return
+  // Resolved once here (not a `lang` attribute — see detectContentLangAsync)
+  // and passed into getSelectionContext below so it isn't detected twice for
+  // the same text.
+  const wordLang = await detectContentLangAsync(word)
   // Counted with the segmenter, not by spaces: Chinese writes no spaces, so a
   // whole paragraph of it counted as one "word" and sailed straight past this.
-  // Language comes from the text itself — `getSelectionContext` runs below.
-  if (segmentWords(word, detectContentLangSync(word) ?? 'en').length > 10) {
+  if (segmentWords(word, wordLang ?? 'en').length > 10) {
     // Right-click "Save" can still reach here with a long selection (the chip
     // guards this earlier). Show a brief hint instead of failing silently.
     showToast('Selection too long — pick a shorter phrase.')
@@ -409,7 +412,7 @@ export async function showPopoverFromSelection(selectedText?: string, color: str
   const range = sel.getRangeAt(0)
   const rect = range.getBoundingClientRect()
 
-  const context = getSelectionContext(word)
+  const context = await getSelectionContext(word, wordLang)
   showPopover(word, rect, color, context)
 }
 
@@ -837,9 +840,9 @@ export async function showDictionaryPopoverForWord(
   const rect = new DOMRect(window.innerWidth / 2 - 125, window.innerHeight * 0.65, 250, 0)
 
   // Words from a film have no selection colour to inherit, so carry over the
-  // deck used last time instead of always dropping them in yellow.
-  const stored = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).catch(() => null)
-  const color: string = stored?.lastBookmarkColor ?? 'yellow'
+  // deck used last time instead of always dropping them in the same fixed one.
+  const stored = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).catch(() => null) as Settings | null
+  const color = resolveDefaultDeckColor(stored)
 
   // Split the subtitle line around the word, so the popover gets the same
   // prefix/suffix a page selection would — that is what drives the

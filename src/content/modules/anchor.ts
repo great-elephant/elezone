@@ -1,7 +1,7 @@
 import { SavedItem } from '../../shared/types'
 import { updateReadingOverlays, hideReadingOverlays } from './readAloudOverlay'
 import { IPA_SELECTOR, WRAP_CLASS } from './readAloudPhonetics'
-import { detectContentLangSync, segmentWords } from './segmentation'
+import { detectContentLangAsync, segmentWords } from './segmentation'
 
 // ── window.find() helper ─────────────────────────────────────────────────────
 
@@ -53,12 +53,12 @@ const bookmarkRanges = new Map<string, Range>()
  * before the actual selection position — this is the occurrence index
  * needed to re-locate the highlight on future page visits.
  */
-export function getSelectionContext(searchString?: string): {
+export async function getSelectionContext(searchString?: string, knownLang?: string): Promise<{
   prefix: string
   suffix: string
   occurrenceIndex: number
   sourceLang?: string
-} | null {
+} | null> {
   const sel = window.getSelection()
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
 
@@ -88,26 +88,15 @@ export function getSelectionContext(searchString?: string): {
   // Use a TreeWalker to extract exactly the surrounding text from the DOM.
   // This guarantees we get the context for the exact occurrence the user highlighted,
   // bypassing innerText/indexOf drifting issues.
-  
-  let sourceLang: string | undefined = undefined
-  let langNode: Node | null = currentRange.startContainer
-  while (langNode && langNode !== document.body) {
-    if (langNode.nodeType === Node.ELEMENT_NODE) {
-      const l = (langNode as Element).getAttribute('lang')
-      if (l) {
-        sourceLang = l
-        break
-      }
-    }
-    langNode = langNode.parentNode
-  }
 
-  // The walk above stops before <body>, so it never reads <html lang> — on a
-  // page whose only declaration lives there (most of them), sourceLang came
-  // back undefined and the background had to fall back to a global "language
-  // being learnt" setting to decide whether the word was English. Resolving it
-  // here instead keeps that decision with the only code that can see the page.
-  if (!sourceLang) sourceLang = detectContentLangSync(text)
+  // Judged from the text itself, not a `lang` attribute on the page or one of
+  // its ancestors — that describes what the page *claims*, which is wrong
+  // exactly when it matters most (an article in one language quoting a
+  // sentence in another, or an unrelated `lang` on some nearby nav chrome
+  // that happens to be the nearest ancestor with one at all). `knownLang`
+  // lets a caller that already resolved this for the same text (dictionary.ts
+  // runs its own length-guard detection first) skip the round trip.
+  const sourceLang = knownLang ?? await detectContentLangAsync(text)
 
   // Find the closest block container
   let block: HTMLElement = document.body

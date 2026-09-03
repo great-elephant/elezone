@@ -38,20 +38,54 @@ export function segmentWords(text: string, lang: string): string[] {
 }
 
 /**
- * The language of a piece of on-page text, resolved synchronously.
+ * Cheap synchronous fallback for when `detectContentLangAsync`'s real
+ * detector is unavailable or too unsure to answer — chrome.i18n.detectLanguage
+ * needs a certain amount of text to build a reliable statistical signal, so a
+ * short selection ("半天", two characters) routinely comes back unreliable.
  *
- * Callers pass text they already hold (a selection, a subtitle line). Used
- * where an async `chrome.i18n.detectLanguage` round trip would be wrong: the
- * dictionary popup needs a language *before* it decides whether to spend a
- * dictionaryapi.dev lookup on the word.
- *
- * `<html lang>` is trusted ahead of the script test on purpose — Japanese also
- * writes Han characters, so a page that declares itself is a better witness
- * than the characters are. The script test is the last resort, for pages that
- * declare nothing at all.
+ * Han characters in `text` are trusted ahead of `<html lang>` on purpose, not
+ * the other way around: `<html lang>` describes the whole page (or, worse,
+ * some unrelated element found on the way to it — see
+ * detectContentLangAsync's own comment), which is exactly wrong for a short
+ * foreign-language selection sitting inside a page mostly written in some
+ * other language — an English article's blog quoting a Chinese sentence, for
+ * one. The one exception is a page that specifically declares itself
+ * Japanese, which also writes Han (Kanji) — bare Kanji looks identical in
+ * both scripts, so that claim is worth more than the characters alone.
  */
 export function detectContentLangSync(text: string): string | undefined {
   const htmlLang = document.documentElement.lang?.split('-')[0]?.trim()
-  if (htmlLang) return htmlLang
-  return hasCjk(text) ? 'zh' : undefined
+  if (hasCjk(text)) return htmlLang?.toLowerCase() === 'ja' ? htmlLang : 'zh'
+  return htmlLang || undefined
+}
+
+/**
+ * The language of `text`, judged from the text itself via `chrome.i18n.
+ * detectLanguage` (not exposed to content scripts — proxied through the
+ * background, same DETECT_CONTENT_LANGUAGE call Video Mode uses once per
+ * session and Read Aloud uses to correct its own initial guess).
+ *
+ * This is the trustworthy version: an `<html lang>`/ancestor `lang` attribute
+ * describes what a page *claims*, which is wrong exactly when it matters most
+ * — a page (or an ancestor element on it) declaring one language while the
+ * selected passage is actually written in another, e.g. an English article
+ * quoting a Chinese sentence with no markup of its own, or an unrelated
+ * `lang="en-GB"` on some nearby nav chrome that happens to be the nearest
+ * ancestor. Falls back to the cheap sync heuristic only when the detector is
+ * unavailable or unsure (e.g. a selection too short to carry a statistical
+ * signal) — never to an attribute that might describe something else on the
+ * page.
+ */
+export async function detectContentLangAsync(text: string): Promise<string | undefined> {
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: 'DETECT_CONTENT_LANGUAGE',
+      payload: { text },
+    }) as { lang?: string } | undefined
+    if (res?.lang) return res.lang
+  } catch {
+    // Message channel unavailable (service worker recycled mid-flight) — fall
+    // through to the sync heuristic below.
+  }
+  return detectContentLangSync(text)
 }

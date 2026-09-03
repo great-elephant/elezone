@@ -515,7 +515,7 @@ async function handleMessage(msg: { type: string; payload?: unknown }): Promise<
 
     case 'GET_SELECTION_CONTEXT': {
       const { searchString } = (msg.payload || {}) as { searchString?: string }
-      return getSelectionContext(searchString)
+      return await getSelectionContext(searchString)
     }
 
     case 'HIGHLIGHT_BOOKMARK':

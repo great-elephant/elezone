@@ -1,10 +1,7 @@
 import { showPopoverFromSelection } from './dictionary'
-import { Settings, BookmarkColor } from '../../shared/types'
+import { Settings, resolveDefaultDeckColor } from '../../shared/types'
 import { selectionTextExcludingIpa } from './anchor'
-import { segmentWords, detectContentLangSync } from './segmentation'
-
-// The default color the extension uses for a quick save.
-const DEFAULT_COLOR: BookmarkColor = 'red'
+import { segmentWords, detectContentLangAsync } from './segmentation'
 
 let chipHost: HTMLElement | null = null
 let chipShadow: ShadowRoot | null = null
@@ -101,8 +98,9 @@ function removeChip() {
 // Mirror the dictionary guard: reasonable-length, non-empty selection only.
 // Segmented rather than split on spaces, for the same reason as there — Chinese
 // has none, so every selection used to count as a single word.
-function isSavableWord(word: string): boolean {
-  return !!word && segmentWords(word, detectContentLangSync(word) ?? 'en').length <= 10
+async function isSavableWord(word: string): Promise<boolean> {
+  if (!word) return false
+  return segmentWords(word, (await detectContentLangAsync(word)) ?? 'en').length <= 10
 }
 
 // Skip editable fields and the extension's own popover so we don't fight them.
@@ -167,7 +165,10 @@ function showChip(rect: DOMRect) {
     e.stopPropagation()
     const text = pendingText
     removeChip()
-    showPopoverFromSelection(text, DEFAULT_COLOR)
+    void (async () => {
+      const settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }).catch(() => null) as Settings | null
+      showPopoverFromSelection(text, resolveDefaultDeckColor(settings))
+    })()
   })
 
   chipShadow.append(style, chip)
@@ -192,14 +193,18 @@ function handleMouseUp(e: MouseEvent) {
   if (chipHost && chipHost.contains(e.target as Node)) return
 
   // Defer so the selection is finalized after mouseup.
-  setTimeout(() => {
+  setTimeout(async () => {
     const sel = window.getSelection()
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
       removeChip()
       return
     }
     const word = selectionTextExcludingIpa(sel).trim()
-    if (!isSavableWord(word) || isInEditableOrOwn(sel.anchorNode)) {
+    const savable = await isSavableWord(word)
+    // The detector round trip (isSavableWord) can outlive the selection —
+    // the user clicked elsewhere or collapsed it while it was in flight —
+    // so re-check before touching `sel` again.
+    if (!savable || sel.rangeCount === 0 || sel.isCollapsed || isInEditableOrOwn(sel.anchorNode)) {
       removeChip()
       return
     }
