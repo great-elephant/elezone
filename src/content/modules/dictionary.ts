@@ -73,11 +73,35 @@ const DICTIONARY_CSS = `
   .speak-btn:hover {
     opacity: 1;
   }
+  .context-hint-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+  }
+  .context-hint-icon {
+    flex-shrink: 0;
+    font-size: 0.82em;
+    line-height: 1.4;
+  }
   .context-hint {
     font-size: 0.82em;
     color: #6688aa;
     font-style: italic;
     line-height: 1.4;
+    flex: 1;
+    min-width: 0;
+    border-radius: 4px;
+    padding: 2px 4px;
+    margin: -2px -4px;
+    cursor: text;
+  }
+  .context-hint:hover {
+    background: #16162a;
+  }
+  .context-hint:focus {
+    outline: none;
+    background: #111122;
+    box-shadow: 0 0 0 1px #3a3a6a;
   }
   .translation-input {
     background: #111122;
@@ -424,6 +448,11 @@ async function showPopover(
 ) {
   hidePopover()
 
+  // Set below, only when a sentence translation exists to show — read back at
+  // save time, so an edit the learner made in the context hint is what gets
+  // persisted, not the original machine translation.
+  let sentenceTranslationEl: HTMLDivElement | null = null
+
   host = document.createElement('div')
   host.className = 'cxt-dict-host'
   shadow = host.attachShadow({ mode: 'open' })
@@ -561,12 +590,24 @@ async function showPopover(
     phonetics.textContent = wordResult.phonetics
   }
 
-  // Context hint — shown above the input when a sentence translation is available
+  // Context hint — shown above the input when a sentence translation is
+  // available. Editable (contenteditable, not a plain text node) so the
+  // learner can fix a bad machine translation before it's saved; the 💬 icon
+  // sits outside the editable area so it can't be typed over or accidentally
+  // deleted along with the text.
   if (sentenceResult?.text) {
-    const hint = document.createElement('div')
-    hint.className = 'context-hint'
-    hint.textContent = `💬 ${sentenceResult.text}`
-    content.append(hint)
+    const hintRow = document.createElement('div')
+    hintRow.className = 'context-hint-row'
+    const hintIcon = document.createElement('span')
+    hintIcon.className = 'context-hint-icon'
+    hintIcon.textContent = '💬'
+    sentenceTranslationEl = document.createElement('div')
+    sentenceTranslationEl.className = 'context-hint'
+    sentenceTranslationEl.contentEditable = 'true'
+    sentenceTranslationEl.spellcheck = false
+    sentenceTranslationEl.textContent = sentenceResult.text
+    hintRow.append(hintIcon, sentenceTranslationEl)
+    content.append(hintRow)
   }
 
   const input = document.createElement('input')
@@ -687,6 +728,11 @@ async function showPopover(
       prefix: context?.prefix || '',
       suffix: context?.suffix || '',
       occurrenceIndex: context?.occurrenceIndex || 0,
+      // Read back now rather than captured when the hint was first filled in,
+      // so an edit the learner made sticks.
+      ...(sentenceTranslationEl?.textContent?.trim()
+        ? { sentenceTranslation: sentenceTranslationEl.textContent.trim() }
+        : {}),
       // Subtitle lines have no counterpart in the page DOM, so the sentence is
       // stored verbatim instead of being re-derived from prefix/suffix later.
       ...(context?.sourceContext ? { sourceContext: context.sourceContext } : {}),

@@ -36,6 +36,11 @@ export interface SavedItem {
   // Optional Dictionary fields
   phonetics?: string
   translation?: string
+  // Translation of the *sentence* the word was picked from (prefix + text +
+  // suffix, or sourceContext for a subtitle), as shown — and editable — in
+  // the save popover's context hint. Absent when the word was saved with no
+  // surrounding sentence to translate.
+  sentenceTranslation?: string
 
   // SRS fields (SM-2 — kept; StudyUI now schedules with FSRS below, but a
   // card reviewed before this switch keeps its SM-2 history instead of

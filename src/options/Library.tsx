@@ -980,6 +980,9 @@ export default function Library({
                 </button>
               </div>
             )}
+            {word && hasContext && item.sentenceTranslation && (
+              <div style={styles.sentenceTranslation}>{item.sentenceTranslation}</div>
+            )}
             <div style={styles.rowActions}>
               <span style={styles.date}>{new Date(item.createdAt).toLocaleDateString()}</span>
               <button
@@ -1519,6 +1522,16 @@ const styles: Record<string, React.CSSProperties> = {
   rowExpanded: { padding: '0 14px 12px 48px', display: 'flex', flexDirection: 'column', gap: 10 },
   context: {
     fontSize: 13, color: '#9a9ac0', fontStyle: 'italic', lineHeight: 1.5,
+    borderLeft: '3px solid #2a2a4a', paddingLeft: 10,
+  },
+  // Same muted blue-gray as the popover's own context-hint (dictionary.ts) —
+  // one color consistently means "this is the sentence translation," and it
+  // reads *quieter* than .context's #9a9ac0, not brighter, since the original
+  // sentence is the thing that should draw the eye first. Not italic, unlike
+  // .context, so the two lines stay visually distinct despite sharing the
+  // left border/indent.
+  sentenceTranslation: {
+    fontSize: 13, color: '#6688aa', lineHeight: 1.5,
     borderLeft: '3px solid #2a2a4a', paddingLeft: 10,
   },
   rowActions: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
