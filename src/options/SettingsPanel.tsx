@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Settings, DEFAULT_SETTINGS, PhoneticsSource, PhoneticsSourceSetting } from '../shared/types'
+import { speak, stopSpeaking } from '../shared/speak'
 import { RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
 import {
   DndContext,
@@ -103,8 +104,8 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
     onChange(next)
   }
 
-  function testVoice(langCode?: string, voiceName?: string) {
-    chrome.tts.stop()
+  async function testVoice(langCode?: string, voiceName?: string) {
+    stopSpeaking()
     const testId = langCode || 'default'
     if (testingVoice !== null) {
       setTestingVoice(null)
@@ -114,22 +115,13 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
     setTestingVoice(testId)
     const text = (langCode && TEST_TEXTS[langCode]) || TEST_TEXTS.en
 
-    chrome.tts.speak(text, {
-      onEvent: event => {
-        if (event.type === 'end' || event.type === 'interrupted' || event.type === 'cancelled' || event.type === 'error') {
-          setTestingVoice(prev => prev === testId ? null : prev)
-        }
-      },
-      pitch: settings.readAloud.pitch,
-      rate: settings.readAloud.speed,
+    // The only caller that pins a voice: this is auditioning a row of the
+    // language-voice table, which may not be the configured voice at all.
+    await speak(text, {
       lang: langCode,
       voiceName: voiceName || settings.readAloud.voice || undefined,
-      volume: settings.readAloud.volume,
-    }, () => {
-      if (chrome.runtime.lastError) {
-        setTestingVoice(null)
-      }
     })
+    setTestingVoice(prev => prev === testId ? null : prev)
   }
 
   function handlePhoneticsDragEnd(event: DragEndEvent) {

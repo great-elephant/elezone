@@ -1,4 +1,5 @@
 import { SavedItem, Settings, BookmarkColor, StudyMode, colorHex, UNCATEGORIZED_COLOR } from '../shared/types'
+import { speak, stopSpeaking } from '../shared/speak'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -395,28 +396,18 @@ export default function Library({
   // Stop rather than restarting the same audio from the top.
   const [speakingKey, setSpeakingKey] = useState<string | null>(null)
 
-  function playAudio(key: string, text: string, lang?: string) {
+  async function playAudio(key: string, text: string, lang?: string) {
     if (speakingKey === key) {
-      chrome.tts.stop()
+      stopSpeaking()
       setSpeakingKey(null)
       return
     }
-    if (!settings?.readAloud) return
-    const r = settings.readAloud
-    chrome.tts.stop()
-    const onEvent = (event: chrome.tts.TtsEvent) => {
-      if (event.type === 'end' || event.type === 'interrupted' || event.type === 'cancelled' || event.type === 'error') {
-        setSpeakingKey(k => (k === key ? null : k))
-      }
-    }
+    stopSpeaking()
     setSpeakingKey(key)
-    if (lang && r.languageVoices?.[lang]) {
-      chrome.tts.speak(text, { pitch: r.pitch, rate: r.speed, lang, voiceName: r.languageVoices[lang], volume: r.volume, onEvent })
-    } else if (r.voice) {
-      chrome.tts.speak(text, { pitch: r.pitch, rate: r.speed, lang, voiceName: r.voice || undefined, volume: r.volume, onEvent })
-    } else {
-      chrome.tts.speak(text, { lang, onEvent })
-    }
+    await speak(text, { lang })
+    // Guarded because a second button may have taken over while this one was
+    // still speaking — its own click already moved the indicator.
+    setSpeakingKey(k => (k === key ? null : k))
   }
 
   function startStudySession(itemsToStudy: SavedItem[]) {

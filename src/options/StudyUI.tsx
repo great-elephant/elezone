@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { SavedItem, Settings, StudyMode, colorHex } from '../shared/types'
+import { speak } from '../shared/speak'
 import { updateFsrsMetrics, previewFsrsDue, Rating, type Grade } from '../shared/library'
 
 interface StudyUIProps {
@@ -161,19 +162,9 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   }
 
   function speakText(text: string, lang?: string) {
-    chrome.tts.stop()
-    if (settings?.readAloud) {
-      const r = settings.readAloud
-      chrome.tts.speak(text, {
-        pitch: r.pitch,
-        rate: r.speed,
-        lang,
-        voiceName: (lang && r.languageVoices?.[lang]) || r.voice || undefined,
-        volume: r.volume
-      })
-    } else {
-      chrome.tts.speak(text, { lang })
-    }
+    // Fire and forget: nothing here shows a "speaking" indicator, and the
+    // background interrupts whatever was mid-utterance anyway.
+    void speak(text, { lang })
   }
 
   function generateMcOptions(item: SavedItem, allItems: SavedItem[]) {

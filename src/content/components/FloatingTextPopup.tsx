@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { translate } from '../modules/translation';
 import { Settings } from '../../shared/types';
+import { speak, stopSpeaking } from '../../shared/speak';
 
 type Props = {
   text: string;
@@ -56,7 +57,9 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
   const translatedRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef({ x: 0, y: 0 });
   const translateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pausedMiniPlayerRef = useRef(false);
+  // Whether *this popup* is the thing currently speaking. Read on unmount,
+  // where a bare stop would also kill an unrelated page read-aloud session.
+  const speakingRef = useRef(false);
   // Guards against out-of-order responses: if the text changes again (new edit,
   // or Retry) before an in-flight translate() resolves, a later request's result
   // could otherwise be overwritten by an earlier, slower one finishing after it.
@@ -173,103 +176,37 @@ export const FloatingTextPopup: React.FC<Props> = ({ text, isLoading, progress, 
     };
   }, []);
 
-  // NOTE (D17): This uses window.speechSynthesis directly instead of routing
-  // through chrome.tts to avoid conflicts with the mini-player's backend
-  // session (both APIs share the same underlying TTS engine slot on Chromium).
-  // To prevent interruption: pause the mini-player before speaking, resume when
-  // the OCR utterance completes, using the background's CONTROL_READ_ALOUD pause/resume
-  // actions. To keep voice/speed consistent we resolve rate/pitch/volume/voice
-  // from settings.readAloud (mirroring the background resolver).
+  // Speaks through the background like every other one-off utterance, rather
+  // than driving window.speechSynthesis here (D17). That was originally done to
+  // keep out of the mini-player's way, at the cost of a hand-rolled copy of the
+  // voice resolver and a CONTROL_READ_ALOUD pause/resume dance repeated across
+  // four branches — which still leaked a permanently-paused mini-player when the
+  // popup unmounted mid-utterance. The background does both, once.
   const handleReadAloud = async () => {
     if (isPlaying) {
-      window.speechSynthesis.cancel();
+      speakingRef.current = false;
+      stopSpeaking();
       setIsPlaying(false);
-      // Resume mini-player if it was playing when we started OCR speech
-      if (pausedMiniPlayerRef.current) {
-        chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
-        pausedMiniPlayerRef.current = false
-      }
       return;
     }
 
     const currentText = textRef.current?.innerText || textRef.current?.textContent || text;
     if (!currentText) return;
 
-    try {
-      // Pause mini-player before speaking OCR text, and remember if it was playing
-      const pauseResult = await chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'pause' } })
-      pausedMiniPlayerRef.current = pauseResult?.wasPlaying === true
-
-      const settings: Settings = await chrome.runtime.sendMessage({ type: 'GET_SETTINGS' });
-      const utterance = new SpeechSynthesisUtterance(currentText);
-      utterance.lang = targetLang;
-
-      if (settings?.readAloud) {
-        utterance.rate = settings.readAloud.speed || 1;
-        utterance.pitch = settings.readAloud.pitch || 1;
-        utterance.volume = settings.readAloud.volume || 1;
-
-        let resolvedVoiceName = settings.readAloud.voice || undefined;
-        if (settings.readAloud.languageVoices) {
-          const exactMatch = settings.readAloud.languageVoices[targetLang];
-          if (exactMatch) {
-            resolvedVoiceName = exactMatch;
-          } else {
-            const shortLang = targetLang.split('-')[0];
-            const prefixMatch = Object.entries(settings.readAloud.languageVoices).find(([k]) => k.startsWith(shortLang) || shortLang.startsWith(k));
-            if (prefixMatch) {
-              resolvedVoiceName = prefixMatch[1];
-            }
-          }
-        }
-
-        if (resolvedVoiceName) {
-          const voices = window.speechSynthesis.getVoices();
-          const voice = voices.find(v => v.name === resolvedVoiceName);
-          if (voice) utterance.voice = voice;
-        }
-      }
-      utterance.onend = () => {
-        setIsPlaying(false);
-        // Resume mini-player when OCR speech completes
-        if (pausedMiniPlayerRef.current) {
-          chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
-          pausedMiniPlayerRef.current = false
-        }
-      };
-      utterance.onerror = () => {
-        setIsPlaying(false);
-        // Resume mini-player if OCR speech errors
-        if (pausedMiniPlayerRef.current) {
-          chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
-          pausedMiniPlayerRef.current = false
-        }
-      };
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utterance);
-      setIsPlaying(true);
-    } catch (err) {
-      console.error('Failed to read aloud', err);
-      // Resume mini-player on exception
-      if (pausedMiniPlayerRef.current) {
-        chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
-        pausedMiniPlayerRef.current = false
-      }
-    }
+    speakingRef.current = true;
+    setIsPlaying(true);
+    await speak(currentText, { lang: targetLang });
+    speakingRef.current = false;
+    setIsPlaying(false);
   };
 
   // Closing this popup (or starting a new OCR session, which unmounts and
-  // remounts it) while OCR read-aloud is speaking otherwise leaves the
-  // utterance running with nothing left to stop it, and — worse — leaves the
-  // mini-player paused forever, since resuming it only happens in onend/
-  // onerror/the toggle-off click, none of which fire on unmount.
+  // remounts it) while speaking otherwise leaves the utterance running with
+  // nothing left to stop it. Stopping is also what fires the 'interrupted'
+  // event the background resumes a paused mini-player on.
   useEffect(() => {
     return () => {
-      window.speechSynthesis.cancel();
-      if (pausedMiniPlayerRef.current) {
-        chrome.runtime.sendMessage({ type: 'CONTROL_READ_ALOUD', payload: { action: 'resume' } }).catch(() => { })
-        pausedMiniPlayerRef.current = false;
-      }
+      if (speakingRef.current) stopSpeaking();
     };
   }, []);
 

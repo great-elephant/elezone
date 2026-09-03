@@ -1909,14 +1909,23 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       return { voices: mapped }
     }
     case 'SPEAK_TEXT': {
-      // Speak arbitrary text via chrome.tts using the same readAloud settings +
-      // resolved voice as the page reader (D17). Used by the OCR popup and
-      // dictionary so voice/speed matches the page read-aloud. If a mini-player
-      // session is active, pauses it, speaks the text, then resumes automatically
-      // when the utterance completes.
-      const payload = msg.payload as { text: string, lang?: string } | string
+      // The one place anything in this extension speaks a one-off utterance.
+      // Every caller — the dictionary popover, the OCR popup, the library, the
+      // study screen and the settings page's voice audition — comes through
+      // here, so voice resolution, the audio keepalive, the no-such-voice retry
+      // and mini-player pause/resume exist once instead of being reimplemented
+      // (and drifting) at each call site (D17). Only the page reader's own
+      // session speaks elsewhere, via speakCurrentSentence.
+      //
+      // Resolves when the utterance *finishes*, not when it starts: a caller
+      // outside the background cannot receive tts events, so awaiting this is
+      // how it knows to clear its own "speaking" indicator.
+      const payload = msg.payload as { text: string, lang?: string, voiceName?: string } | string
       const text = typeof payload === 'string' ? payload : payload.text
       const lang = typeof payload === 'string' ? undefined : payload.lang
+      // An explicit voice overrides the configured one, so the settings page can
+      // audition a voice the user hasn't committed to yet.
+      const forcedVoice = typeof payload === 'string' ? undefined : payload.voiceName
       if (!text) return { ok: false }
 
       const settings = await getSettings()
@@ -1931,16 +1940,22 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
         }
       }
 
-      const resolvedVoice = await resolveVoiceForSettings(settings.readAloud, lang)
+      const resolvedVoice = forcedVoice ?? await resolveVoiceForSettings(settings.readAloud, lang)
       const token = activeSession?.token
+      const resumeSession = () => {
+        if (wasReading && activeSession && token === activeSession.token) {
+          activeSession.state = 'playing'
+          activeSession.suppressStopUntil = Date.now() + 500
+          void broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
+          void speakCurrentSentence(token)
+        }
+      }
+      let markFinished: () => void = () => { }
+      const finished = new Promise<void>(resolve => { markFinished = resolve })
       const onDone = (event: chrome.tts.TtsEvent) => {
         if (['end', 'interrupted', 'cancelled', 'error'].includes(event.type)) {
-          if (wasReading && activeSession && token === activeSession.token) {
-            activeSession.state = 'playing'
-            activeSession.suppressStopUntil = Date.now() + 500
-            void broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
-            void speakCurrentSentence(token)
-          }
+          markFinished()
+          resumeSession()
         }
       }
       const trySpeak = (opts: chrome.tts.SpeakOptions) => new Promise<boolean>(resolve => {
@@ -1963,14 +1978,30 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       // unconstrained (the same as never specifying lang/voice), so at worst the
       // learner hears the wrong accent instead of nothing.
       if (!started) {
-        await trySpeak({
+        const retried = await trySpeak({
           enqueue: false,
           pitch: settings.readAloud.pitch,
           rate: settings.readAloud.speed,
           volume: settings.readAloud.volume,
           onEvent: onDone,
         })
+        if (!retried) {
+          // Nothing is speaking, so no event will ever arrive to unpause the
+          // session — do it here rather than leaving the mini-player stuck
+          // paused for good.
+          resumeSession()
+          return { ok: false }
+        }
       }
+      await finished
+      return { ok: true }
+    }
+    case 'STOP_SPEAKING': {
+      // Toggle-off for the one-off utterances above. A read-aloud session has
+      // its own stop (CONTROL_READ_ALOUD); this ends whatever single utterance
+      // is currently speaking, and the resulting 'interrupted' event is what
+      // resumes a mini-player that SPEAK_TEXT had paused.
+      chrome.tts.stop()
       return { ok: true }
     }
     case 'GET_READ_ALOUD_STATE': {
