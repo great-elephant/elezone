@@ -107,7 +107,9 @@ export interface ReadAloudSettings {
   // expected, so a Bluetooth earbud that powers its amplifier down between
   // playbacks never gets the chance to. See `startAudioKeepalive` in
   // `src/offscreen/index.ts` for the measurements behind this.
-  // Undefined is treated as ON (see DEFAULT_SETTINGS), not as off.
+  // Off unless asked for, here and in DEFAULT_SETTINGS: only some earbuds have
+  // the fault, and on everything else it just costs battery and delays the
+  // first sentence.
   audioKeepalive?: boolean
 }
 
@@ -405,7 +407,7 @@ export const DEFAULT_SETTINGS: Settings = {
     volume: 1,
     focus: false,
     showPhonetics: false,
-    audioKeepalive: true,
+    audioKeepalive: false,
   },
   translation: {
     defaultTargetLanguage: 'vi',

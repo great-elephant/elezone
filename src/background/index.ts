@@ -80,7 +80,7 @@ let keepaliveArmedAt = 0
 let keepaliveRunningSince = 0
 
 async function holdAudioAwake(settings: ReadAloudSettings): Promise<void> {
-  if (settings.audioKeepalive === false) return
+  if (!settings.audioKeepalive) return
   try {
     await setupOffscreenDocument('src/offscreen/index.html')
     const running = keepaliveArmedAt !== 0 && Date.now() - keepaliveArmedAt < KEEPALIVE_TTL_MS

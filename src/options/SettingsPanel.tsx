@@ -432,6 +432,23 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
             style={styles.range}
             onChange={e => set('readAloud', 'volume', parseFloat(e.target.value))} />
         </Field>
+
+        <Field label="Keep the audio device awake">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <input
+              type="checkbox"
+              checked={ra.audioKeepalive ?? false}
+              onChange={e => set('readAloud', 'audioKeepalive', e.target.checked)}
+              style={{ width: 18, height: 18, accentColor: '#4f6ef7' }}
+            />
+            <span style={{ fontSize: 13, color: '#e0e0e0' }}>
+              Turn this on if your Bluetooth earbuds cut off the first word of a sentence.
+              It holds a silent tone on the output so they never power their amplifier down.
+              Off by default: only some earbuds do this, and elsewhere it just costs a little
+              battery and delays the first sentence slightly.
+            </span>
+          </div>
+        </Field>
       </CollapsibleSection>
 
       <div ref={focusBreatheRef}>
