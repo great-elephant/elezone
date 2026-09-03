@@ -49,6 +49,70 @@ async function setupOffscreenDocument(path: string) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Bluetooth audio keepalive
+//
+// A Bluetooth earbud that powers its amplifier down between playbacks swallows
+// the first few hundred milliseconds of the next one — the whole first word of
+// a sentence. The offscreen document holds an inaudible tone to stop that from
+// ever happening; see `startAudioKeepalive` there for the measurements and for
+// why the obvious cheaper tricks (a one-shot beep, a near-silent priming
+// utterance) do not work.
+//
+// Every speak path goes through `holdAudioAwake()` so no call site can forget.
+
+// How long the offscreen document keeps the tone running on its own. Read Aloud
+// speaks again within seconds — the next sentence, or a shadowing repeat — and
+// dropping the tone in the gaps would re-arm the very wake-up this prevents.
+// Also the deadline that stops a tone outliving a killed service worker.
+const KEEPALIVE_TTL_MS = 30_000
+
+// The tone has to be playing *before* speech starts, or the amplifier wakes up
+// during the first word exactly as it did without it. Only the first utterance
+// after a cold start pays this; once the tone is up, later speaks wait 0 ms.
+const KEEPALIVE_WARMUP_MS = 400
+
+// When the tone was last armed, and when it last started from cold. They are
+// tracked separately so a long reading session doesn't pay the warmup wait
+// again every time the arm timestamp drifts past some threshold: the tone is
+// still running, so there is nothing to wait for.
+let keepaliveArmedAt = 0
+let keepaliveRunningSince = 0
+
+async function holdAudioAwake(settings: ReadAloudSettings): Promise<void> {
+  if (settings.audioKeepalive === false) return
+  try {
+    await setupOffscreenDocument('src/offscreen/index.html')
+    const running = keepaliveArmedAt !== 0 && Date.now() - keepaliveArmedAt < KEEPALIVE_TTL_MS
+    if (!running) keepaliveRunningSince = Date.now()
+    keepaliveArmedAt = Date.now()
+    await chrome.runtime.sendMessage({
+      type: 'AUDIO_KEEPALIVE',
+      payload: { on: true, ttlMs: KEEPALIVE_TTL_MS },
+    })
+    const warmedFor = Date.now() - keepaliveRunningSince
+    if (warmedFor < KEEPALIVE_WARMUP_MS) {
+      await new Promise(resolve => setTimeout(resolve, KEEPALIVE_WARMUP_MS - warmedFor))
+    }
+  } catch {
+    // The keepalive is an optimisation. If the offscreen document can't be
+    // reached, speech still has to happen — just with the clipped first word
+    // it had before.
+  }
+}
+
+// Drop the tone as soon as we know no more speech is coming, rather than
+// waiting out the TTL. Safe to call when no keepalive is running.
+function releaseAudioAwake() {
+  keepaliveArmedAt = 0
+  keepaliveRunningSince = 0
+  chrome.runtime
+    .sendMessage({ type: 'AUDIO_KEEPALIVE', payload: { on: false } })
+    .catch(() => {
+      // No offscreen document listening — nothing to stop.
+    })
+}
+
 
 type ActiveReadAloudSession = {
   currentIndex: number
@@ -615,6 +679,7 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
     // Chinese text), produced no audio and no error. Resolve per-item like
     // every other speak path does (D14/D17).
     const answerVoice = await resolveVoiceForSettings(settings.readAloud, item.sourceLang)
+    await holdAudioAwake(settings.readAloud)
     chrome.tts.speak(item.text, {
       pitch: settings.readAloud.pitch,
       rate: settings.readAloud.speed,
@@ -988,6 +1053,7 @@ async function stopActiveSession() {
   clearShadowingGap()
   activeSession = null
   chrome.tts.stop()
+  releaseAudioAwake()
   if (session) {
     await broadcastReadAloudState(session.tabId, 'idle')
   }
@@ -1001,6 +1067,7 @@ async function finishActiveSession() {
   clearShadowingGap()
   activeSession = null
   chrome.tts.stop()
+  releaseAudioAwake()
   if (session) {
     await broadcastReadAloudState(session.tabId, 'idle', session.currentIndex, true)
   }
@@ -1264,6 +1331,7 @@ async function speakCurrentSentence(token: number) {
   // moment after this call before isSpeaking() actually reports true.
   session.speakStartedAt = Date.now()
   await broadcastReadAloudState(session.tabId, 'playing', session.currentIndex)
+  await holdAudioAwake(session.settings)
 
   chrome.tts.speak(session.sentences[session.currentIndex], {
     enqueue: false,
@@ -1879,6 +1947,7 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
         chrome.tts.speak(text, opts, () => resolve(!chrome.runtime.lastError))
       })
 
+      await holdAudioAwake(settings.readAloud)
       const started = await trySpeak({
         enqueue: false,
         pitch: settings.readAloud.pitch,

@@ -103,6 +103,12 @@ export interface ReadAloudSettings {
   // IPA phonetics badge under the word currently being spoken (English pages
   // only). Persisted so the choice sticks across sessions.
   showPhonetics?: boolean
+  // Hold an inaudible tone on the audio output for as long as speech is
+  // expected, so a Bluetooth earbud that powers its amplifier down between
+  // playbacks never gets the chance to. See `startAudioKeepalive` in
+  // `src/offscreen/index.ts` for the measurements behind this.
+  // Undefined is treated as ON (see DEFAULT_SETTINGS), not as off.
+  audioKeepalive?: boolean
 }
 
 // Where a saved word's phonetic transcription comes from. 'dictionaryapi' is a
@@ -399,6 +405,7 @@ export const DEFAULT_SETTINGS: Settings = {
     volume: 1,
     focus: false,
     showPhonetics: false,
+    audioKeepalive: true,
   },
   translation: {
     defaultTargetLanguage: 'vi',
@@ -562,6 +569,7 @@ export type MessageType =
   | 'FORWARD_RECOGNIZE_TEXT'
   | 'RECOGNIZE_TEXT'
   | 'OCR_PROGRESS'
+  | 'AUDIO_KEEPALIVE'
 
 export interface Message {
   type: MessageType

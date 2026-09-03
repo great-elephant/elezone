@@ -19,6 +19,86 @@ let pausedAt = 0;
 // Audio context for chime
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
 
+// ---------------------------------------------------------------------------
+// Bluetooth audio keepalive
+//
+// Some Bluetooth earbuds power their amplifier down when the audio goes quiet,
+// and Windows tears the A2DP stream down shortly after the last render stream
+// closes. Both only come back once audio starts again, and that wake-up eats
+// the first few hundred milliseconds of whatever plays next — which is the
+// whole first word of a read-aloud sentence.
+//
+// This is not a bug in what we synthesise. Capturing the audio Windows hands
+// to the driver (WASAPI loopback) gives a speech span identical to a direct
+// render of the same sentence, to the millisecond, so nothing upstream of the
+// device is dropping anything. It is also earbud-specific: on the same machine
+// and the same build, one pair of earbuds clipped every utterance while
+// another was clean.
+//
+// Holding a continuous tone on the output keeps both the A2DP stream and the
+// earbud's amplifier awake, so the next utterance starts playing instantly.
+// A one-shot beep before speaking does NOT work — the wake-up is paid per
+// playback, not once per session — and neither does a near-silent priming
+// utterance, because an amplifier that gates on signal level ignores it.
+//
+// The tone is deliberately neither silence nor audible. Digital silence is
+// exactly what the earbud gates on (and Chrome may optimise an all-zero stream
+// away), while 30 Hz is below what an earbud driver can usefully reproduce and
+// -30 dBFS leaves it far under the hearing threshold, which at that frequency
+// is around 60 dB SPL.
+const KEEPALIVE_HZ = 30;
+const KEEPALIVE_GAIN = 0.03; // ≈ -30 dBFS
+
+let keepaliveNodes: { osc: OscillatorNode; gain: GainNode } | null = null;
+let keepaliveExpiry: number | null = null;
+
+/**
+ * Start (or extend) the keepalive tone, stopping it automatically `ttlMs` from
+ * now unless something extends it again.
+ *
+ * The TTL is what makes this safe: the background service worker can be killed
+ * at any moment, and without a self-imposed deadline a tone it started would
+ * play in this document forever. Every speak path re-arms it, so the deadline
+ * only ever fires once speech has genuinely stopped.
+ */
+function startAudioKeepalive(ttlMs: number) {
+  if (audioCtx.state === 'suspended') {
+    void audioCtx.resume();
+  }
+  if (!keepaliveNodes) {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = KEEPALIVE_HZ;
+    gain.gain.value = KEEPALIVE_GAIN;
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    keepaliveNodes = { osc, gain };
+  }
+  if (keepaliveExpiry !== null) {
+    clearTimeout(keepaliveExpiry);
+  }
+  keepaliveExpiry = setTimeout(stopAudioKeepalive, ttlMs) as unknown as number;
+}
+
+function stopAudioKeepalive() {
+  if (keepaliveExpiry !== null) {
+    clearTimeout(keepaliveExpiry);
+    keepaliveExpiry = null;
+  }
+  if (!keepaliveNodes) return;
+  const { osc, gain } = keepaliveNodes;
+  keepaliveNodes = null;
+  try {
+    osc.stop();
+  } catch {
+    // Already stopped — the node is single-use, so this is not an error.
+  }
+  osc.disconnect();
+  gain.disconnect();
+}
+
 function playChime() {
   if (audioCtx.state === 'suspended') {
     audioCtx.resume();
@@ -438,6 +518,14 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, sendResponse) => {
   if (msg.type === 'GET_POMODORO_STATE') {
     sendResponse(state);
     return true; // We send response asynchronously (or synchronously here, true is safe)
+  }
+
+  if (msg.type === 'AUDIO_KEEPALIVE') {
+    const cmd = msg.payload as { on: boolean; ttlMs?: number };
+    if (cmd.on) startAudioKeepalive(cmd.ttlMs ?? 30_000);
+    else stopAudioKeepalive();
+    sendResponse({ ok: true });
+    return true;
   }
 
   if (msg.type === 'POMODORO_COMMAND') {
