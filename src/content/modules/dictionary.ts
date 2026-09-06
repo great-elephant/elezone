@@ -582,12 +582,50 @@ async function showPopover(
 
   loading.remove()
 
-  if (wordResult?.phonetics) {
+  // Held in a variable rather than read off `wordResult` at save time, because
+  // the late lookup below can replace it after the popover is already up.
+  let livePhonetics = wordResult?.phonetics || ''
+
+  if (livePhonetics) {
     // Write into this call's own element, not the shared module-level `shadow` —
     // a rapid re-selection can replace the popover (and reassign `shadow`)
     // before this response arrives, which would otherwise write stale data
     // into the NEW popover instead of the one that requested it.
-    phonetics.textContent = wordResult.phonetics
+    phonetics.textContent = livePhonetics
+  }
+
+  // The reading above comes from whichever source answered inside the popup's
+  // short budget (see POPUP_DICT_BUDGET_MS in aiTranslate.ts), which during one
+  // of dictionaryapi.dev's slow spells means Google's — or none at all, since
+  // Google has no romanization to offer for English. Waiting for the real IPA
+  // before showing anything is what made the popup sit on a spinner for twenty
+  // seconds; not waiting at all is what left it blank.
+  //
+  // So: ask again without a deadline, and let the answer land whenever it
+  // lands. The popover is already on screen and usable in the meantime, the
+  // background shares one in-flight request per word so this costs no extra
+  // traffic, and `phonetics` is this call's own element — a late write can't
+  // reach a popover opened since. A word saved before it arrives still keeps
+  // whatever was shown; one saved after keeps the better reading.
+  //
+  // Single words only: this endpoint is per-word, and a multi-word selection
+  // already goes through the phrase path in translateInContext.
+  const wantsLateIpa = !/\s/.test(word)
+    && (context?.sourceLang ?? 'en').toLowerCase().startsWith('en')
+    && (settings?.translation?.phoneticsSourceOrder ?? [])
+      .every((src: { source: string; enabled: boolean }) => src.source !== 'dictionaryapi' || src.enabled)
+  if (wantsLateIpa) {
+    void chrome.runtime
+      .sendMessage({ type: 'FETCH_PHONETICS', payload: { words: [word], priority: 'high' } })
+      .then((res: Record<string, { text: string | null }> | undefined) => {
+        const text = res?.[word.toLowerCase()]?.text
+        if (!text || text === livePhonetics) return
+        livePhonetics = text
+        phonetics.textContent = text
+      })
+      .catch(() => {
+        // Nothing to recover: the popover keeps whatever reading it already has.
+      })
   }
 
   // Context hint — shown above the input when a sentence translation is
@@ -723,7 +761,7 @@ async function showPopover(
       id: crypto.randomUUID(),
       url: window.location.href,
       text: word,
-      phonetics: wordResult?.phonetics || '',
+      phonetics: livePhonetics,
       sourceLang: context?.sourceLang || wordResult?.sourceLang,
       prefix: context?.prefix || '',
       suffix: context?.suffix || '',

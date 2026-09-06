@@ -388,10 +388,47 @@ async function fetchDictionaryApiWordStatus(
   }
 }
 
+// Whether the trailing 's of a possessive can be stripped, and what's left when
+// it is. Pure English morphology — knowable without asking anyone.
+const POSSESSIVE_RE = /^(.+)['’]s?$/i
+
 async function fetchDictionaryApiWordStatusUncached(word: string, priority: 'high' | 'low'): Promise<DictStatus> {
   let value: string | null = null
   let approximate = false
   let definitive = false
+
+  // "immigrant's" is "immigrant" plus a possessive — that much is decided by
+  // the shape of the word, not by anything the dictionary has to tell us. So
+  // the stripped form is looked up alongside the full one from the start,
+  // rather than only after the full one has failed.
+  //
+  // The full word still goes out too, and still wins if it has a reading of its
+  // own: "let's" matches this same pattern but is a contraction with its own
+  // entry (/lɛts/), and "let" would be the wrong answer for it. What changes is
+  // only the cost of the common case — a possessive noun, which dictionaryapi
+  // essentially never carries. Serially, that word paid the full lookup budget
+  // before the strip was even attempted; a slow spell meant a 20-second wait to
+  // reach a reading that was one obvious step away the whole time.
+  //
+  // A hyphenated compound gets the same treatment for the same reason: where
+  // the hyphens fall is visible in the word itself. Measured on "re-evaluate",
+  // which dictionaryapi has nothing usable for while both halves have their own
+  // readings — serially that was ~20s to learn the compound is a dead end plus
+  // another ~20s to look up the halves, when the halves could have been in
+  // flight the whole time.
+  //
+  // Plurals stay serial: unlike these two, a plural genuinely often has its own
+  // entry ("cats" /kæts/), so firing the singular alongside would double the
+  // traffic for words that were going to answer on their own anyway.
+  const possessiveBase = word.match(POSSESSIVE_RE)?.[1]
+  const basePromise = possessiveBase
+    ? fetchDictionaryApiWordStatus(possessiveBase, priority)
+    : null
+
+  const hyphenParts = word.includes('-') ? word.split('-').filter(Boolean) : []
+  const partsPromise = hyphenParts.length > 1
+    ? Promise.all(hyphenParts.map(part => fetchDictionaryApiWordStatus(part, priority)))
+    : null
   // A 429 specifically gets a couple of short-backoff retries — the pacing
   // above should mean this is rare, but a second paragraph's batch starting
   // while the first is still draining can still overlap. Anything else
@@ -463,6 +500,16 @@ async function fetchDictionaryApiWordStatusUncached(word: string, priority: 'hig
   // none of these conditions can still be true of the already-stripped/split
   // result they each recurse on.
   //
+  // The fallbacks run whenever the direct lookup produced no reading — not
+  // only when it produced a definitive "there isn't one". They used to be gated
+  // on `definitive`, which conflated two different questions: may I *try* a
+  // fallback, and may I *remember* what it found. A request that never got an
+  // answer (timeout, 5xx, the 522s dictionaryapi.dev serves while it's
+  // struggling) is exactly when a fallback is most useful, and gating it there
+  // meant "immigrant's" showed nothing at all during a bad spell even though
+  // "immigrant" was sitting one strip-the-'s away. Only the caching below still
+  // depends on `definitive`.
+  //
   // A fallback's *own* recursive lookup can itself come back non-definitive
   // (its own 429 retries exhausted, a timeout under a busy batch...) — that's
   // exactly the "this attempt failed, not proof there's no phonetics" case
@@ -475,25 +522,21 @@ async function fetchDictionaryApiWordStatusUncached(word: string, priority: 'hig
   // So: downgrade `definitive` back to false (skip caching, try again next
   // time this word comes up) whenever a fallback both found no value *and*
   // its own recursive lookup wasn't definitive either.
-  if (definitive && value === null) {
-    const possessiveMatch = word.match(/^(.+)['’]s?$/i)
-    if (possessiveMatch && possessiveMatch[1]) {
-      const base = await fetchDictionaryApiWordStatus(possessiveMatch[1], priority)
-      if (base.value) { value = base.value; approximate = true }
-      else if (!base.definitive) definitive = false
-    }
+  if (value === null && basePromise) {
+    const base = await basePromise
+    if (base.value) { value = base.value; approximate = true }
+    else if (!base.definitive) definitive = false
   }
 
-  if (definitive && value === null && word.includes('-')) {
-    const parts = word.split('-').filter(Boolean)
-    if (parts.length > 1) {
-      const partResults = await Promise.all(parts.map(p => fetchDictionaryApiWordStatus(p, priority)))
-      if (partResults.every(r => r.value)) { value = partResults.map(r => r.value).join(' '); approximate = true }
-      else if (partResults.some(r => !r.definitive)) definitive = false
-    }
+  if (value === null && partsPromise) {
+    const partResults = await partsPromise
+    // Every half or nothing — half a compound transcribed and half not reads as
+    // a bug rather than as a partial answer.
+    if (partResults.every(r => r.value)) { value = partResults.map(r => r.value).join(' '); approximate = true }
+    else if (partResults.some(r => !r.definitive)) definitive = false
   }
 
-  if (definitive && value === null) {
+  if (value === null) {
     const pluralCandidates: string[] = []
     if (word.endsWith('es') && word.length > 3) pluralCandidates.push(word.slice(0, -2))
     if (word.endsWith('s') && word.length > 2) pluralCandidates.push(word.slice(0, -1))
@@ -511,7 +554,7 @@ async function fetchDictionaryApiWordStatusUncached(word: string, priority: 'hig
   // dictionary miss falls through to the same Google romanization fallback
   // the on-demand dictionary popover already uses, rather than just leaving
   // the word blank.
-  if (definitive && value === null) {
+  if (value === null) {
     await acquireDictFetchSlot(priority)
     try {
       const { phonetics } = await googleSenses(word, 'en')
@@ -548,7 +591,14 @@ export async function fetchPhoneticsForWords(
   const results = await Promise.all(unique.map(w => fetchDictionaryApiWordStatus(w, priority)))
   const out: Record<string, { text: string | null; approximate: boolean }> = {}
   unique.forEach((w, i) => {
-    if (results[i].definitive) out[w] = { text: results[i].value, approximate: results[i].approximate }
+    // `definitive` alone used to decide this, back when a non-definitive result
+    // could only ever be empty. A fallback can now produce a real reading for a
+    // word whose own lookup never answered — that reading is worth showing even
+    // though it wasn't cached; it's only the *absence* of one that stays
+    // unreportable, since it may just mean "ask again later".
+    if (results[i].definitive || results[i].value !== null) {
+      out[w] = { text: results[i].value, approximate: results[i].approximate }
+    }
   })
   return out
 }
@@ -624,6 +674,28 @@ function isEnglish(lang: string | undefined): boolean {
   return !lang || lang.toLowerCase().startsWith('en')
 }
 
+// How long the word popup is willing to wait for dictionaryapi.dev before
+// going with whatever Google already returned.
+//
+// DICT_FETCH_TIMEOUT_MS is generous on purpose, but it is sized for Read Aloud
+// and Video Mode, which look words up in the background while the reader is
+// busy elsewhere. The popup is the opposite: someone clicked a word and is
+// watching an empty box until every source has reported in. Waiting the full
+// budget there trades a pronunciation that is usually identical anyway for
+// twenty extra seconds of staring.
+//
+// The lookup itself is not cancelled — only stopped being waited on. It keeps
+// running and still populates the phonetics cache, so the same word clicked
+// again a moment later answers instantly and with dictionaryapi's own reading.
+const POPUP_DICT_BUDGET_MS = 3000
+
+function withBudget<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>(resolve => setTimeout(() => resolve(null), ms)),
+  ])
+}
+
 // ── Public entry point ─────────────────────────────────────────────────────────
 
 export async function translateInContext(
@@ -647,7 +719,7 @@ export async function translateInContext(
     : DEFAULT_SETTINGS.translation.phoneticsSourceOrder!
   const enabledPhoneticsSources = phoneticsOrder.filter(s => s.enabled).map(s => s.source)
   const dictApiPromise = enabledPhoneticsSources.includes('dictionaryapi') && isEnglish(req.sourceLang)
-    ? fetchDictionaryApiPhonetics(word)
+    ? withBudget(fetchDictionaryApiPhonetics(word), POPUP_DICT_BUDGET_MS)
     : Promise.resolve(null as string | null)
 
   // Primary: on-device AI — single prompt with the full sentence as context.
