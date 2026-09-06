@@ -29,6 +29,7 @@
 import { phoneticsForWords, type PhoneticsResult } from './wordPhonetics'
 import { phoneticsForWords as pinyinForWords } from './pinyinLookup'
 import { toneSpans, toneColor } from './pinyinTones'
+import { snapshotBookmarkBoundaries, restoreBookmarkBoundaries } from './anchor'
 
 export const WRAP_CLASS = 'elezone-word-wrap'
 const IPA_CLASS = 'elezone-word-ipa'
@@ -165,7 +166,21 @@ function wrapWords(ranges: { text: string; range: Range }[]): { wrapper: HTMLEle
     const { text, range } = ranges[i]
     try {
       const wrapper = makeWrapper()
+      // A saved highlight's Range can have a boundary sitting right inside
+      // this word — surroundContents() below extracts the word's characters
+      // into a brand-new Text node, and the browser's own live-range
+      // adjustment has no way to follow a boundary into that new node (it
+      // just clamps it), which is how a saved highlight landing on a
+      // phonetics-wrapped word used to disappear for good. Snapshot before,
+      // restore after.
+      const node = range.startContainer
+      const snapshots = node.nodeType === Node.TEXT_NODE && range.endContainer === node
+        ? snapshotBookmarkBoundaries(node as Text, range.startOffset, range.endOffset)
+        : []
       range.surroundContents(wrapper)
+      if (snapshots.length > 0 && wrapper.firstChild?.nodeType === Node.TEXT_NODE) {
+        restoreBookmarkBoundaries(snapshots, wrapper.firstChild as Text)
+      }
       // Reserve the IPA line's height on *every* word up front, filled in or
       // not — most common words ("is", "for", "and"...) never get a result
       // back from the dictionary. Without a same-size empty slot here, a
@@ -219,9 +234,14 @@ function wrapGaps(wrapped: { wrapper: HTMLElement }[]): HTMLElement[] {
   for (let i = gapNodes.length - 1; i >= 0; i--) {
     try {
       const wrapper = makeWrapper()
+      const gapNode = gapNodes[i]
+      const snapshots = snapshotBookmarkBoundaries(gapNode, 0, gapNode.nodeValue?.length ?? 0)
       const gapRange = document.createRange()
-      gapRange.selectNode(gapNodes[i])
+      gapRange.selectNode(gapNode)
       gapRange.surroundContents(wrapper)
+      if (snapshots.length > 0 && wrapper.firstChild?.nodeType === Node.TEXT_NODE) {
+        restoreBookmarkBoundaries(snapshots, wrapper.firstChild as Text)
+      }
       // A gap that's pure whitespace (the common case — the single space
       // left over between two words that don't share a text node, e.g. on
       // either side of a wiki link) is, per the flexbox spec, a "collapsible

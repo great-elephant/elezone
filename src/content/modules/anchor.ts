@@ -213,6 +213,15 @@ export async function getSelectionContext(searchString?: string, knownLang?: str
 
 // ── Bookmark highlights ───────────────────────────────────────────────────────
 
+// See the comment on `applyHighlight` below for why this needs to be higher
+// than the default (0) priority every other `CSS.highlights` entry uses.
+const BOOKMARK_HIGHLIGHT_PRIORITY = 1
+// The brief "just saved" / "scroll to this highlight" flash sits on the exact
+// same range as the bookmark's own highlight — it must outrank
+// BOOKMARK_HIGHLIGHT_PRIORITY too, or it'd be invisible under the saved color
+// it's supposed to flash on top of.
+const FLASH_HIGHLIGHT_PRIORITY = 2
+
 /**
  * Apply a CSS Custom Highlight for a bookmark.
  * Does NOT modify the DOM — works with any range including cross-element ones.
@@ -230,6 +239,15 @@ export function applyHighlight(bookmark: SavedItem): boolean {
 
   const key = `cxt-${bookmark.color}`
   const hl = CSS.highlights.get(key) ?? new Highlight()
+  // Explicit priority (default is 0 for every Highlight, incl. read-aloud's
+  // own `cxt-speaking`/`cxt-word`) — without it, the CSS Custom Highlight API
+  // breaks ties by registration order, and `cxt-speaking` only gets
+  // registered the first time Read Aloud actually runs, well after this
+  // bookmark's own highlight. That later registration made it win every
+  // overlap, painting its sentence tint over the saved highlight and making
+  // saved text look "un-highlighted" while Read Aloud was focused on it (bug
+  // report). Saved highlights must always win that overlap.
+  hl.priority = BOOKMARK_HIGHLIGHT_PRIORITY
   hl.add(range)
   CSS.highlights.set(key, hl)
 
@@ -241,6 +259,63 @@ export function removeHighlight(bookmarkId: string) {
   if (!range) return
   bookmarkRanges.delete(bookmarkId)
   CSS.highlights.forEach(hl => hl.delete(range))
+}
+
+// ── Keeping bookmark Ranges alive across Read Aloud's phonetics word-wrap ────
+//
+// wrapAndShowPhoneticsForWords() (readAloudPhonetics.ts) calls
+// `Range.surroundContents()` to wrap each word in a span — which extracts
+// that word's exact characters out of their original Text node and moves
+// them into a brand-new Text node inside the wrapper. A saved highlight's
+// Range with a boundary sitting *inside* that word (the common case: the
+// whole saved word) doesn't follow the move. The DOM spec's own live-range
+// adjustment for the underlying `deleteData()` call clamps any boundary that
+// was strictly inside the deleted span down to the deletion's start offset —
+// it has no way to know that text reappeared in a different node — so the
+// bookmark's Range silently collapses onto a position that used to be
+// "inside the word" but, once the word is gone from that node, means
+// something else entirely (or nothing at all). The highlight then paints
+// nowhere, and — since nothing ever points it back at the word's new home —
+// never recovers, even after Read Aloud stops (bug report: a saved highlight
+// landing on a phonetics-wrapped word disappears for good).
+//
+// The fix: snapshot every affected bookmark boundary's offset *before* the
+// word's text is extracted, then re-point it at the new Text node the word
+// actually ended up in afterwards.
+export type BookmarkBoundarySnapshot = { range: Range; which: 'start' | 'end'; offset: number }
+
+// Called right before extracting `node`'s [start, end) substring elsewhere.
+// A start boundary sitting anywhere from the word's first character up to
+// (not including) its last needs to follow the word; an end boundary needs
+// to follow it only when strictly inside — sitting exactly at `end` is a
+// boundary that simply comes right after the word, which the browser's own
+// adjustment already leaves correctly pointing at the (now-shrunk) original
+// node.
+export function snapshotBookmarkBoundaries(node: Text, start: number, end: number): BookmarkBoundarySnapshot[] {
+  const out: BookmarkBoundarySnapshot[] = []
+  for (const range of bookmarkRanges.values()) {
+    if (range.startContainer === node && range.startOffset >= start && range.startOffset < end) {
+      out.push({ range, which: 'start', offset: range.startOffset - start })
+    }
+    if (range.endContainer === node && range.endOffset > start && range.endOffset < end) {
+      out.push({ range, which: 'end', offset: range.endOffset - start })
+    }
+  }
+  return out
+}
+
+// Called right after the extracted text lands in `newNode`, re-pointing every
+// snapshotted boundary at its equivalent offset there.
+export function restoreBookmarkBoundaries(snapshots: BookmarkBoundarySnapshot[], newNode: Text): void {
+  for (const { range, which, offset } of snapshots) {
+    try {
+      if (which === 'start') range.setStart(newNode, offset)
+      else range.setEnd(newNode, offset)
+    } catch {
+      // Best-effort — leave the range as the browser's own adjustment left it
+      // rather than throw partway through a wrap.
+    }
+  }
 }
 
 let pulseStyleInjected = false
@@ -312,6 +387,7 @@ export function scrollToHighlight(bookmarkId: string) {
   range.startContainer.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 
   const flash = new Highlight(range)
+  flash.priority = FLASH_HIGHLIGHT_PRIORITY
   CSS.highlights.set('cxt-flash', flash)
   setTimeout(() => CSS.highlights.delete('cxt-flash'), 1500)
 }
@@ -422,6 +498,14 @@ function splitSegmentAtShadowingStops(segment: string): string[] {
     if (!isShadowingStop(segment, i)) continue
 
     let end = i + 1
+    // Swallow any closing quote/bracket sitting right after the stop
+    // punctuation — e.g. the `"` in `people," she says.` or the trailing one
+    // in `...resources."`. Left alone, that quote landed just past `end`, so
+    // it either got left behind as its own dangling 1-character clause (a
+    // stray `"` read/paused as if it were a whole clause) or glued onto the
+    // *front* of the next clause instead of staying with the sentence it
+    // actually closes — either way read out separately in shadowing mode.
+    while (end < segment.length && /["'”’)\]]/.test(segment[end])) end += 1
     while (end < segment.length && /\s/.test(segment[end])) end += 1
 
     const part = segment.slice(start, end).trim()
@@ -780,6 +864,86 @@ function splitRangeExcluding(range: Range, excludeSelector: string): Range[] {
   return ranges.length > 0 ? ranges : [range]
 }
 
+// Carve every currently-saved bookmark's span out of `ranges` before they're
+// painted as `cxt-speaking`/`cxt-word` — the read-aloud tint should never
+// cover a saved highlight's own text.
+//
+// The earlier fix for this gave saved highlights an explicit higher
+// `Highlight.priority`, on the assumption the CSS Custom Highlight API would
+// then always resolve the overlap in the saved highlight's favour. It didn't
+// hold up (still reported as broken) — priority governs *which style wins*
+// for an overlapping run, but nothing here can verify browser-by-browser that
+// resolution actually happens the way the spec describes it, and the
+// higher-priority Highlight is still the one deciding, not the saved one on
+// its own terms. Not painting over the saved span in the first place removes
+// that dependency entirely: there's no overlap left to resolve, so nothing to
+// get wrong. (Kept the priority bump too — harmless, and correct in its own
+// right — but this is now the actual fix.)
+function subtractBookmarkRanges(ranges: Range[]): Range[] {
+  if (bookmarkRanges.size === 0) return ranges
+  const bookmarks = [...bookmarkRanges.values()]
+  const out: Range[] = []
+
+  for (const range of ranges) {
+    const root = range.commonAncestorContainer
+    const scope = root.nodeType === Node.ELEMENT_NODE ? root as Element : root.parentElement
+    if (!scope) { out.push(range); continue }
+
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) { return range.intersectsNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT },
+    })
+
+    let n: Node | null
+    while ((n = walker.nextNode())) {
+      const text = n as Text
+      const full = text.nodeValue ?? ''
+      const start = text === range.startContainer ? range.startOffset : 0
+      const end = text === range.endContainer ? range.endOffset : full.length
+      if (start >= end) continue
+
+      // Every bookmark span landing on this text node, clipped to [start, end).
+      const covered: Array<[number, number]> = []
+      for (const b of bookmarks) {
+        let intersects = false
+        try {
+          intersects = b.intersectsNode(text)
+        } catch {
+          continue
+        }
+        if (!intersects) continue
+        const bs = b.startContainer === text ? b.startOffset : 0
+        const be = b.endContainer === text ? b.endOffset : full.length
+        const cs = Math.max(bs, start)
+        const ce = Math.min(be, end)
+        if (cs < ce) covered.push([cs, ce])
+      }
+      covered.sort((a, c) => a[0] - c[0])
+
+      // Emit whatever's left of [start, end) once every covered interval is
+      // punched out of it.
+      let cursor = start
+      for (const [cs, ce] of covered) {
+        if (ce <= cursor) continue
+        if (cs > cursor) {
+          const r = document.createRange()
+          r.setStart(text, cursor)
+          r.setEnd(text, cs)
+          out.push(r)
+        }
+        cursor = Math.max(cursor, ce)
+      }
+      if (cursor < end) {
+        const r = document.createRange()
+        r.setStart(text, cursor)
+        r.setEnd(text, end)
+        out.push(r)
+      }
+    }
+  }
+
+  return out
+}
+
 export function highlightSentenceRange(range: Range, contentEl?: HTMLElement | null): void {
   if (!range.toString()) {
     // buildSentencePlan couldn't resolve this sentence to a real DOM position
@@ -793,7 +957,7 @@ export function highlightSentenceRange(range: Range, contentEl?: HTMLElement | n
     return
   }
   const ownRange = clipBeforeTranslation(range)
-  CSS.highlights.set('cxt-speaking', new Highlight(...splitRangeExcluding(ownRange, IPA_SELECTOR)))
+  CSS.highlights.set('cxt-speaking', new Highlight(...subtractBookmarkRanges(splitRangeExcluding(ownRange, IPA_SELECTOR))))
 
   // Keep the left "reading" marker + focus spotlight in sync with the sentence.
   // `contentEl` (the exact paragraph/content block this sentence came from, from
@@ -1091,7 +1255,7 @@ function resolveWordAt(charIndex: number, length?: number): { text: string; rect
 export function highlightSpokenWord(charIndex: number, length?: number): { text: string; rect: DOMRect } | null {
   const resolved = resolveWordAt(charIndex, length)
   if (!resolved) return null
-  CSS.highlights.set('cxt-word', new Highlight(resolved.range))
+  CSS.highlights.set('cxt-word', new Highlight(...subtractBookmarkRanges([resolved.range])))
   return { text: resolved.text, rect: resolved.rect }
 }
 
