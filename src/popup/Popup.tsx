@@ -768,7 +768,10 @@ export default function Popup() {
           <div style={styles.pomodoroHeader}>
             <span>Read Aloud</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                title="Shows how each word is pronounced while it's read out. A word you haven't met before can take a few seconds to show up the first time — after that it appears instantly."
+              >
                 <span style={{ fontSize: 11, color: '#8888aa', fontWeight: 'normal' }}>IPA</span>
                 <button
                   style={{

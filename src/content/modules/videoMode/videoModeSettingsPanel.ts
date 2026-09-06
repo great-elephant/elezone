@@ -265,7 +265,8 @@ function render(): void {
 
   panel.appendChild(toggleRow(
     'Phonetics under words', settings.phoneticsUnderWords,
-    'Shows IPA under each English word of the line being spoken.',
+    'Shows how each English word of the line is pronounced. A word can take a '
+    + 'few seconds to show up the first time, then it appears instantly.',
     next => _onChange?.({ phoneticsUnderWords: next }),
   ))
 
