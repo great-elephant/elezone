@@ -273,6 +273,28 @@ function cachePhonetics(word: string, value: string | null, approximate: boolean
   phoneticsCache.set(word, { value, approximate })
 }
 
+// dictionaryapi.dev's origin latency is wildly bimodal: a word Cloudflare
+// already has cached comes back in ~100ms, while an uncached one waits on the
+// origin — measured at a flat ~19.5-20.0s across every uncached word through
+// one of the API's bad spells, steady enough to look like a fixed stall on
+// their side rather than load. The original 3s budget was sized for the
+// healthy case, and a spell like that turned into a page with no phonetics at
+// all: the abort lands as `definitive: false`, so the word is (rightly) not
+// cached, but it also never reaches the Google fallback below — that only
+// runs for a *definitive* miss. The two in-content retries (5s, 12s) then
+// re-ran the same 3s budget, so all three attempts were lost to one cause.
+//
+// 25s is deliberately sized past that observed ~20s stall rather than at a
+// "reasonable" round number: anything under it fails every uncached word for
+// the whole duration of such a spell, which is the exact case this budget
+// exists for. It costs nothing while the API is healthy — a 200ms response
+// never comes near it — and the concurrency cap plus the high/low queue split
+// below keep a slow look-ahead word from holding up the sentence actually
+// being spoken. The tradeoff is that a word held for the full 25s reveals its
+// IPA long after Read Aloud has spoken past it; it still lands in the cache,
+// so the second encounter with that word is instant.
+const DICT_FETCH_TIMEOUT_MS = 25000
+
 // Read Aloud's paragraph mode wraps every sentence in a paragraph up front,
 // each firing its own word batch — a several-sentence paragraph can mean 50+
 // words all wanting a lookup in the same instant. Without a cap, that's 50+
@@ -382,7 +404,7 @@ async function fetchDictionaryApiWordStatusUncached(word: string, priority: 'hig
     // taken "too long" without it ever having gotten a request out the door.
     await acquireDictFetchSlot(priority)
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 3000)
+    const timeoutId = setTimeout(() => controller.abort(), DICT_FETCH_TIMEOUT_MS)
     let status = 0
     try {
       const res = await fetch(
