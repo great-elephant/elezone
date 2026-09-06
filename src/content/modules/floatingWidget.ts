@@ -50,11 +50,16 @@ let volumePctLabel: HTMLElement | null = null
 let cachedSettings: Settings | null = null
 let curVolume = 1
 
-// Per-sentence repetition presets shown by the Repeat control (H31).
-const REPEAT_STEPS = [1, 2, 3]
-// Shadowing gap ratio presets shown by the gap-ratio control — mirrors Video
-// Mode's shadowGapFactor range (0.5-3), with 1 (unchanged) as the default step.
-const GAP_RATIO_STEPS = [0.5, 1, 1.5, 2, 3]
+// Per-sentence repetition presets shown by the Repeat control (H31). Every
+// whole number up to 9 rather than a hand-picked few: they're all equally
+// plausible for drilling a hard sentence, and the dropdown lists them all at
+// once anyway, so there's nothing saved by leaving gaps.
+const REPEAT_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+// Shadowing gap ratio presets shown by the gap-ratio control. Fine-grained at
+// the short end, where half a step is the difference between comfortable and
+// rushed, and coarser past 3x, where the gap is already long enough that the
+// exact figure matters much less.
+const GAP_RATIO_STEPS = [0.5, 1, 1.5, 2, 3, 4, 5, 7, 9]
 
 // Finished card (F22) — a separate lightweight host so it doesn't entangle the
 // player refs; shown when reading ends naturally.
@@ -418,6 +423,25 @@ const WIDGET_CSS = `
     align-items: flex-start;
     gap: 2px;
   }
+  /* Value pickers for Repeat / gap ratio — the same popover shell as the shadow
+     menu, just narrow, since every item is a single number. */
+  .step-row { position: relative; display: inline-flex; }
+  .step-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    z-index: 1;
+    box-sizing: border-box;
+    width: 92px;
+    max-height: 240px;
+    overflow-y: auto;
+    background: #16162a;
+    border: 1px solid #3a3a6a;
+    border-radius: 10px;
+    padding: 4px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+  }
+  .step-menu.align-right { left: auto; right: 0; }
   .shadow-option-hint {
     font-size: 10px;
     color: #7a7aa8;
@@ -523,6 +547,16 @@ function makeButton(cls: string, label: string, aria: string, onClick: () => voi
   btn.setAttribute('aria-label', aria)
   btn.onclick = onClick
   return btn
+}
+
+// A control whose dropdown anchors to it needs a positioned parent of its own —
+// the row it sits in is shared with the other controls, so anchoring there would
+// place every menu at the row's left edge instead of under its own button.
+function stepRow(btn: HTMLButtonElement): HTMLElement {
+  const wrap = document.createElement('div')
+  wrap.className = 'step-row'
+  wrap.appendChild(btn)
+  return wrap
 }
 
 // Emoji glyphs (⏮⏸⏭🔦⏹) render as full-color, platform-specific pictures that
@@ -714,6 +748,99 @@ function renderShadowMenuOptions() {
   }
 }
 
+// Repeat and gap ratio both pick one value out of a short list, and both open
+// the same kind of small listbox the Shadow button already uses — so they share
+// one implementation instead of each carrying its own copy of the open/close/
+// outside-click dance. The shadow menu itself stays separate: its items carry a
+// hint line and don't map to a single number.
+function makeStepMenu(opts: {
+  ariaLabel: string
+  alignRight?: boolean
+  steps: number[]
+  button: () => HTMLButtonElement | null
+  current: () => number
+  format: (step: number) => string
+  onPick: (step: number) => void
+}) {
+  let menu: HTMLElement | null = null
+
+  const onDocMouseDown = (e: MouseEvent) => {
+    const path = e.composedPath()
+    const btn = opts.button()
+    if (btn && path.includes(btn)) return
+    if (menu && path.includes(menu)) return
+    close()
+  }
+
+  function close() {
+    menu?.remove()
+    menu = null
+    opts.button()?.setAttribute('aria-expanded', 'false')
+    document.removeEventListener('mousedown', onDocMouseDown, { capture: true })
+  }
+
+  function render() {
+    if (!menu) return
+    menu.replaceChildren()
+    const active = opts.current()
+    for (const step of opts.steps) {
+      const item = document.createElement('button')
+      item.className = 'voice-option'
+      item.type = 'button'
+      item.setAttribute('role', 'option')
+      const selected = step === active
+      item.setAttribute('aria-selected', String(selected))
+      item.textContent = `${selected ? '✓ ' : ''}${opts.format(step)}`
+      item.onclick = () => { opts.onPick(step); close() }
+      menu.appendChild(item)
+    }
+  }
+
+  function open() {
+    const btn = opts.button()
+    if (!btn || !btn.parentElement) return
+    menu = document.createElement('div')
+    menu.className = `step-menu${opts.alignRight ? ' align-right' : ''}`
+    menu.setAttribute('role', 'listbox')
+    menu.setAttribute('aria-label', opts.ariaLabel)
+    btn.parentElement.appendChild(menu)
+    btn.setAttribute('aria-expanded', 'true')
+    document.addEventListener('mousedown', onDocMouseDown, { capture: true })
+    render()
+  }
+
+  return { toggle: () => (menu ? close() : open()), close, render, isOpen: () => menu !== null }
+}
+
+const repeatMenu = makeStepMenu({
+  ariaLabel: 'Repeat each sentence',
+  steps: REPEAT_STEPS,
+  button: () => repeatBtn,
+  current: () => curRepetition,
+  format: step => `${step}×`,
+  onPick: step => {
+    curRepetition = step
+    setRepetition(curRepetition)
+    refreshRepeatButton()
+  },
+})
+
+const gapRatioMenu = makeStepMenu({
+  ariaLabel: 'Shadowing gap ratio',
+  // This control sits far enough along its row that a left-aligned menu would
+  // hang off the popover's right edge.
+  alignRight: true,
+  steps: GAP_RATIO_STEPS,
+  button: () => gapRatioBtn,
+  current: () => curShadowingRatio,
+  format: step => `${step}×`,
+  onPick: step => {
+    curShadowingRatio = step
+    setShadowingRatio(curShadowingRatio)
+    refreshGapRatioButton()
+  },
+})
+
 function refreshRepeatButton() {
   if (!repeatBtn) return
   repeatBtn.textContent = `↻ ${curRepetition}×`
@@ -721,22 +848,8 @@ function refreshRepeatButton() {
   const label = `Repeat each sentence ${curRepetition}×`
   repeatBtn.title = `${label}\nClick to change`
   repeatBtn.setAttribute('aria-label', label)
-}
-
-function cycleRepeat() {
-  // Advance to the next preset (wrapping), snapping the current value onto the
-  // nearest step first so an out-of-range value from settings still cycles cleanly.
-  let idx = REPEAT_STEPS.indexOf(curRepetition)
-  if (idx < 0) {
-    let bestDiff = Infinity
-    for (let i = 0; i < REPEAT_STEPS.length; i++) {
-      const d = Math.abs(REPEAT_STEPS[i] - curRepetition)
-      if (d < bestDiff) { bestDiff = d; idx = i }
-    }
-  }
-  curRepetition = REPEAT_STEPS[(idx + 1) % REPEAT_STEPS.length]
-  setRepetition(curRepetition)
-  refreshRepeatButton()
+  repeatBtn.setAttribute('aria-expanded', String(repeatMenu.isOpen()))
+  repeatMenu.render()
 }
 
 function refreshGapRatioButton() {
@@ -753,23 +866,12 @@ function refreshGapRatioButton() {
   gapRatioBtn.title = curShadowing ? `${label}\nClick to change` : label
   gapRatioBtn.setAttribute('aria-label', label)
   gapRatioBtn.setAttribute('aria-disabled', String(!curShadowing))
-}
-
-function cycleGapRatio() {
-  if (!curShadowing) return
-  // Advance to the next preset (wrapping), snapping the current value onto the
-  // nearest step first so an out-of-range value from settings still cycles cleanly.
-  let idx = GAP_RATIO_STEPS.indexOf(curShadowingRatio)
-  if (idx < 0) {
-    let bestDiff = Infinity
-    for (let i = 0; i < GAP_RATIO_STEPS.length; i++) {
-      const d = Math.abs(GAP_RATIO_STEPS[i] - curShadowingRatio)
-      if (d < bestDiff) { bestDiff = d; idx = i }
-    }
-  }
-  curShadowingRatio = GAP_RATIO_STEPS[(idx + 1) % GAP_RATIO_STEPS.length]
-  setShadowingRatio(curShadowingRatio)
-  refreshGapRatioButton()
+  gapRatioBtn.setAttribute('aria-expanded', String(gapRatioMenu.isOpen()))
+  // Shadowing can be turned off from the Shadow dropdown in this same popover
+  // while this picker is open, which would otherwise leave a live menu for a
+  // setting that no longer does anything.
+  if (!curShadowing) gapRatioMenu.close()
+  else gapRatioMenu.render()
 }
 
 export function updateWidgetShadowInfo(shadowing: boolean, repetition: number, repeatWholeSentence?: boolean, shadowingRatio?: number) {
@@ -1038,6 +1140,8 @@ function closeOverflowMenu() {
   // parent.
   closeVoiceMenu()
   closeShadowMenu()
+  repeatMenu.close()
+  gapRatioMenu.close()
   overflowMenu?.remove()
   overflowMenu = null
   voiceChip = null
@@ -1073,10 +1177,14 @@ function openOverflowMenu() {
   shadowBtn.setAttribute('aria-haspopup', 'listbox')
   shadowBtn.setAttribute('aria-expanded', 'false')
   shadowRow.appendChild(shadowBtn)
-  repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', cycleRepeat)
-  gapRatioBtn = makeButton('gap-ratio', '⏱ 1×', 'Shadowing gap ratio', cycleGapRatio)
+  repeatBtn = makeButton('repeat', '↻ 1×', 'Repeat each sentence', repeatMenu.toggle)
+  repeatBtn.setAttribute('aria-haspopup', 'listbox')
+  repeatBtn.setAttribute('aria-expanded', 'false')
+  gapRatioBtn = makeButton('gap-ratio', '⏱ 1×', 'Shadowing gap ratio', gapRatioMenu.toggle)
+  gapRatioBtn.setAttribute('aria-haspopup', 'listbox')
+  gapRatioBtn.setAttribute('aria-expanded', 'false')
   speedBtn = makeButton('speed', `${getSpeed()}x`, 'Playback speed', cycleSpeed)
-  row.append(shadowRow, repeatBtn, gapRatioBtn, speedBtn)
+  row.append(shadowRow, stepRow(repeatBtn), stepRow(gapRatioBtn), speedBtn)
 
   overflowMenu.append(voiceRow, row)
   overflowBtn.parentElement.appendChild(overflowMenu)

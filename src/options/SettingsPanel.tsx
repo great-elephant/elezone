@@ -309,7 +309,7 @@ export default function SettingsPanel({ settings, onChange, initialExpandedSecti
         </Field>
 
         <Field label={`Shadowing gap ratio: ${(ra.shadowingRatio ?? 1).toFixed(1)}×`}>
-          <input type="range" min={0.5} max={3} step={0.1} value={ra.shadowingRatio ?? 1}
+          <input type="range" min={0.5} max={9} step={0.1} value={ra.shadowingRatio ?? 1}
             style={styles.range}
             onChange={e => set('readAloud', 'shadowingRatio', parseFloat(e.target.value))} />
         </Field>

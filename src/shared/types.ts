@@ -95,7 +95,7 @@ export interface ReadAloudSettings {
   // Multiplier on the estimated shadowing gap length (analogous to Video
   // Mode's `shadowGapFactor`). Only meaningful when `shadowing` is on.
   // Default/undefined = 1 = old behaviour (no change to the gap estimate).
-  // Range 0.5-3.
+  // Range 0.5-9.
   shadowingRatio?: number
   // H32 — focus/spotlight mode: dim the rest of the page and highlight the current
   // sentence. Persisted so the choice sticks across sessions.

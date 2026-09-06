@@ -663,7 +663,7 @@ export async function setPhonetics(on: boolean): Promise<void> {
 // H31 — set per-sentence repetition live (1..5). Takes effect from the next
 // sentence; the background persists it and re-broadcasts to confirm.
 export function setRepetition(count: number) {
-  const clamped = Math.max(1, Math.min(5, Math.round(count)))
+  const clamped = Math.max(1, Math.min(9, Math.round(count)))
   currentRepetition = clamped
   if (sessionSettings) sessionSettings = { ...sessionSettings, repetition: clamped }
   onShadowInfoChange?.()
@@ -688,7 +688,7 @@ export function setRepeatWholeSentence(on: boolean) {
 // on. Mirrors setRepetition()/setRepeatWholeSentence(): takes effect from the
 // next gap (no re-arm of a gap timer already in flight).
 export function setShadowingRatio(ratio: number) {
-  const clamped = Math.max(0.5, Math.min(3, ratio))
+  const clamped = Math.max(0.5, Math.min(9, ratio))
   shadowingRatioOn = clamped
   if (sessionSettings) sessionSettings = { ...sessionSettings, shadowingRatio: clamped }
   onShadowInfoChange?.()

@@ -863,6 +863,37 @@ function clearSpeakingWatchdog() {
   }
 }
 
+// A shadowing gap is pure silence: no TTS events, no messages, nothing that
+// resets the ~30s idle timer Chrome shuts an MV3 service worker down on. Below
+// that the point is moot, but a gap can now run to minutes (a long sentence at
+// a high ratio), and a worker torn down mid-gap takes the pending timer — and
+// with it the rest of the session — down with it. There is nothing to restore
+// from either: the session lives in memory here, so an alarm firing later would
+// wake a worker that no longer knows what it was reading.
+//
+// So the gap holds the worker up itself. Calling an extension API resets the
+// idle timer, and re-arming the tone keeps the Bluetooth amplifier from
+// powering down over a long silence and clipping the next sentence's first word
+// — the very thing KEEPALIVE_TTL_MS (30s, shorter than these gaps) would
+// otherwise let happen.
+const GAP_ALIVE_PING_MS = 20_000
+let gapKeepaliveInterval: ReturnType<typeof setInterval> | null = null
+
+function startGapKeepalive(settings: ReadAloudSettings) {
+  stopGapKeepalive()
+  gapKeepaliveInterval = setInterval(() => {
+    chrome.runtime.getPlatformInfo().catch(() => {})
+    void holdAudioAwake(settings)
+  }, GAP_ALIVE_PING_MS)
+}
+
+function stopGapKeepalive() {
+  if (gapKeepaliveInterval !== null) {
+    clearInterval(gapKeepaliveInterval)
+    gapKeepaliveInterval = null
+  }
+}
+
 // Cancel any pending shadowing gap. Called on stop/finish and on every
 // token-bumping control action (seek/next/prev/setSpeed/setVoice) so a gap that
 // was scheduled for the old sentence can't fire against the new one.
@@ -871,25 +902,36 @@ function clearShadowingGap() {
     clearTimeout(shadowingGapTimeout)
     shadowingGapTimeout = null
   }
+  stopGapKeepalive()
 }
 
 // H29 — estimate the silent gap (ms) to leave for the learner to repeat a
 // sentence aloud. Proportional to the sentence's estimated speaking time at the
-// current rate (~2 words/sec baseline), clamped to a sensible min/max so very
-// short or very long sentences still feel predictable.
+// current rate (~2 words/sec baseline).
+//
+// There is deliberately no upper bound. There used to be one (8s), from before
+// the gap was adjustable at all: back then the only input was sentence length,
+// and a 60-word sentence produced a 30-second silence nobody had asked for or
+// could shorten. Once `ratio` gave the learner that control, the ceiling stopped
+// protecting anyone and started overriding them — every sentence past ~16 words
+// already hit 8s at ratio 1, so raising the ratio to 5 or 9 changed nothing at
+// all. A gap the learner explicitly asked to be five times longer should be five
+// times longer.
+//
+// The lower bound stays: it isn't overriding a choice, it's keeping a two-word
+// clause from flashing past before anyone can draw breath.
 const GAP_MIN_MS = 1200
-const GAP_MAX_MS = 8000
 const GAP_WORDS_PER_SEC = 2
 // `ratio` mirrors Video Mode's shadowGapFactor: a learner-tunable multiplier on
-// the estimated gap, applied before clamping so it can still push the result
-// past the default MIN/MAX. Default 1 = old behaviour (identical output).
+// the estimated gap. Default 1 = old behaviour for any sentence that wasn't
+// being clipped by the old ceiling.
 function computeShadowingGapMs(sentence: string, speed: number, ratio: number): number {
   const words = sentence.trim().split(/\s+/).filter(Boolean).length || 1
   const rate = Number.isFinite(speed) && speed > 0 ? speed : 1
   const speakSec = words / (GAP_WORDS_PER_SEC * rate)
   const r = Number.isFinite(ratio) && ratio > 0 ? ratio : 1
   const ms = speakSec * 1000 * r
-  return Math.round(Math.max(GAP_MIN_MS, Math.min(GAP_MAX_MS, ms)))
+  return Math.round(Math.max(GAP_MIN_MS, ms))
 }
 
 // Moves the session on to the next sentence (advancing currentIndex, handling
@@ -946,8 +988,10 @@ function scheduleShadowingGap(token: number, justSpoke: string, onComplete: () =
   void broadcastReadAloudState(session.tabId, 'playing', session.currentIndex, false, true)
 
   const gapMs = computeShadowingGapMs(justSpoke, session.settings.speed, session.settings.shadowingRatio ?? 1)
+  if (gapMs > GAP_ALIVE_PING_MS) startGapKeepalive(session.settings)
   shadowingGapTimeout = setTimeout(() => {
     shadowingGapTimeout = null
+    stopGapKeepalive()
     const s = activeSession
     // A stop/seek/next during the gap bumps the token or nulls the session.
     if (!s || s.token !== token || s.state !== 'playing') return
@@ -1545,7 +1589,7 @@ async function controlReadAloud(
     // next sentence (no re-speak) and is persisted to stored settings.
     const raw = (payload as { count?: number }).count
     if (typeof raw !== 'number' || !Number.isFinite(raw)) return { ok: false }
-    const count = Math.max(1, Math.min(5, Math.round(raw)))
+    const count = Math.max(1, Math.min(9, Math.round(raw)))
     const session = activeSession
     session.settings = { ...session.settings, repetition: count }
 
@@ -1568,7 +1612,7 @@ async function controlReadAloud(
     // settings.
     const raw = (payload as { ratio?: number }).ratio
     if (typeof raw !== 'number' || !Number.isFinite(raw)) return { ok: false }
-    const ratio = Math.max(0.5, Math.min(3, raw))
+    const ratio = Math.max(0.5, Math.min(9, raw))
     const session = activeSession
     session.settings = { ...session.settings, shadowingRatio: ratio }
 
