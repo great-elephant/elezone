@@ -53,6 +53,10 @@ export default function Popup() {
   // toggle) below — reset automatically when the session ends (phase goes
   // back to idle).
   const [showSessionTasks, setShowSessionTasks] = useState(false);
+  // Lets the active task name be masked (shown as dots, like a password field)
+  // during a focus session, in case what you're working on is sensitive or
+  // you're screen-sharing. Visible by default.
+  const [hideTaskName, setHideTaskName] = useState(false);
   // Video Mode only makes sense on a supported streaming tab, so its section is
   // hidden entirely elsewhere rather than shown disabled.
   const [isVideoTab, setIsVideoTab] = useState(false);
@@ -597,14 +601,37 @@ export default function Popup() {
                 <>
                   {pomodoroState.phase === 'focus' && activeTask && (
                     <div style={{ ...styles.activeTaskRow, alignItems: 'flex-start' }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', overflow: 'hidden', flex: 1 }} title={activeTask.text}>
-                        <span style={{ ...styles.activeTaskName, lineHeight: '16px' }}>{activeTask.text}</span>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', overflow: 'hidden', flex: 1 }} title={hideTaskName ? undefined : activeTask.text}>
+                        <span style={{ ...styles.activeTaskName, lineHeight: '16px' }}>
+                          {hideTaskName ? '•••' : activeTask.text}
+                        </span>
                         {activeTask.timeSpentSeconds ? (
                           <span style={{ fontSize: 10, color: '#4ade80', fontWeight: 'bold', flexShrink: 0, background: 'rgba(74, 222, 128, 0.15)', padding: '2px 6px', borderRadius: '4px' }}>
                             {formatTime(activeTask.timeSpentSeconds)}
                           </span>
                         ) : null}
                       </div>
+                      <button
+                        onClick={() => setHideTaskName(!hideTaskName)}
+                        style={{ background: 'none', border: 'none', color: '#8888aa', cursor: 'pointer', padding: '0', display: 'flex', alignItems: 'center', flexShrink: 0, height: '16px' }}
+                        title={hideTaskName ? 'Show task name' : 'Hide task name'}
+                        aria-label={hideTaskName ? 'Show task name' : 'Hide task name'}
+                        aria-pressed={hideTaskName}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = '#c8c8e0')}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = '#8888aa')}
+                      >
+                        {hideTaskName ? (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                            <line x1="1" y1="1" x2="23" y2="23"></line>
+                          </svg>
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                          </svg>
+                        )}
+                      </button>
                       <button
                         onClick={handleCompleteActiveTask}
                         style={{ background: 'none', border: 'none', color: '#8888aa', cursor: 'pointer', padding: '0', display: 'flex', alignItems: 'center', borderRadius: '4px', flexShrink: 0, height: '16px' }}
