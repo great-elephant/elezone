@@ -562,6 +562,45 @@ async function showPopover(
     ? ((context?.prefix || '') + word + (context?.suffix || '')).trim()
     : ''
 
+  const cleanWord = word.trim()
+  const isSingleWord = !/\s/.test(cleanWord)
+  const rawLang = (context?.sourceLang || document.documentElement.lang || 'en').toLowerCase()
+  const isZh = rawLang.startsWith('zh')
+  const isEn = rawLang.startsWith('en')
+
+  const isDictApiEnabled = (settings?.translation?.phoneticsSourceOrder ?? [])
+    .every((src: { source: string; enabled: boolean }) => src.source !== 'dictionaryapi' || src.enabled)
+
+  let livePhonetics = ''
+
+  // Fire phonetics / pinyin fetch in parallel right away so background cache (from Read Aloud / Video Mode)
+  // or fast API responses resolve immediately without waiting on translation calls.
+  if (isSingleWord) {
+    if (isZh) {
+      void chrome.runtime
+        .sendMessage({ type: 'FETCH_PINYIN', payload: { words: [cleanWord] } })
+        .then((res: Record<string, { text: string | null }> | undefined) => {
+          const text = res?.[cleanWord]?.text
+          if (text) {
+            livePhonetics = text
+            phonetics.textContent = text
+          }
+        })
+        .catch(() => {})
+    } else if (isEn && isDictApiEnabled) {
+      void chrome.runtime
+        .sendMessage({ type: 'FETCH_PHONETICS', payload: { words: [cleanWord], priority: 'high' } })
+        .then((res: Record<string, { text: string | null }> | undefined) => {
+          const text = res?.[cleanWord.toLowerCase()]?.text
+          if (text) {
+            livePhonetics = text
+            phonetics.textContent = text
+          }
+        })
+        .catch(() => {})
+    }
+  }
+
   // Fire both calls in parallel:
   //  - context-aware word translation (background hybrid) → editable field
   //  - full-sentence translation → 💬 context hint (only when context exists)
@@ -569,7 +608,7 @@ async function showPopover(
     chrome.runtime.sendMessage({
       type: 'TRANSLATE_IN_CONTEXT',
       payload: {
-        word, sentence, targetLang,
+        word: cleanWord, sentence, targetLang,
         sourceLang: context?.sourceLang,
         disableAI: settings?.translation?.disableAI ?? true,
         disableGoogleContext: settings?.translation?.disableGoogleContext ?? false,
@@ -582,50 +621,9 @@ async function showPopover(
 
   loading.remove()
 
-  // Held in a variable rather than read off `wordResult` at save time, because
-  // the late lookup below can replace it after the popover is already up.
-  let livePhonetics = wordResult?.phonetics || ''
-
-  if (livePhonetics) {
-    // Write into this call's own element, not the shared module-level `shadow` —
-    // a rapid re-selection can replace the popover (and reassign `shadow`)
-    // before this response arrives, which would otherwise write stale data
-    // into the NEW popover instead of the one that requested it.
+  if (!livePhonetics && wordResult?.phonetics) {
+    livePhonetics = wordResult.phonetics
     phonetics.textContent = livePhonetics
-  }
-
-  // The reading above comes from whichever source answered inside the popup's
-  // short budget (see POPUP_DICT_BUDGET_MS in aiTranslate.ts), which during one
-  // of dictionaryapi.dev's slow spells means Google's — or none at all, since
-  // Google has no romanization to offer for English. Waiting for the real IPA
-  // before showing anything is what made the popup sit on a spinner for twenty
-  // seconds; not waiting at all is what left it blank.
-  //
-  // So: ask again without a deadline, and let the answer land whenever it
-  // lands. The popover is already on screen and usable in the meantime, the
-  // background shares one in-flight request per word so this costs no extra
-  // traffic, and `phonetics` is this call's own element — a late write can't
-  // reach a popover opened since. A word saved before it arrives still keeps
-  // whatever was shown; one saved after keeps the better reading.
-  //
-  // Single words only: this endpoint is per-word, and a multi-word selection
-  // already goes through the phrase path in translateInContext.
-  const wantsLateIpa = !/\s/.test(word)
-    && (context?.sourceLang ?? 'en').toLowerCase().startsWith('en')
-    && (settings?.translation?.phoneticsSourceOrder ?? [])
-      .every((src: { source: string; enabled: boolean }) => src.source !== 'dictionaryapi' || src.enabled)
-  if (wantsLateIpa) {
-    void chrome.runtime
-      .sendMessage({ type: 'FETCH_PHONETICS', payload: { words: [word], priority: 'high' } })
-      .then((res: Record<string, { text: string | null }> | undefined) => {
-        const text = res?.[word.toLowerCase()]?.text
-        if (!text || text === livePhonetics) return
-        livePhonetics = text
-        phonetics.textContent = text
-      })
-      .catch(() => {
-        // Nothing to recover: the popover keeps whatever reading it already has.
-      })
   }
 
   // Context hint — shown above the input when a sentence translation is
