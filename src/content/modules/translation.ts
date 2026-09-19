@@ -73,14 +73,48 @@ async function initOnDevice(src: string, tgt: string): Promise<TranslatorInstanc
 
 // ── Google Translate fallback ─────────────────────────────────────────────────
 
-async function googleTranslate(text: string, tgt: string): Promise<string> {
-  const url =
-    `https://translate.googleapis.com/translate_a/single` +
-    `?client=gtx&sl=auto&tl=${encodeURIComponent(tgt)}&dt=t&q=${encodeURIComponent(text)}`
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const json = await res.json() as [Array<[string, string, ...unknown[]]>]
-  return json[0].map(chunk => chunk[0]).join('')
+// Requests go through the background worker (a page-origin fetch is CORS-blocked
+// when Google redirects), which owns the cache, queue and circuit breaker. Calls
+// made within BATCH_WINDOW_MS of each other — a page's paragraphs, a run of
+// subtitle cues — are coalesced here into one message so the worker can also
+// merge them into a single HTTP request.
+const BATCH_WINDOW_MS = 60
+
+interface PendingGoogle {
+  text: string
+  resolve: (s: string) => void
+  reject: (e: Error) => void
+}
+const googleBatches = new Map<string, { items: PendingGoogle[]; timer: ReturnType<typeof setTimeout> }>()
+
+async function flushGoogleBatch(tgt: string): Promise<void> {
+  const batch = googleBatches.get(tgt)
+  if (!batch) return
+  googleBatches.delete(tgt)
+  try {
+    const results: Array<string | null> | null = await chrome.runtime.sendMessage({
+      type: 'GOOGLE_TRANSLATE_BATCH',
+      payload: { texts: batch.items.map(i => i.text), tgt },
+    })
+    batch.items.forEach((item, i) => {
+      const r = results?.[i]
+      if (r == null) item.reject(new Error('Google translate failed or is rate-limited'))
+      else item.resolve(r)
+    })
+  } catch (err) {
+    for (const item of batch.items) item.reject(err as Error)
+  }
+}
+
+function googleTranslate(text: string, tgt: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let batch = googleBatches.get(tgt)
+    if (!batch) {
+      batch = { items: [], timer: setTimeout(() => flushGoogleBatch(tgt), BATCH_WINDOW_MS) }
+      googleBatches.set(tgt, batch)
+    }
+    batch.items.push({ text, resolve, reject })
+  })
 }
 
 // ── Unified translate ─────────────────────────────────────────────────────────
@@ -99,7 +133,7 @@ const translationCache = new Map<string, TranslateResult>()
 const pendingTranslations = new Map<string, Promise<TranslateResult>>()
 
 function cacheKey(text: string, tgtLang: string): string {
-  return `${tgtLang}::${text}`
+  return `${tgtLang}::${text.replace(/\s+/g, ' ').trim()}`
 }
 
 function cacheSet(key: string, value: TranslateResult): void {

@@ -26,6 +26,8 @@
 // available (they are typically NOT exposed in content-script isolated worlds).
 
 import { DEFAULT_SETTINGS, PhoneticsSourceSetting } from '../shared/types'
+import { googleTranslate, googleFetchJson } from './googleTranslate'
+import { PersistentLru } from './persistentLru'
 
 export type TranslateSource =
   | 'ai+on-device'    // Gemini Nano disambiguated → on-device Translator
@@ -127,19 +129,9 @@ async function aiTranslateInContext(word: string, sentence: string): Promise<str
 
 // ── Google fallback (free, no key, no account) ─────────────────────────────────
 
-const GT_BASE = 'https://translate.googleapis.com/translate_a/single?client=gtx'
-
-async function googleTranslate(text: string, tgt: string): Promise<string | null> {
-  try {
-    const url = `${GT_BASE}&sl=auto&tl=${encodeURIComponent(tgt)}&dt=t&q=${encodeURIComponent(text)}`
-    const res = await fetch(url)
-    if (!res.ok) return null
-    const json = (await res.json()) as [Array<[string, ...unknown[]]>, ...unknown[]]
-    return json[0].map(chunk => chunk[0]).join('')
-  } catch {
-    return null
-  }
-}
+// Cached, queued and circuit-broken — see googleTranslate.ts. A sentence the
+// page translation already fetched is a cache hit here, so googleContextTranslate
+// below usually costs one request (the masked sentence) instead of two.
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -197,11 +189,9 @@ async function googleContextTranslate(word: string, sentence: string, tgt: strin
 
 async function googleSenses(word: string, tgt: string): Promise<{ senses: string[]; sourceLang?: string; phonetics?: string }> {
   try {
-    const url =
-      `${GT_BASE}&sl=auto&tl=${encodeURIComponent(tgt)}&dt=t&dt=bd&dt=rm&q=${encodeURIComponent(word)}`
-    const res = await fetch(url)
-    if (!res.ok) return { senses: [] }
-    const json = (await res.json()) as [
+    const raw = await googleFetchJson(word, tgt, 'dt=t&dt=bd&dt=rm')
+    if (!raw) return { senses: [] }
+    const json = raw as [
       Array<[string | null, string | null, ...unknown[]]> | null,
       Array<[string, string[], ...unknown[]]> | null,
       string,
@@ -256,21 +246,25 @@ async function googleSenses(word: string, tgt: string): Promise<{ senses: string
 // (Chrome unloads it after ~30s idle, sometimes sooner), so it can't grow
 // across a long-lived process — the size cap below is a defensive backstop for
 // the rare case a worker stays alive longer (open DevTools, active ports).
-const PHONETICS_CACHE_MAX = 500
+const PHONETICS_CACHE_MAX = 5000
 // `approximate: true` means `value` isn't this exact word's own dictionary
 // entry — it's a reading borrowed from a fallback (the singular of a plural,
 // one half of a hyphenated compound, etc. — see the fallback chain below).
 // Still meaningfully useful, but the content script dims it to signal
 // "close, not guaranteed exact" rather than showing it with the same
 // confidence as a word's own real entry.
-const phoneticsCache = new Map<string, { value: string | null; approximate: boolean }>()
+// `expiresAt` is set only on approximate readings: they are kept so a word isn't
+// re-fetched on every lookup, but only for a day, after which dictionaryapi is
+// asked again in case it can now supply the word's own real entry.
+const APPROXIMATE_TTL_MS = 24 * 60 * 60 * 1000
+const phoneticsCache = new PersistentLru<{ value: string | null; approximate: boolean; expiresAt?: number }>('phoneticsCache', PHONETICS_CACHE_MAX)
 
 function cachePhonetics(word: string, value: string | null, approximate: boolean) {
-  if (phoneticsCache.size >= PHONETICS_CACHE_MAX && !phoneticsCache.has(word)) {
-    const oldestKey = phoneticsCache.keys().next().value
-    if (oldestKey !== undefined) phoneticsCache.delete(oldestKey)
-  }
-  phoneticsCache.set(word, { value, approximate })
+  phoneticsCache.set(word, {
+    value,
+    approximate,
+    ...(approximate && { expiresAt: Date.now() + APPROXIMATE_TTL_MS }),
+  })
 }
 
 // dictionaryapi.dev's origin latency is wildly bimodal: a word Cloudflare
@@ -373,8 +367,11 @@ async function fetchDictionaryApiWordStatus(
   priority: 'high' | 'low' = 'high',
 ): Promise<DictStatus> {
   const word = rawWord.toLowerCase()
+  await phoneticsCache.ready()
   const cached = phoneticsCache.get(word)
-  if (cached !== undefined) return { ...cached, definitive: true }
+  if (cached !== undefined && !(cached.expiresAt && cached.expiresAt < Date.now())) {
+    return { value: cached.value, approximate: cached.approximate, definitive: true }
+  }
 
   const pending = dictInFlight.get(word)
   if (pending) return pending
@@ -564,7 +561,13 @@ async function fetchDictionaryApiWordStatusUncached(word: string, priority: 'hig
     }
   }
 
-  if (definitive) cachePhonetics(word, value, approximate)
+  // A *missing* reading is only remembered when the API definitively said so
+  // (a failed request is not evidence of "no phonetics"). A reading that was
+  // actually found is always worth keeping, even when the direct lookup failed
+  // and it came from a fallback (Google romanization after a 522): otherwise
+  // that word costs a ~20s dictionaryapi timeout on every lookup, and the save
+  // popup — which doesn't wait that long — never gets to show it.
+  if (definitive || value !== null) cachePhonetics(word, value, approximate)
   return { value, definitive, approximate }
 }
 
@@ -603,7 +606,7 @@ export async function fetchPhoneticsForWords(
   return out
 }
 
-const pinyinCache = new Map<string, string>()
+const pinyinCache = new PersistentLru<string>('pinyinCache', PHONETICS_CACHE_MAX)
 
 /**
  * Pinyin for a batch of Chinese words — Read Aloud's per-word wraps and Video
@@ -634,6 +637,7 @@ export async function fetchPinyinForWords(
 ): Promise<Record<string, { text: string | null; approximate: boolean }>> {
   const unique = [...new Set(words.map(w => w.trim()).filter(Boolean))]
   const out: Record<string, { text: string | null; approximate: boolean }> = {}
+  await pinyinCache.ready()
 
   await Promise.all(unique.map(async word => {
     const cached = pinyinCache.get(word)
@@ -643,10 +647,6 @@ export async function fetchPinyinForWords(
     }
     const { phonetics } = await googleSenses(word, 'zh')
     if (phonetics) {
-      if (pinyinCache.size >= PHONETICS_CACHE_MAX) {
-        const oldestKey = pinyinCache.keys().next().value
-        if (oldestKey !== undefined) pinyinCache.delete(oldestKey)
-      }
       pinyinCache.set(word, phonetics)
       // Never approximate: there is no fallback chain here, so a reading is
       // either the word's own or absent.

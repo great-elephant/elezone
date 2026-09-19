@@ -26,6 +26,7 @@ import {
   PomodoroState,
   UNCATEGORIZED_COLOR,
 } from '../shared/types'
+import { googleTranslateBatch } from './googleTranslate'
 import { translateInContext, ContextTranslateRequest, fetchPhoneticsForWords, fetchPinyinForWords } from './aiTranslate'
 import { getRandomRoast, RoastLevel, RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
 
@@ -1921,6 +1922,10 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
         await markOrphaned(p.id, p.orphaned ?? true)
       }
       return { ok: true }
+    }
+    case 'GOOGLE_TRANSLATE_BATCH': {
+      const { texts, tgt } = msg.payload as { texts: string[]; tgt: string }
+      return googleTranslateBatch(texts, tgt)
     }
     case 'TRANSLATE_IN_CONTEXT':
       return translateInContext(msg.payload as ContextTranslateRequest)
