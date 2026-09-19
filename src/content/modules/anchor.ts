@@ -176,30 +176,21 @@ export async function getSelectionContext(searchString?: string, knownLang?: str
   let suffix = rawSuffix.replace(/\s+/g, ' ')
 
   // Extract ONLY the sentence the word belongs to
-  try {
-    const segmenter = new Intl.Segmenter('en', { granularity: 'sentence' })
-    
-    const prefixSegments = [...segmenter.segment(prefix)]
-    if (prefixSegments.length > 0) {
-      prefix = prefixSegments[prefixSegments.length - 1].segment
-    }
+  const sentence = sentenceAround(prefix, trimmedText || rangeText.trim(), suffix)
+  if (sentence) {
+    return { prefix: sentence.prefix, suffix: sentence.suffix, occurrenceIndex, sourceLang }
+  }
 
-    const suffixSegments = [...segmenter.segment(suffix)]
-    if (suffixSegments.length > 0) {
-      suffix = suffixSegments[0].segment
-    }
-  } catch {
-    // Fallback if Intl.Segmenter is not available
-    if (prefix.length > 150) {
-      const sliced = prefix.slice(-150)
-      const spaceIdx = sliced.indexOf(' ')
-      prefix = spaceIdx !== -1 ? '...' + sliced.slice(spaceIdx) : '...' + sliced
-    }
-    if (suffix.length > 150) {
-      const sliced = suffix.slice(0, 150)
-      const spaceIdx = sliced.lastIndexOf(' ')
-      suffix = spaceIdx !== -1 ? sliced.slice(0, spaceIdx) + '...' : sliced + '...'
-    }
+  // Intl.Segmenter unavailable — crude punctuation/length fallback.
+  if (prefix.length > 150) {
+    const sliced = prefix.slice(-150)
+    const spaceIdx = sliced.indexOf(' ')
+    prefix = spaceIdx !== -1 ? '...' + sliced.slice(spaceIdx) : '...' + sliced
+  }
+  if (suffix.length > 150) {
+    const sliced = suffix.slice(0, 150)
+    const spaceIdx = sliced.lastIndexOf(' ')
+    suffix = spaceIdx !== -1 ? sliced.slice(0, spaceIdx) + '...' : sliced + '...'
   }
 
   const match = prefix.match(/(?:^|[.!?。！？\n])\s*([^.!?。！？\n]*)$/)
@@ -209,6 +200,46 @@ export async function getSelectionContext(searchString?: string, knownLang?: str
   const finalSuffix = suffixMatch ? suffixMatch[1] : suffix
 
   return { prefix: finalPrefix, suffix: finalSuffix, occurrenceIndex, sourceLang }
+}
+
+// A segment ending in one of these is not really the end of a sentence:
+// "T. Rowe Price", "Mr. Smith", "U.S. Steel". Intl.Segmenter splits after them.
+const ABBREVIATION_END = /(?:^|[\s(])(?:[A-Z]|Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Mt|vs|Inc|Ltd|Co|Corp|No)\.\s*$/
+
+/**
+ * The sentence containing `word`, given the text before and after it, returned
+ * as the part before and after the word. Null when Intl.Segmenter is missing.
+ */
+function sentenceAround(prefix: string, word: string, suffix: string): { prefix: string; suffix: string } | null {
+  let segments: Array<{ segment: string; index: number }>
+  try {
+    segments = [...new Intl.Segmenter('en', { granularity: 'sentence' }).segment(prefix + word + suffix)]
+  } catch {
+    return null
+  }
+
+  // Glue back together the segments that were split after an abbreviation.
+  const sentences: Array<{ start: number; end: number }> = []
+  for (const { segment, index } of segments) {
+    const last = sentences[sentences.length - 1]
+    if (last && ABBREVIATION_END.test(prefix.concat(word, suffix).slice(last.start, last.end))) {
+      last.end = index + segment.length
+    } else {
+      sentences.push({ start: index, end: index + segment.length })
+    }
+  }
+
+  const wordStart = prefix.length
+  const wordEnd = wordStart + word.length
+  const first = sentences.find(x => x.end > wordStart) ?? sentences[0]
+  const last = [...sentences].reverse().find(x => x.start < wordEnd) ?? sentences[sentences.length - 1]
+  if (!first || !last) return null
+
+  const full = prefix + word + suffix
+  return {
+    prefix: full.slice(first.start, wordStart).trimStart(),
+    suffix: full.slice(wordEnd, last.end).trimEnd(),
+  }
 }
 
 // ── Bookmark highlights ───────────────────────────────────────────────────────
