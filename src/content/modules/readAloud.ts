@@ -60,6 +60,10 @@ let translationMode: 'paragraph' | 'sentence' = 'paragraph'
 // (see translationMode above) is wrapped once; leaving it, in either
 // direction, doesn't undo it (H33).
 const phoneticsWrappedIndices = new Set<number>()
+// Look-ahead sentences (wrapped at low priority) hold their IPA back until every
+// word has settled. When the reader actually reaches one, its reveal() ends
+// that wait so the words already known show immediately.
+const phoneticsRevealers = new Map<number, () => void>()
 // True only while the background is sitting in the intentional inter-sentence
 // gap, so the mini-player can show a subtle "shadowing…" hint.
 let inShadowGap = false
@@ -136,6 +140,7 @@ function clearLocalSession() {
   clearWordHighlight()
   unwrapAllPhoneticsWords()
   phoneticsWrappedIndices.clear()
+  phoneticsRevealers.clear()
   sentences = []
   sentenceRanges = []
   sentenceElements = []
@@ -168,7 +173,13 @@ function zoneIndicesFor(index: number): number[] {
 // `sentenceRanges[i]` rebuilt from the wrapper elements' own boundaries,
 // since wrapping splits/moves the range's underlying text nodes.
 function wrapPhoneticsForSentence(i: number, priority: 'high' | 'low'): Promise<void> {
-  if (phoneticsWrappedIndices.has(i)) return Promise.resolve()
+  if (phoneticsWrappedIndices.has(i)) {
+    if (priority === 'high') {
+      phoneticsRevealers.get(i)?.()
+      phoneticsRevealers.delete(i)
+    }
+    return Promise.resolve()
+  }
   phoneticsWrappedIndices.add(i)
   const zoneRange = sentenceRanges[i]
   if (!zoneRange) return Promise.resolve()
@@ -180,11 +191,12 @@ function wrapPhoneticsForSentence(i: number, priority: 'high' | 'low'): Promise<
   // literal fallback only matters if wrapping somehow runs outside a session.
   const lang = currentLang || document.documentElement.lang || 'en'
   prepareWordIndex(zoneRange, sentences[i] ?? '')
-  const { wrappers, ready } = wrapAndShowPhoneticsForWords(
+  const { wrappers, ready, reveal } = wrapAndShowPhoneticsForWords(
     resolveSentenceWordRanges(sentences[i] ?? '', lang),
     priority,
     lang,
   )
+  if (priority === 'low') phoneticsRevealers.set(i, reveal)
   if (wrappers.length > 0) {
     const rebuilt = document.createRange()
     rebuilt.setStartBefore(wrappers[0])
@@ -604,6 +616,7 @@ async function rebuildSessionForShadowing(on: boolean) {
 
   unwrapAllPhoneticsWords()
   phoneticsWrappedIndices.clear()
+  phoneticsRevealers.clear()
   const lang = loadArticlePlan(on)
   if (sentences.length === 0) {
     clearLocalSession()
@@ -642,6 +655,7 @@ export async function setPhonetics(on: boolean): Promise<void> {
   } else {
     unwrapAllPhoneticsWords()
     phoneticsWrappedIndices.clear()
+  phoneticsRevealers.clear()
     const range = sentenceRanges[currentIndex]
     if (range) prepareWordIndex(range, sentences[currentIndex] ?? '')
   }

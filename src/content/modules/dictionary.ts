@@ -4,6 +4,7 @@ import { BookmarkColor, BOOKMARK_COLORS, colorHex, resolveDefaultDeckColor, UNCA
 import type { SavedItem, Settings } from '../../shared/types'
 import type { ContextTranslateResult } from '../../background/aiTranslate'
 import { segmentWords, detectContentLangAsync } from './segmentation'
+import { setUserPhonetics } from './wordPhonetics'
 
 let host: HTMLElement | null = null
 let shadow: ShadowRoot | null = null
@@ -102,6 +103,26 @@ const DICTIONARY_CSS = `
     outline: none;
     background: #111122;
     box-shadow: 0 0 0 1px #3a3a6a;
+  }
+  .phonetics[contenteditable] {
+    cursor: text;
+    border-radius: 4px;
+    padding: 1px 4px;
+    margin-left: -4px;
+    outline: none;
+    min-width: 3em;
+  }
+  .phonetics[contenteditable]:hover {
+    background: #16162a;
+  }
+  .phonetics[contenteditable]:focus {
+    background: #111122;
+    box-shadow: 0 0 0 1px #3a3a6a;
+  }
+  .phonetics[contenteditable]:empty::before {
+    content: 'add IPA';
+    color: #55557a;
+    font-style: italic;
   }
   .translation-input {
     background: #111122;
@@ -514,9 +535,25 @@ async function showPopover(
     }).catch(() => { })
   }
 
+  let livePhonetics = ''
   const phonetics = document.createElement('span')
   phonetics.className = 'phonetics'
   phonetics.style.cssText = 'display:block; color:#8888aa; font-weight:normal; font-size:0.85em; margin-top:2px'
+  // Editable, like the sentence-translation hint: a fetched reading can be wrong
+  // or only approximate, and what the learner types is what gets saved.
+  phonetics.contentEditable = 'true'
+  phonetics.spellcheck = false
+  phonetics.title = 'Click to edit'
+  let phoneticsEdited = false
+  phonetics.addEventListener('input', () => {
+    phoneticsEdited = true
+    livePhonetics = phonetics.textContent?.trim() ?? ''
+  })
+  // Page hotkeys must not fire while typing IPA symbols here.
+  phonetics.addEventListener('keydown', e => {
+    e.stopPropagation()
+    if (e.key === 'Enter') { e.preventDefault(); phonetics.blur() }
+  })
 
   header.append(wordSpan, speakBtn)
   dragHeader.append(header, phonetics)
@@ -571,7 +608,6 @@ async function showPopover(
   const isDictApiEnabled = (settings?.translation?.phoneticsSourceOrder ?? [])
     .every((src: { source: string; enabled: boolean }) => src.source !== 'dictionaryapi' || src.enabled)
 
-  let livePhonetics = ''
 
   // Fire phonetics / pinyin fetch in parallel right away so background cache (from Read Aloud / Video Mode)
   // or fast API responses resolve immediately without waiting on translation calls.
@@ -582,8 +618,10 @@ async function showPopover(
         .then((res: Record<string, { text: string | null }> | undefined) => {
           const text = res?.[cleanWord]?.text
           if (text) {
-            livePhonetics = text
-            phonetics.textContent = text
+            if (!phoneticsEdited) {
+              livePhonetics = text
+              phonetics.textContent = text
+            }
           }
         })
         .catch(() => {})
@@ -593,8 +631,10 @@ async function showPopover(
         .then((res: Record<string, { text: string | null }> | undefined) => {
           const text = res?.[cleanWord.toLowerCase()]?.text
           if (text) {
-            livePhonetics = text
-            phonetics.textContent = text
+            if (!phoneticsEdited) {
+              livePhonetics = text
+              phonetics.textContent = text
+            }
           }
         })
         .catch(() => {})
@@ -621,7 +661,7 @@ async function showPopover(
 
   loading.remove()
 
-  if (!livePhonetics && wordResult?.phonetics) {
+  if (!phoneticsEdited && !livePhonetics && wordResult?.phonetics) {
     livePhonetics = wordResult.phonetics
     phonetics.textContent = livePhonetics
   }
@@ -785,6 +825,14 @@ async function showPopover(
       repetitions: 0
     }
 
+    // A reading the learner corrected becomes the word's own everywhere (Read Aloud,
+    // Video Mode), no longer approximate. Pinyin is left alone.
+    if (phoneticsEdited && livePhonetics && isSingleWord && isEn) {
+      setUserPhonetics(cleanWord, livePhonetics)
+      await chrome.runtime
+        .sendMessage({ type: 'SET_PHONETICS', payload: { word: cleanWord, text: livePhonetics } })
+        .catch(() => { })
+    }
     await chrome.runtime.sendMessage({ type: 'SAVE_ITEM', payload: item }).catch(() => { })
     await chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'save' }).catch(() => { })
     // Reuse this deck next time rather than making the learner re-pick it.
@@ -887,7 +935,7 @@ function setupDragHandler(popover: HTMLElement, header: HTMLElement) {
   }
 
   header.addEventListener('mousedown', (e: MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return
+    if ((e.target as HTMLElement).closest('button, [contenteditable]')) return
     e.preventDefault()
     const rect = popover.getBoundingClientRect()
     isDragging = true

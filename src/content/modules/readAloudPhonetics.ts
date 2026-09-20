@@ -26,7 +26,7 @@
 // the original word — the IPA line underneath is meant to be read quietly,
 // not be part of what "focus on this sentence" visually means.
 
-import { phoneticsForWords, type PhoneticsResult } from './wordPhonetics'
+import { phoneticsForWords, onUserPhonetics, type PhoneticsResult } from './wordPhonetics'
 import { phoneticsForWords as pinyinForWords } from './pinyinLookup'
 import { toneSpans, toneColor } from './pinyinTones'
 import { snapshotBookmarkBoundaries, restoreBookmarkBoundaries } from './anchor'
@@ -54,6 +54,21 @@ let wrappedWords: HTMLElement[] = []
 export function lookupWord(token: string): string {
   return token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
 }
+
+// The learner corrected this word's IPA in the save popup: every wrapped
+// occurrence already on the page changes now, and stops being dimmed.
+onUserPhonetics((word, text) => {
+  for (const wrapper of wrappedWords) {
+    if (!wrapper.isConnected) continue
+    const ipa = wrapper.querySelector<HTMLElement>(IPA_SELECTOR)
+    if (!ipa) continue
+    const clone = wrapper.cloneNode(true) as HTMLElement
+    clone.querySelectorAll(IPA_SELECTOR).forEach(el => el.remove())
+    if (lookupWord(clone.textContent ?? '').toLowerCase() !== word) continue
+    ipa.textContent = text
+    ipa.style.opacity = ''
+  }
+})
 
 const WRAPPER_CSS = [
   'display:inline-flex !important',
@@ -298,8 +313,8 @@ export function wrapAndShowPhoneticsForWords(
   ranges: { text: string; range: Range }[],
   priority: 'high' | 'low' = 'high',
   lang = 'en',
-): { wrappers: HTMLElement[]; ready: Promise<void> } {
-  if (ranges.length === 0) return { wrappers: [], ready: Promise.resolve() }
+): { wrappers: HTMLElement[]; ready: Promise<void>; reveal: () => void } {
+  if (ranges.length === 0) return { wrappers: [], ready: Promise.resolve(), reveal: () => {} }
 
   // Chinese reads its pronunciation off Google's romanization instead of
   // dictionaryapi.dev's IPA. The two modules expose the same shape, so the
@@ -381,10 +396,15 @@ export function wrapAndShowPhoneticsForWords(
   // words popping in one at a time while nobody's looking just means the
   // sentence reads as unfinished/flickering for however long it takes —
   // fill it in one clean reveal once every word in it has settled instead.
+  //
+  // `reveal()` ends that wait early: once the reader reaches a look-ahead
+  // sentence it is the sentence being read, so whatever is already known must
+  // show right now instead of hiding behind its one slowest word.
+  let revealed = priority === 'high'
   const RETRY_DELAYS_MS = [5000, 12000]
   const attempt = (attemptIndex: number): Promise<void> =>
-    lookUp(cleanWords, priority, priority === 'high' ? fillWord : undefined).then(result => {
-      if (priority === 'low') for (const [word, entry] of result) fillWord(word, entry)
+    lookUp(cleanWords, priority, (word, entry) => { if (revealed) fillWord(word, entry) }).then(result => {
+      for (const [word, entry] of result) fillWord(word, entry)
       const stillMissing = wrapped.some((w, i) => w.wrapper.isConnected && !result.get(cleanWords[i])
         && !w.wrapper.querySelector(`.${IPA_CLASS}`)?.textContent)
       if (stillMissing && attemptIndex < RETRY_DELAYS_MS.length) {
@@ -394,7 +414,14 @@ export function wrapAndShowPhoneticsForWords(
       }
     })
 
-  return { wrappers: wrapped.map(w => w.wrapper), ready: attempt(0) }
+  const reveal = (): void => {
+    if (revealed) return
+    revealed = true
+    // Words already resolved fill in immediately; the rest fill as they resolve.
+    void lookUp(cleanWords, 'high', fillWord)
+  }
+
+  return { wrappers: wrapped.map(w => w.wrapper), ready: attempt(0), reveal }
 }
 
 // Triple-click-to-select-paragraph is a *browser* behaviour, not something

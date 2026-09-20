@@ -16,7 +16,7 @@ import type { SubtitleCue } from './subtitleInterceptor'
 import type { SavedItem } from '../../../shared/types'
 import { colorHex } from '../../../shared/types'
 import { translationFor } from './cueTranslation'
-import { phoneticsForWords } from '../wordPhonetics'
+import { phoneticsForWords, onUserPhonetics } from '../wordPhonetics'
 import { phoneticsForWords as pinyinForWords } from '../pinyinLookup'
 import { segmentWords } from '../segmentation'
 import { toneSpans, toneColor } from '../pinyinTones'
@@ -595,6 +595,16 @@ function flashSaved(anchor: HTMLElement, label: string) {
 
 let _stage: HTMLElement | null = null
 let _wordsRow: HTMLElement | null = null
+
+// The learner corrected a word's IPA in the save popup — update it under the line
+// on screen right now (later lines read it from the shared cache).
+onUserPhonetics((word, text) => {
+  _wordsRow?.querySelectorAll<HTMLElement>('.phonetics-text').forEach(span => {
+    if (span.dataset.word !== word) return
+    span.textContent = text
+    span.style.opacity = ''
+  })
+})
 let _translationRowEl: HTMLElement | null = null
 let _statusEl: HTMLElement | null = null
 // Shown in place of the subtitle text while there is no cue to display — so the

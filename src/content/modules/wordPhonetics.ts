@@ -112,6 +112,23 @@ export function prefetchPhonetics(words: string[]): void {
   for (const w of clean) if (!_cache.has(w)) void fetchOne(w, 'low')
 }
 
+/** Record a reading the learner typed in (save popup) so this tab shows it solid
+ *  straight away, instead of the dimmed approximate one it already cached. */
+export function setUserPhonetics(word: string, text: string): void {
+  const key = normalise(word)
+  _cache.set(key, { text, approximate: false })
+  for (const listener of _userListeners) listener(key, text)
+}
+
+const _userListeners = new Set<(word: string, text: string) => void>()
+
+/** Lets on-screen phonetics (Read Aloud's word wraps, Video Mode's subtitle line)
+ *  update in place when the learner corrects a word's IPA, instead of only
+ *  picking the new reading up the next time they're built. */
+export function onUserPhonetics(listener: (word: string, text: string) => void): void {
+  _userListeners.add(listener)
+}
+
 export function clearPhoneticsCache(): void {
   _cache.clear()
   _pending.clear()

@@ -27,7 +27,7 @@ import {
   UNCATEGORIZED_COLOR,
 } from '../shared/types'
 import { googleTranslateBatch } from './googleTranslate'
-import { translateInContext, ContextTranslateRequest, fetchPhoneticsForWords, fetchPinyinForWords } from './aiTranslate'
+import { translateInContext, ContextTranslateRequest, fetchPhoneticsForWords, fetchPinyinForWords, setUserPhonetics } from './aiTranslate'
 import { getRandomRoast, RoastLevel, RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
 
 let creatingOffscreen: Promise<void> | null = null;
@@ -1936,6 +1936,12 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       // want on every line of a movie.
       const { words, priority } = msg.payload as { words: string[]; priority?: 'high' | 'low' }
       return fetchPhoneticsForWords(words, priority)
+    }
+    case 'SET_PHONETICS': {
+      // The learner edited a word's IPA in the save popup.
+      const { word, text } = msg.payload as { word: string; text: string }
+      await setUserPhonetics(word, text)
+      return { ok: true }
     }
     case 'FETCH_PINYIN': {
       // The Chinese counterpart of FETCH_PHONETICS. Kept as its own message

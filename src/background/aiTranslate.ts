@@ -257,14 +257,29 @@ const PHONETICS_CACHE_MAX = 5000
 // re-fetched on every lookup, but only for a day, after which dictionaryapi is
 // asked again in case it can now supply the word's own real entry.
 const APPROXIMATE_TTL_MS = 24 * 60 * 60 * 1000
-const phoneticsCache = new PersistentLru<{ value: string | null; approximate: boolean; expiresAt?: number }>('phoneticsCache', PHONETICS_CACHE_MAX)
+// `source: 'user'` marks a reading the learner typed in themselves: never
+// approximate, never expires, and never overwritten by a fetched result.
+const phoneticsCache = new PersistentLru<{ value: string | null; approximate: boolean; expiresAt?: number; source?: 'user' }>('phoneticsCache', PHONETICS_CACHE_MAX)
 
 function cachePhonetics(word: string, value: string | null, approximate: boolean) {
+  // A lookup that was already in flight when the learner corrected the word
+  // must not put its own answer back on top of theirs.
+  if (phoneticsCache.get(word)?.source === 'user') return
   phoneticsCache.set(word, {
     value,
     approximate,
     ...(approximate && { expiresAt: Date.now() + APPROXIMATE_TTL_MS }),
   })
+}
+
+/** The learner corrected a word's IPA in the save popup — from now on that
+ *  reading is the word's own, shown solid everywhere (Read Aloud, Video Mode). */
+export async function setUserPhonetics(rawWord: string, text: string): Promise<void> {
+  const word = rawWord.toLowerCase().trim()
+  const value = text.trim()
+  if (!word || !value) return
+  await phoneticsCache.ready()
+  phoneticsCache.set(word, { value, approximate: false, source: 'user' })
 }
 
 // dictionaryapi.dev's origin latency is wildly bimodal: a word Cloudflare
