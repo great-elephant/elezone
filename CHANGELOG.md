@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.7.0](https://github.com/great-elephant/elezone/compare/0.6.0...0.7.0) (2026-09-20)
+
+### Features
+
+* add eye toggle to mask focus session task name ([5d2496b](https://github.com/great-elephant/elezone/commit/5d2496bd3eb6e02e3359ded8d14d86f9507d3c86))
+* **dictionary:** save and show the sentence translation, editable before saving ([b48df1a](https://github.com/great-elephant/elezone/commit/b48df1ad035e939d8dc8afdecdb0d30aedcf5b45))
+* **library:** add fsrs grading, notification muting, and custom deck colors ([c43d8f1](https://github.com/great-elephant/elezone/commit/c43d8f172ccb84c9d0ec6fc5c16736fc90a80a92))
+* **phonetics:** make ipa editable in the save popup and reveal look-ahead ipa on focus ([d548ad6](https://github.com/great-elephant/elezone/commit/d548ad6024663f0214fd23220ad070506b0fc3f5))
+* **read-aloud:** add a settings toggle for the audio keepalive, off by default ([bca98bc](https://github.com/great-elephant/elezone/commit/bca98bc4222a5cb95d4cfa58581d47b7b63d34fd))
+* **read-aloud:** add sentence-level repeat mode for shadowing ([d862cb7](https://github.com/great-elephant/elezone/commit/d862cb7dc1e60780087516d9e19b0aeb05597ff4))
+* **read-aloud:** add shadowing gap ratio control ([23b6889](https://github.com/great-elephant/elezone/commit/23b688912e2592fa48f47f25f21b46f54dd3d5ec))
+* **read-aloud:** raise the repeat and shadowing gap limits to 9 ([b36f73b](https://github.com/great-elephant/elezone/commit/b36f73bde7d60b654a216c10324e552f0063663c))
+* **read-aloud:** say up front that the first ipa lookup can be slow ([4edeca2](https://github.com/great-elephant/elezone/commit/4edeca23a213eac1b58315769d93f2f579279f94))
+* **translation:** add chinese (simplified) reading support with pinyin ([a649621](https://github.com/great-elephant/elezone/commit/a649621a100679206adc2300d47508538f39692b))
+* **translation:** resolve chinese source language from the text, not a lang attribute ([571b6a2](https://github.com/great-elephant/elezone/commit/571b6a2b2563f8d6d2739de103b1361cdbedff1a))
+* **video-mode:** add subtitle hide toggle beside sidebar toggle ([ce2f0b9](https://github.com/great-elephant/elezone/commit/ce2f0b9cc084ccd222069c1ca1f58ff45f1c2a03))
+* **video-mode:** stack subtitle/sidebar toggle buttons vertically and make them draggable ([3259bb8](https://github.com/great-elephant/elezone/commit/3259bb8d1cc52bb8932b32655c37e17c96a36e55))
+
+### Bug Fixes
+
+* **dictionary:** fetch phonetics/pinyin in parallel and use background cache in save modal ([43ff784](https://github.com/great-elephant/elezone/commit/43ff784e4623fa14465a71d2c54a7161eb57fc6b))
+* **dictionary:** find phonetics for possessives and hyphenated words ([891ae4f](https://github.com/great-elephant/elezone/commit/891ae4f3506c3f826e59611b436ec30d95daa40c))
+* **dictionary:** keep abbreviations like "T. Rowe" inside the save popup sentence ([8c025bb](https://github.com/great-elephant/elezone/commit/8c025bb18f641a50ca66d88c4c0935e466fbeac7))
+* **notifications:** support active-hours window that wraps past midnight ([038bc98](https://github.com/great-elephant/elezone/commit/038bc98699f4d933c76d6cade3411e7a71b2afbd))
+* **read-aloud:** fix phonetics word-wrap split by intra-sentence whitespace ([6c98645](https://github.com/great-elephant/elezone/commit/6c9864542c3e0e2ec17b046ec6655ddb1be52bca))
+* **read-aloud:** keep phonetics visible after toggling shadowing off ([690e206](https://github.com/great-elephant/elezone/commit/690e20600a47fcc977d95d474cf40828d9e2bcc9))
+* **read-aloud:** keep saved highlights alive across phonetics word-wrap ([a4e00a0](https://github.com/great-elephant/elezone/commit/a4e00a07bbbd6a30ae0f86f4e5667df8bd284935))
+* **read-aloud:** route every speak through one path so voice settings apply everywhere ([d8afa0c](https://github.com/great-elephant/elezone/commit/d8afa0c0a8bbc6b40b6193c3bcea2d173e467677))
+* **read-aloud:** stop bluetooth earbuds swallowing the first word ([352769d](https://github.com/great-elephant/elezone/commit/352769df18b3f7af43f259179cdcba478fa7be69))
+* **read-aloud:** stop engine before re-speaking a sentence ([76e4b11](https://github.com/great-elephant/elezone/commit/76e4b11400d18f590730eee04cb8980d7f152fc5))
+* **read-aloud:** stop reading on page navigation ([6355e2a](https://github.com/great-elephant/elezone/commit/6355e2a3d4db2af708a59fec7d6bc213161d99ef))
+* **readaloud:** speak the right voice for a non-english card ([0c6e419](https://github.com/great-elephant/elezone/commit/0c6e4199cd0e20ce696b14318d8e052a60bbdaed))
+* **translate:** dedupe and cache translate requests to stop duplicate google calls ([a661b19](https://github.com/great-elephant/elezone/commit/a661b19c6861c614d67bef98be97a038fe18d79c))
+* **translation:** send google requests through a cached, batched background service ([0c20bbf](https://github.com/great-elephant/elezone/commit/0c20bbf2fb3658389980fb62693a42100235616c))
+* **translation:** wait longer for a slow dictionary api response ([9f81b73](https://github.com/great-elephant/elezone/commit/9f81b73ccbb8fc2634844005685b825c8f00e502))
+* **video-mode:** prefetch upcoming lines' phonetics sequentially ([74253c2](https://github.com/great-elephant/elezone/commit/74253c2b276a1ac03529e6dda27b3fc4f7680ed9))
+* **video-mode:** raise default subtitle strip position on YouTube ([1570435](https://github.com/great-elephant/elezone/commit/1570435a477716baba234fa3c476e0c5c169f1ad))
+* **video-mode:** save subtitle words with a valid id and creation time ([845e2ac](https://github.com/great-elephant/elezone/commit/845e2aca75d411563bb1077b90fb8538317ab28b))
+* **video-mode:** saved-word tooltip shows deck name instead of raw color code ([f1c56dc](https://github.com/great-elephant/elezone/commit/f1c56dca4f253b712bcbe0021c90bb009cda204c))
+* **video-mode:** stop shadowing hold on current line, not next, on YouTube ([28c9f2a](https://github.com/great-elephant/elezone/commit/28c9f2a09467fb8470a031365a73ea8d4c1f9064))
+
 ## [0.6.0](https://github.com/great-elephant/elezone/compare/0.5.0...0.6.0) (2026-08-24)
 
 ### Features
