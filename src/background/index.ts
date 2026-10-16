@@ -1396,6 +1396,10 @@ async function speakCurrentSentence(token: number) {
   session.speakStartedAt = Date.now()
   await broadcastReadAloudState(session.tabId, 'playing', session.currentIndex)
   await holdAudioAwake(session.settings)
+  // The broadcast/keepalive awaits above can outlast a seek/next/prev (or the
+  // end of a repeat gap) that bumped the token meanwhile. Speaking anyway would
+  // cut off the newer utterance with one whose events are all ignored as stale.
+  if (activeSession !== session || session.token !== token) return
 
   chrome.tts.speak(session.sentences[session.currentIndex], {
     enqueue: false,
