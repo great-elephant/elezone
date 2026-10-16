@@ -110,6 +110,13 @@ function scoreContentRootCandidate(candidate: HTMLElement, titleEl: HTMLElement 
 // `[itemprop="articleBody"]` match still wins when one exists.
 const MIN_TITLE_CLIMB_BLOCK_COUNT = 3
 const MIN_TITLE_CLIMB_TEXT_LENGTH = 200
+// A hero/header area routinely holds several tiny leaf divs (metadata labels
+// like "AUTHOR" / "PUBLISHED" / "READING TIME" and their values) that satisfy
+// isLeafParagraphDiv but aren't prose. Counting them let the climb stop at the
+// header, so the article body sat outside the content root and was never read
+// (seen on claude.dev blog posts). Only blocks with a sentence's worth of text
+// count toward "this ancestor holds the article".
+const MIN_TITLE_CLIMB_BLOCK_TEXT_LENGTH = 40
 const MAX_TITLE_CLIMB_DEPTH = 12
 
 function findContentRootByClimbingFromTitle(titleEl: HTMLElement | null): HTMLElement | null {
@@ -118,7 +125,8 @@ function findContentRootByClimbingFromTitle(titleEl: HTMLElement | null): HTMLEl
   for (let depth = 0; node && node !== document.body && depth < MAX_TITLE_CLIMB_DEPTH; depth++, node = node.parentElement) {
     if (node.closest('nav, header, footer, aside')) continue
 
-    const blockCount = getCandidateContentBlocks(node).length
+    const blockCount = getCandidateContentBlocks(node)
+      .filter(block => getElementContentText(block).length >= MIN_TITLE_CLIMB_BLOCK_TEXT_LENGTH).length
     const textLength = getElementContentText(node).length
     if (blockCount >= MIN_TITLE_CLIMB_BLOCK_COUNT && textLength >= MIN_TITLE_CLIMB_TEXT_LENGTH) {
       return node
@@ -128,13 +136,65 @@ function findContentRootByClimbingFromTitle(titleEl: HTMLElement | null): HTMLEl
   return null
 }
 
+// Class/tag-agnostic fallback: the article body is wherever the prose is.
+// Every paragraph-sized block credits its ancestors (parent 1x, grandparent
+// 1/2, great-grandparent 1/3) with its non-link text length, which makes the
+// tightest container around the densest run of prose win — headers, rails and
+// "related posts" lists carry little prose and fall out on their own. The
+// winner may be just one section of the article, so it then climbs while the
+// parent holds (almost) the same prose as the winner, i.e. while the parent
+// adds only chrome around it.
+const MIN_PROSE_BLOCK_TEXT_LENGTH = 40
+const PROSE_ANCESTOR_WEIGHTS = [1, 1 / 2, 1 / 3]
+const PROSE_CLIMB_MIN_SHARE = 0.85
+
+function findContentRootByProseDensity(): HTMLElement | null {
+  const weighted = new Map<HTMLElement, number>()
+  const total = new Map<HTMLElement, number>()
+
+  for (const block of getCandidateContentBlocks(document.body)) {
+    if (block.closest(`nav, header, footer, aside, ${NOISE_CONTAINER_SELECTOR}`)) continue
+    const text = block.textContent?.trim().length ?? 0
+    if (text < MIN_PROSE_BLOCK_TEXT_LENGTH) continue
+    const linkText = [...block.querySelectorAll('a')].reduce((sum, a) => sum + (a.textContent?.length ?? 0), 0)
+    const prose = Math.max(0, text - linkText)
+
+    let node = block.parentElement
+    for (let depth = 0; node && node !== document.body && node !== document.documentElement; depth++, node = node.parentElement) {
+      total.set(node, (total.get(node) ?? 0) + prose)
+      const weight = PROSE_ANCESTOR_WEIGHTS[depth]
+      if (weight) weighted.set(node, (weighted.get(node) ?? 0) + prose * weight)
+    }
+  }
+
+  let best: HTMLElement | null = null
+  let bestScore = 0
+  for (const [node, score] of weighted) {
+    if (score > bestScore) {
+      best = node
+      bestScore = score
+    }
+  }
+  if (!best) return null
+
+  while (best.parentElement && best.parentElement !== document.body && !best.parentElement.matches('nav, header, footer, aside')) {
+    const parentTotal = total.get(best.parentElement) ?? 0
+    if ((total.get(best) ?? 0) < parentTotal * PROSE_CLIMB_MIN_SHARE) break
+    best = best.parentElement
+  }
+
+  return best
+}
+
 export function getContentRoot(profile: SiteProfile = getSiteProfile()): HTMLElement {
   const titleEl = getTitleElement(profile)
   const candidates = getContentRootCandidates(profile)
   const climbed = findContentRootByClimbingFromTitle(titleEl)
   if (climbed && !candidates.includes(climbed)) candidates.push(climbed)
+  const dense = findContentRootByProseDensity()
+  if (dense && !candidates.includes(dense)) candidates.push(dense)
 
-  if (candidates.length === 0) return climbed ?? document.body
+  if (candidates.length === 0) return document.body
 
   let best = candidates[0]
   let bestScore = Number.NEGATIVE_INFINITY
