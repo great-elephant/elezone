@@ -1,3 +1,6 @@
+import { createOneOffTracker } from './oneOffSpeech'
+
+console.info(`[EleZone] build ${__BUILD_TIME__}`)
 import {
   saveItem,
   getAllItems,
@@ -26,6 +29,7 @@ import {
   PomodoroState,
   UNCATEGORIZED_COLOR,
 } from '../shared/types'
+import { openStudyPanel } from '../shared/sidePanel'
 import { googleTranslateBatch } from './googleTranslate'
 import { translateInContext, ContextTranslateRequest, fetchPhoneticsForWords, fetchPinyinForWords, setUserPhonetics } from './aiTranslate'
 import { getRandomRoast, RoastLevel, RoastIntensity, DEFAULT_ROAST_INTENSITY } from '../shared/roasts'
@@ -472,7 +476,7 @@ async function toggleReadAloudForTab(tab: chrome.tabs.Tab) {
     || (readAloudStateByTab.get(tab.id) ?? 'idle') !== 'idle'
   if (isActive) {
     if (activeSession?.tabId === tab.id) {
-      await stopActiveSession()
+      await stopActiveSession('toggleReadAloudForTab: user toggled off (shortcut/context menu)')
     } else {
       // No live TTS session here, but the tab still thinks it's reading —
       // tell it to reset so its mini-player/highlights tear down.
@@ -484,7 +488,7 @@ async function toggleReadAloudForTab(tab: chrome.tabs.Tab) {
   }
 }
 
-chrome.commands.onCommand.addListener(async (command) => {
+chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command === 'play_pause' && activeSession) {
     // Delegate to controlReadAloud instead of re-implementing pause/resume here:
     // that's the single source of truth for the suppressStopUntil grace window
@@ -499,6 +503,16 @@ chrome.commands.onCommand.addListener(async (command) => {
   } else if (command === 'trigger_ocr') {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
     if (tabs[0]) await startOcr(tabs[0])
+  } else if (command === 'open_study_panel') {
+    try {
+      let id = tab?.id
+      if (id === undefined) {
+        id = (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id
+      }
+      if (id !== undefined) await openStudyPanel(id)
+    } catch (err) {
+      console.error('EleZone: failed to open study panel', err)
+    }
   } else if (command === 'toggle_read_aloud') {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
     if (tabs[0]) await toggleReadAloudForTab(tabs[0])
@@ -732,7 +746,7 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
 chrome.tabs.onRemoved.addListener(tabId => {
   readAloudStateByTab.delete(tabId)
   if (activeSession?.tabId === tabId) {
-    void stopActiveSession()
+    void stopActiveSession(`tabs.onRemoved: tab ${tabId} closed`)
   }
 })
 
@@ -749,7 +763,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
 chrome.webNavigation.onBeforeNavigate.addListener(details => {
   if (details.frameId !== 0) return
   if (activeSession?.tabId === details.tabId) {
-    void stopActiveSession()
+    void stopActiveSession(`webNavigation.onBeforeNavigate: top-frame navigation to ${details.url}`)
   } else if ((readAloudStateByTab.get(details.tabId) ?? 'idle') !== 'idle') {
     void broadcastReadAloudState(details.tabId, 'idle')
   }
@@ -1022,6 +1036,21 @@ function scheduleShadowingGap(token: number, justSpoke: string, onComplete: () =
   }, gapMs)
 }
 
+// Re-arm the shadowing gap for a session that was paused mid-gap. The sentence
+// about to be spoken stands in for the just-finished one when sizing the gap.
+function rearmShadowingGap(session: NonNullable<typeof activeSession>) {
+  const token = session.token
+  scheduleShadowingGap(token, session.sentences[session.currentIndex] ?? '', () => {
+    const s = activeSession
+    if (!s || s.token !== token) return
+    if (s.currentRep === 0) {
+      advanceToNextSentence(token)
+    } else {
+      void speakCurrentSentence(token)
+    }
+  })
+}
+
 function isTtsSpeaking(): Promise<boolean> {
   return new Promise(resolve => {
     chrome.tts.isSpeaking(speaking => resolve(Boolean(speaking)))
@@ -1054,7 +1083,7 @@ function startSpeakingWatchdog(token: number) {
       // random-seeming mid-article stop.
       const since = activeSession.speakStartedAt ? Date.now() - activeSession.speakStartedAt : Infinity
       if (since < 1500) return
-      await stopActiveSession()
+      await stopActiveSession(`speaking watchdog: isSpeaking=${isSpeaking} sinceSpeakStartedAt=${Number.isFinite(since) ? since + 'ms' : 'never'}`)
     }
   }, 1000)
 }
@@ -1111,8 +1140,32 @@ async function broadcastReadAloudWord(
   }).catch(() => { })
 }
 
-async function stopActiveSession() {
+const oneOffSpeech = createOneOffTracker({
+  getSession: () => activeSession,
+  pauseSession: () => {
+    if (!activeSession) return
+    activeSession.state = 'paused'
+    // Same as a user pause: cancel a pending gap timer (inGap stays set) so it
+    // can't fire after the one-off ends and advance over the restarted sentence.
+    if (activeSession.inGap) clearShadowingGap()
+  },
+  resumeSession: (token) => {
+    if (!activeSession || activeSession.token !== token) return
+    activeSession.state = 'playing'
+    activeSession.suppressStopUntil = Date.now() + 500
+    if (activeSession.inGap) {
+      rearmShadowingGap(activeSession)
+    } else {
+      void speakCurrentSentence(token)
+    }
+    void broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
+  },
+  stopTts: () => chrome.tts.stop(),
+})
+
+async function stopActiveSession(reason: string) {
   const session = activeSession
+  if (session) console.warn(`[ReadAloud] stopped: ${reason}`)
   clearSpeakingWatchdog()
   clearShadowingGap()
   activeSession = null
@@ -1280,8 +1333,12 @@ function handleTtsEvent(token: number, event: chrome.tts.TtsEvent) {
     // `suppressStopUntil` field doc) — a real interruption (tab closed, another
     // extension/page speaking, engine failure) still tears the session down as
     // soon as the short grace window passes.
-    if (session.suppressStopUntil && Date.now() < session.suppressStopUntil) return
-    void stopActiveSession()
+    const suppressLeft = session.suppressStopUntil ? session.suppressStopUntil - Date.now() : 0
+    if (suppressLeft > 0) {
+      console.info(`[ReadAloud] ignored ${event.type} inside suppress window`)
+      return
+    }
+    void stopActiveSession(`handleTtsEvent: ${event.type} errorMessage=${event.errorMessage ?? 'none'} token=${token} ${session.suppressStopUntil ? 'suppress window already expired' : 'no suppress window set'}`)
   }
 }
 
@@ -1367,7 +1424,7 @@ async function speakCurrentSentence(token: number) {
   if (!session || session.token !== token) return
 
   if (session.currentIndex >= session.sentences.length) {
-    await stopActiveSession()
+    await stopActiveSession('speakCurrentSentence: reached end of sentences')
     return
   }
 
@@ -1411,7 +1468,7 @@ async function speakCurrentSentence(token: number) {
     volume: session.settings.volume,
   }, async () => {
     if (chrome.runtime.lastError && activeSession?.token === token) {
-      await stopActiveSession()
+      await stopActiveSession(`chrome.tts.speak callback lastError: ${chrome.runtime.lastError.message}`)
     }
   })
 }
@@ -1458,7 +1515,7 @@ async function startReadAloudSession(
   if (!Array.isArray(sentences) || sentences.length === 0) return { ok: false }
 
   if (activeSession?.tabId !== tabId) {
-    await stopActiveSession()
+    await stopActiveSession(`START: new session on tab ${tabId} replacing ${activeSession ? 'session on tab ' + activeSession.tabId : 'no session'}`)
   } else {
     chrome.tts.stop()
   }
@@ -1507,6 +1564,7 @@ async function controlReadAloud(
     // interrupted/cancelled event. Extended window (3s) to cover OCR speech
     // duration + message round-trip + resume's own grace period.
     activeSession.suppressStopUntil = Date.now() + 3000
+    oneOffSpeech.userPaused()
     if (wasPlaying) {
       activeSession.state = 'paused'
       // Pausing during the intentional gap: cancel the pending timer but keep the
@@ -1530,19 +1588,8 @@ async function controlReadAloud(
     // Extended window (3s) for safety, consistent with pause grace period.
     activeSession.suppressStopUntil = Date.now() + 3000
     if (activeSession.inGap) {
-      // We were paused mid-gap; re-schedule the remaining gap using the sentence
-      // we're about to speak (its length is a good proxy for the just-finished one).
-      const idx = activeSession.currentIndex
-      const token = activeSession.token
-      scheduleShadowingGap(token, activeSession.sentences[idx] ?? '', () => {
-        const s = activeSession
-        if (!s || s.token !== token) return
-        if (s.currentRep === 0) {
-          advanceToNextSentence(token)
-        } else {
-          void speakCurrentSentence(token)
-        }
-      })
+      // We were paused mid-gap; re-schedule the gap.
+      rearmShadowingGap(activeSession)
     } else {
       // Restart the current sentence rather than resuming (resume may not work reliably).
       // This re-speaks the current sentence from its start, matching the pattern from 533bffd.
@@ -1559,7 +1606,7 @@ async function controlReadAloud(
   }
 
   if (action === 'stop') {
-    await stopActiveSession()
+    await stopActiveSession('CONTROL_READ_ALOUD: stop action')
     return { ok: true }
   }
 
@@ -2009,77 +2056,101 @@ async function dispatch(msg: { type: string; payload?: unknown }, sender: chrome
       const settings = await getSettings()
       if (!settings?.readAloud) return { ok: false }
 
-      const wasReading = activeSession?.state === 'playing'
       if (activeSession) {
         activeSession.suppressStopUntil = Date.now() + 3000
-        if (wasReading) {
-          activeSession.state = 'paused'
+      }
+      console.info(`[SPEAK_TEXT] begin text="${text.slice(0, 20)}" sessionState=${activeSession?.state ?? 'none'} depth=${oneOffSpeech.depth}`)
+      const oneOff = oneOffSpeech.begin()
+      // Every exit path — including a throw — must release this one-off, or the
+      // shared depth counter stays above zero and STOP_SPEAKING would kill the
+      // Read Aloud session's own speech from then on. end() is idempotent.
+      try {
+        if (activeSession?.state === 'paused') {
           await broadcastReadAloudState(activeSession.tabId, 'paused', activeSession.currentIndex)
         }
-      }
 
-      const resolvedVoice = forcedVoice ?? await resolveVoiceForSettings(settings.readAloud, lang)
-      const token = activeSession?.token
-      const resumeSession = () => {
-        if (wasReading && activeSession && token === activeSession.token) {
-          activeSession.state = 'playing'
-          activeSession.suppressStopUntil = Date.now() + 500
-          void broadcastReadAloudState(activeSession.tabId, 'playing', activeSession.currentIndex)
-          void speakCurrentSentence(token)
+        const resolvedVoice = forcedVoice ?? await resolveVoiceForSettings(settings.readAloud, lang)
+        const resumeSession = () => oneOff.end()
+        let markFinished: () => void = () => { }
+        const finished = new Promise<void>(resolve => { markFinished = resolve })
+        let speechError: string | undefined
+        let startError: string | undefined
+        const onDone = (event: chrome.tts.TtsEvent) => {
+          if (event.type === 'error') speechError = event.errorMessage || 'the speech engine reported an error'
+          if (['end', 'interrupted', 'cancelled', 'error'].includes(event.type)) {
+            console.info(`[SPEAK_TEXT] event ${event.type}`)
+            markFinished()
+            resumeSession()
+          }
         }
-      }
-      let markFinished: () => void = () => { }
-      const finished = new Promise<void>(resolve => { markFinished = resolve })
-      const onDone = (event: chrome.tts.TtsEvent) => {
-        if (['end', 'interrupted', 'cancelled', 'error'].includes(event.type)) {
-          markFinished()
-          resumeSession()
+        const trySpeak = (opts: chrome.tts.SpeakOptions) => new Promise<boolean>(resolve => {
+          chrome.tts.speak(text, opts, () => {
+            startError = chrome.runtime.lastError?.message
+            resolve(!chrome.runtime.lastError)
+          })
+        })
+        // Failure path only: say which voice/lang was asked for and whether the
+        // browser has any voices at all, since an empty list explains silence.
+        const warnFailure = async (reason: string): Promise<string> => {
+          const voices = await new Promise<chrome.tts.TtsVoice[]>(resolve => {
+            try { chrome.tts.getVoices(v => resolve(v ?? [])) } catch { resolve([]) }
+          })
+          console.warn(`[SPEAK_TEXT] speech failed: ${reason} (voiceName=${resolvedVoice ?? 'auto'}, lang=${lang ?? 'none'}, installedVoices=${voices.length}${voices.length === 0 ? ' - none' : ''})`)
+          return voices.length === 0 ? 'no speech voices are installed in this browser' : reason
         }
-      }
-      const trySpeak = (opts: chrome.tts.SpeakOptions) => new Promise<boolean>(resolve => {
-        chrome.tts.speak(text, opts, () => resolve(!chrome.runtime.lastError))
-      })
 
-      await holdAudioAwake(settings.readAloud)
-      const started = await trySpeak({
-        enqueue: false,
-        pitch: settings.readAloud.pitch,
-        rate: settings.readAloud.speed,
-        lang,
-        voiceName: resolvedVoice,
-        volume: settings.readAloud.volume,
-        onEvent: onDone,
-      })
-      // A forced lang/voiceName that matches no installed voice makes chrome.tts
-      // refuse to start at all — no event ever fires, so the popover's speak
-      // button just sits there silent instead of erroring. Retry once fully
-      // unconstrained (the same as never specifying lang/voice), so at worst the
-      // learner hears the wrong accent instead of nothing.
-      if (!started) {
-        const retried = await trySpeak({
+        await holdAudioAwake(settings.readAloud)
+        const started = await trySpeak({
           enqueue: false,
           pitch: settings.readAloud.pitch,
           rate: settings.readAloud.speed,
+          lang,
+          voiceName: resolvedVoice,
           volume: settings.readAloud.volume,
           onEvent: onDone,
         })
-        if (!retried) {
-          // Nothing is speaking, so no event will ever arrive to unpause the
-          // session — do it here rather than leaving the mini-player stuck
-          // paused for good.
-          resumeSession()
-          return { ok: false }
+        // A forced lang/voiceName that matches no installed voice makes chrome.tts
+        // refuse to start at all — no event ever fires, so the popover's speak
+        // button just sits there silent instead of erroring. Retry once fully
+        // unconstrained (the same as never specifying lang/voice), so at worst the
+        // learner hears the wrong accent instead of nothing.
+        if (!started) {
+          const retried = await trySpeak({
+            enqueue: false,
+            pitch: settings.readAloud.pitch,
+            rate: settings.readAloud.speed,
+            volume: settings.readAloud.volume,
+            onEvent: onDone,
+          })
+          if (!retried) {
+            // Nothing is speaking, so no event will ever arrive to unpause the
+            // session — do it here rather than leaving the mini-player stuck
+            // paused for good.
+            resumeSession()
+            const reason = startError || 'speech could not start'
+            return { ok: false, error: await warnFailure(reason) }
+          }
         }
+        await finished
+        if (speechError) {
+          return { ok: false, error: await warnFailure(speechError) }
+        }
+        return { ok: true }
+      } finally {
+        const willResume = activeSession?.state === 'paused' && oneOffSpeech.depth === 1
+        oneOff.end()
+        console.info(`[SPEAK_TEXT] end resume=${willResume ? 'yes' : 'no'}`)
       }
-      await finished
-      return { ok: true }
     }
     case 'STOP_SPEAKING': {
       // Toggle-off for the one-off utterances above. A read-aloud session has
       // its own stop (CONTROL_READ_ALOUD); this ends whatever single utterance
       // is currently speaking, and the resulting 'interrupted' event is what
-      // resumes a mini-player that SPEAK_TEXT had paused.
-      chrome.tts.stop()
+      // resumes a mini-player that SPEAK_TEXT had paused. A no-op when no
+      // one-off is in flight, so it can never kill the session's own speech.
+      const depthBefore = oneOffSpeech.depth
+      oneOffSpeech.stop()
+      console.info(`[STOP_SPEAKING] depth=${depthBefore} stopped=${depthBefore > 0}`)
       return { ok: true }
     }
     case 'GET_READ_ALOUD_STATE': {

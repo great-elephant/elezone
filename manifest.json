@@ -34,6 +34,13 @@
         "mac": "Alt+O"
       },
       "description": "Capture an area to extract text from an image"
+    },
+    "open_study_panel": {
+      "suggested_key": {
+        "default": "Alt+S",
+        "mac": "Alt+S"
+      },
+      "description": "Open the side panel to study words saved on this page"
     }
   },
   "options_page": "src/options/index.html",
@@ -81,7 +88,8 @@
     "identity",
     "alarms",
     "notifications",
-    "offscreen"
+    "offscreen",
+    "sidePanel"
   ],
   "host_permissions": [
     "<all_urls>"

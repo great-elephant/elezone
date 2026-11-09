@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { ReadAloudState, Settings, DEFAULT_SETTINGS, PomodoroState, PomodoroSettings, TodoTask, VideoModeSettings, normaliseVideoModeSettings } from "../shared/types";
 import { PomodoroTodoList } from "./components/PomodoroTodoList";
+import { openStudyPanel } from "../shared/sidePanel";
 
 function formatTime(seconds?: number): string | null {
   if (!seconds) return null;
@@ -36,6 +37,7 @@ function nextSpeedStep(rate: number): number {
 
 export default function Popup() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [studyPanelError, setStudyPanelError] = useState<string | null>(null);
 
   const [readable, setReadable] = useState<boolean | null>(null);
   const [readAloudState, setReadAloudState] = useState<ReadAloudState>("idle");
@@ -261,6 +263,18 @@ export default function Popup() {
     });
   }
 
+  // Called straight from the click handler: sidePanel.open needs the gesture.
+  async function openStudyPanelForActiveTab() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id === undefined) throw new Error("No active tab");
+      await openStudyPanel(tab.id);
+      window.close();
+    } catch {
+      setStudyPanelError("Couldn't open the study panel on this tab.");
+    }
+  }
+
   async function openDashboard() {
     await chrome.runtime.openOptionsPage();
     window.close();
@@ -446,6 +460,28 @@ export default function Popup() {
           marginLeft: 'auto'
         }}>
           <button
+            onClick={openStudyPanelForActiveTab}
+            style={{
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: '#8888aa',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 4
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = '#4f6ef7'}
+            onMouseLeave={e => e.currentTarget.style.color = '#8888aa'}
+            title="Study words from this page (Alt + S)"
+            aria-label="Study words from this page (Alt + S)"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="15" y1="3" x2="15" y2="21"></line>
+            </svg>
+          </button>
+          <button
             onClick={() => {
               chrome.runtime.sendMessage({ type: 'START_OCR' }).catch(() => { });
               window.close();
@@ -497,6 +533,12 @@ export default function Popup() {
           </button>
         </div>
       </header>
+
+      {studyPanelError && (
+        <div role="alert" style={{ padding: '6px 16px', fontSize: 12, color: '#f87171' }}>
+          {studyPanelError}
+        </div>
+      )}
 
       <div style={styles.body}>
 

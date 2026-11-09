@@ -1,4 +1,5 @@
 import { Message } from './types'
+import { speakResultFrom, type SpeakResult } from './speakResult'
 
 export interface SpeakOptions {
   lang?: string
@@ -26,16 +27,19 @@ export interface SpeakOptions {
  * Callers drive their own "speaking" indicator off this promise: it resolves
  * on the utterance ending, being interrupted, or failing to start at all.
  */
-export async function speak(text: string, opts: SpeakOptions = {}): Promise<void> {
+export async function speak(text: string, opts: SpeakOptions = {}): Promise<SpeakResult> {
   try {
-    await chrome.runtime.sendMessage({
+    const res = await chrome.runtime.sendMessage({
       type: 'SPEAK_TEXT',
       payload: { text, lang: opts.lang, voiceName: opts.voiceName },
     } as Message)
+    return speakResultFrom(res)
   } catch {
     // The service worker went away mid-utterance, so the reply never came.
     // Callers only use this to clear an indicator, and leaving one stuck on is
-    // worse than clearing it a little early.
+    // worse than clearing it a little early. Not a speech failure, so not
+    // reported as one.
+    return { ok: true }
   }
 }
 

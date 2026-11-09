@@ -20,6 +20,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import StudyUI from './StudyUI'
+import { STUDY_MODES } from '../shared/studyModes'
 
 const ALL_COLORS: BookmarkColor[] = [
   'red', 'yellow', 'cyan', 'green', 'blue',
@@ -44,13 +45,6 @@ const ALL_COLORS: BookmarkColor[] = [
 function safeCreatedAt(item: SavedItem): number {
   return typeof item.createdAt === 'number' && !isNaN(item.createdAt) ? item.createdAt : 0
 }
-
-const STUDY_MODES: { value: StudyMode; label: string }[] = [
-  { value: 'passive', label: 'Passive Flashcard' },
-  { value: 'typing', label: 'Typing (Active Recall)' },
-  { value: 'listening', label: 'Listening (Dictation)' },
-  { value: 'multiple_choice', label: 'Multiple Choice' },
-]
 
 type ViewMode = 'decks' | 'source'
 type SortBy = 'newest' | 'oldest' | 'az'

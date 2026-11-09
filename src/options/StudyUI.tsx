@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { SavedItem, Settings, StudyMode, colorHex } from '../shared/types'
 import { speak } from '../shared/speak'
+import { speakFailureNotice } from '../shared/speakResult'
+import { STUDY_DARK, type StudyTheme } from '../shared/studyTheme'
 import { updateFsrsMetrics, previewFsrsDue, Rating, type Grade } from '../shared/library'
 
 interface StudyUIProps {
@@ -8,6 +10,15 @@ interface StudyUIProps {
   mode: StudyMode
   settings: Settings | null
   onClose: () => void
+  // Space (px) the host page reserves around the study area; the dashboard's
+  // header takes 116, a side panel with its own slim header takes less.
+  viewportOffset?: number
+  // Palette to use instead of the built-in dark colors.
+  theme?: StudyTheme
+  // Narrow-panel layout: one-row header, tighter card, content-sized height.
+  compact?: boolean
+  // Text of the button that leaves the session.
+  backLabel?: string
 }
 
 // Reward micro-interactions for the "+N Sparks" moment: a springy pop for the
@@ -33,7 +44,9 @@ const rewardStyles = `
   }
 `
 
-export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps) {
+export default function StudyUI({ items, mode, settings, onClose, viewportOffset = 116, theme, compact = false, backLabel = '← Back to Library' }: StudyUIProps) {
+  const t = theme ?? STUDY_DARK
+  const styles = useMemo(() => buildStyles(t, compact), [t, compact])
   const [sessionQueue, setSessionQueue] = useState<SavedItem[]>([])
   const [sessionTotal, setSessionTotal] = useState(0)
   const [activeItem, setActiveItem] = useState<SavedItem | null>(null)
@@ -147,6 +160,18 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     return () => clearTimeout(timer)
   }, [verificationPassed, showAnswer, wrongOptions.size, activeItem, showSessionSummary])
 
+  // Compact multiple choice: keys 1-4 pick the matching option.
+  useEffect(() => {
+    if (!compact || mode !== 'multiple_choice' || verificationPassed || wrongOptions.size > 0) return
+    const onKey = (e: KeyboardEvent) => {
+      const n = Number(e.key)
+      if (e.metaKey || e.ctrlKey || e.altKey || !Number.isInteger(n) || n < 1 || n > mcOptions.length) return
+      handleVerify(mcOptions[n - 1])
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
   // "in 10m" / "in 3d" / "in 2mo" — short relative label for a grade preview.
   function formatDueIn(due: Date): string {
     const ms = due.getTime() - Date.now()
@@ -161,10 +186,15 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     return `${Math.round(months / 12)}y`
   }
 
+  const [speakNotice, setSpeakNotice] = useState<string | null>(null)
+
   function speakText(text: string, lang?: string) {
     // Fire and forget: nothing here shows a "speaking" indicator, and the
     // background interrupts whatever was mid-utterance anyway.
-    void speak(text, { lang })
+    setSpeakNotice(null)
+    void speak(text, { lang }).then(res => {
+      if (!res.ok) setSpeakNotice(speakFailureNotice(res.error))
+    })
   }
 
   function generateMcOptions(item: SavedItem, allItems: SavedItem[]) {
@@ -196,6 +226,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   function handleNext(grade?: Grade) {
     if (isAdvancingRef.current) return
     isAdvancingRef.current = true
+    setSpeakNotice(null)
     if (mode === 'passive' || earnedSpark) {
       chrome.runtime.sendMessage({ type: 'LOG_ACTIVITY', payload: 'review' }).catch(() => {})
     }
@@ -269,6 +300,10 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
     const sparksEarned = (mode === 'passive' ? sessionTotal : sessionScore.correct) * pointsPerReview
     return (
       <SessionSummary
+        viewportOffset={viewportOffset}
+        theme={t}
+        compact={compact}
+        closeLabel={backLabel.replace(/^←\s*/, '')}
         correct={sessionScore.correct}
         total={sessionTotal}
         maxCombo={maxCombo}
@@ -285,33 +320,155 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
   const isFlashcard = !!activeItem.translation
 
   const rewardPoints = settings?.gamification?.pointsPerReview ?? 2
-  const rewardColor = combo >= 6 ? '#ff5a36' : combo >= 4 ? '#ff9d3d' : combo >= 2 ? '#facc15' : '#4ade80'
+  const rewardColor = combo >= 6 ? t.reward[3] : combo >= 4 ? t.reward[2] : combo >= 2 ? t.reward[1] : t.reward[0]
   const rewardSize = 20 + Math.min(Math.max(combo - 1, 0), 6) * 3
 
+  const sentenceLen = ((activeItem.prefix || '') + activeItem.text + (activeItem.suffix || '')).length
+  const promptSize = sentenceLen <= 60 ? 20 : sentenceLen <= 140 ? 17 : 15
+
+  const answerControls = verificationPassed ? null : (
+                <div style={{ marginTop: compact ? 0 : '10px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: compact ? '8px' : '16px' }}>
+                  {(mode === 'typing' || mode === 'listening') && (
+                    <div style={{ width: compact ? '100%' : '80%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        autoFocus
+                        style={{ padding: compact ? '9px' : '12px', fontSize: compact ? '16px' : '18px', borderRadius: '8px', border: `2px solid ${verifyError ? t.error : t.border}`, background: t.inset, color: t.strong, width: '100%', textAlign: 'center' }}
+                        placeholder="Type the answer here..."
+                        value={userAnswer}
+                        onChange={(e) => {
+                          setUserAnswer(e.target.value)
+                          if (verifyError) setVerifyError(false)
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            handleVerify(userAnswer)
+                          }
+                        }}
+                      />
+                      {verifyError && <span style={{ color: t.error, fontSize: '14px' }}>Incorrect, try again!</span>}
+                    </div>
+                  )}
+
+
+
+                  {mode === 'multiple_choice' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? '10px' : '16px', width: '100%', alignItems: 'center' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: compact ? '1fr' : '1fr 1fr', gap: compact ? '6px' : '12px', width: '100%' }}>
+                        {mcOptions.map((opt, i) => {
+                          const isCorrectAns = opt.trim().toLowerCase() === activeItem.text.trim().toLowerCase()
+                          const hasFailed = wrongOptions.size > 0
+                          const isClickedWrong = wrongOptions.has(opt)
+
+                          let bg = t.choiceBg
+                          if (hasFailed) {
+                            if (isCorrectAns) bg = t.correctBg
+                            else if (isClickedWrong) bg = t.wrongBg
+                          }
+
+                          return (
+                            <button
+                              key={i}
+                              style={{
+                                ...styles.showBtn,
+                                background: bg,
+                                color: (hasFailed && isCorrectAns) ? t.correctText : (hasFailed && isClickedWrong) ? t.wrongText : t.choiceText,
+                                fontSize: compact ? '15px' : '16px',
+                                ...(compact ? { padding: '8px 10px', minHeight: 44, alignItems: 'center', overflowWrap: 'anywhere' as const, textAlign: 'left' as const, display: 'flex', gap: 10 } : {}),
+                                opacity: (hasFailed && !isCorrectAns && !isClickedWrong) ? 0.4 : 1,
+                                cursor: hasFailed ? 'default' : 'pointer',
+                                transition: 'all 0.2s ease',
+                                fontWeight: hasFailed && isCorrectAns ? 'bold' : 'normal'
+                              }}
+                              onClick={() => !hasFailed && handleVerify(opt)}
+                              disabled={hasFailed}
+                            >
+                              {compact && <span style={{ opacity: 0.6, fontSize: 13, flex: 'none' }}>{i + 1}</span>}
+                              <span>{opt}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {wrongOptions.size > 0 && (
+                        <button
+                          ref={nextBtnRef}
+                          style={{ ...styles.startBtn, marginTop: compact ? 0 : '8px', background: t.primary, color: t.primaryText, padding: '10px 24px', fontSize: '16px', width: compact ? '100%' : 'auto' }}
+                          onClick={() => {
+                            setSessionScore(prev => ({ ...prev, giveUps: prev.giveUps + 1 }))
+                            handleNext()
+                          }}
+                        >
+                          Next
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {mode !== 'multiple_choice' && !showHint && (
+                    <button
+                      style={compact ? { background: 'none', border: 'none', color: t.muted, fontSize: 13, padding: '2px 8px', cursor: 'pointer', textDecoration: 'underline' } : { ...styles.showBtn, padding: '8px 16px', fontSize: '14px', background: t.choiceBg, color: t.choiceText }}
+                      onClick={() => setShowHint(true)}
+                    >
+                      Show Hint
+                    </button>
+                  )}
+
+                  {showHint && mode !== 'multiple_choice' && (
+                    <div style={{ color: t.muted, fontStyle: 'italic', fontSize: compact ? '14px' : '18px', textAlign: 'center' }}>
+                      Hint: {mode === 'listening'
+                        ? `Starts with "${activeItem.text[0]}..."`
+                        : activeItem.translation}
+                    </div>
+                  )}
+                </div>
+  )
+
   return (
-    <div style={styles.reviewContainer}>
-      <div style={styles.headerRow}>
-        <button style={{ ...styles.syncBtn, background: 'transparent', border: '1px solid #3a3a5a' }} onClick={onClose}>
-          ← Back to Library
-        </button>
-      </div>
+    <div style={{ ...styles.reviewContainer, height: `calc(100vh - ${viewportOffset}px)` }}>
+      {compact ? (
+        <div style={{ flex: 'none' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+            <button style={{ background: 'none', border: 'none', padding: '4px 0', color: t.link, fontSize: 13, cursor: 'pointer' }} onClick={onClose}>
+              {backLabel}
+            </button>
+            <span style={{ fontSize: 12, color: t.muted }}>{sessionTotal - sessionQueue.length + 1}/{sessionTotal}</span>
+          </div>
+          <div
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={sessionTotal}
+            aria-valuenow={sessionTotal - sessionQueue.length}
+            style={{ height: 3, borderRadius: 2, background: t.border, overflow: 'hidden' }}
+          >
+            <div style={{ height: '100%', width: `${((sessionTotal - sessionQueue.length) / Math.max(sessionTotal, 1)) * 100}%`, background: t.cloze, transition: 'width 0.3s ease' }} />
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={styles.headerRow}>
+            <button style={{ ...styles.syncBtn, background: 'transparent', border: `1px solid ${t.border}` }} onClick={onClose}>
+              {backLabel}
+            </button>
+          </div>
 
-      <div style={styles.cardInfo}>
-        Studying {isFlashcard ? 'Vocabulary' : 'Comprehension'}
-        <span style={{ marginLeft: 12, fontSize: '0.9em', color: '#8888aa' }}>
-          ({sessionTotal - sessionQueue.length + 1} / {sessionTotal})
-        </span>
-        <div
-          style={{
-            ...styles.colorDot,
-            backgroundColor: colorHex(activeItem.color),
-            display: 'inline-block',
-            marginLeft: 8
-          }}
-        />
-      </div>
+          <div style={styles.cardInfo}>
+            Studying {isFlashcard ? 'Vocabulary' : 'Comprehension'}
+            <span style={{ marginLeft: 12, fontSize: '0.9em', color: t.muted }}>
+              ({sessionTotal - sessionQueue.length + 1} / {sessionTotal})
+            </span>
+            <div
+              style={{
+                ...styles.colorDot,
+                backgroundColor: colorHex(activeItem.color),
+                display: 'inline-block',
+                marginLeft: 8
+              }}
+            />
+          </div>
+        </>
+      )}
 
-      <div key={activeItem.id} style={{ ...styles.card, borderColor: colorHex(activeItem.color), position: 'relative' }}>
+      <div key={activeItem.id} style={{ ...styles.card, ...(compact ? { borderColor: t.borderSoft } :{ borderColor: colorHex(activeItem.color) }), position: 'relative' }}>
         {earnedSpark && (
           <>
             <style>{rewardStyles}</style>
@@ -339,11 +496,26 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
             </div>
           </>
         )}
+        {speakNotice && (
+          <div role="alert" style={{ color: t.error, fontSize: compact ? 12 : 13, lineHeight: 1.4, textAlign: 'center', maxWidth: '100%', overflowWrap: 'anywhere', padding: '8px 12px 0' }}>
+            {speakNotice}
+          </div>
+        )}
         <div style={styles.cardFront}>
           {isFlashcard ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', width: '100%' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: compact ? '10px' : '20px', width: '100%', ...(compact ? { margin: 'auto 0' } : {}) }}>
+              {compact && mode === 'listening' && !showAnswer && (
+                <button
+                  style={{ width: 46, height: 46, flex: 'none', borderRadius: '50%', border: `2px solid ${t.cloze}`, background: t.inset, fontSize: 22, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  onClick={() => speakText((activeItem.prefix || '') + activeItem.text + (activeItem.suffix || ''), activeItem.sourceLang)}
+                  title="Play again"
+                  aria-label="Play again"
+                >
+                  🔊
+                </button>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
-                <div style={styles.contextSentence}>
+                <div style={compact ? { ...styles.contextSentence, fontSize: promptSize } : styles.contextSentence}>
                   {activeItem.prefix || activeItem.suffix ? (
                     <>
                       {activeItem.prefix}
@@ -357,14 +529,14 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
                       {showAnswer ? (
                         <span style={styles.clozeWord}>{activeItem.text}</span>
                       ) : (
-                        <span style={{ color: '#8888aa', fontStyle: 'italic' }}>
+                        <span style={{ color: t.muted, fontStyle: 'italic' }}>
                           What is the English word?
                         </span>
                       )}
                     </div>
                   )}
                 </div>
-                {(showAnswer || mode === 'listening') && (
+                {!compact && (showAnswer || mode === 'listening') && (
                   <button
                     style={styles.speakerBtn}
                     onClick={() => speakText((activeItem.prefix || '') + activeItem.text + (activeItem.suffix || ''), activeItem.sourceLang)}
@@ -375,100 +547,7 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
                 )}
               </div>
 
-              {!verificationPassed && (
-                <div style={{ marginTop: '10px', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-                  {(mode === 'typing' || mode === 'listening') && (
-                    <div style={{ width: '80%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-                      <input
-                        autoFocus
-                        style={{ padding: '12px', fontSize: '18px', borderRadius: '8px', border: `2px solid ${verifyError ? '#ff6b6b' : '#3a3a5a'}`, background: '#111122', color: 'white', width: '100%', textAlign: 'center' }}
-                        placeholder="Type the answer here..."
-                        value={userAnswer}
-                        onChange={(e) => {
-                          setUserAnswer(e.target.value)
-                          if (verifyError) setVerifyError(false)
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault()
-                            handleVerify(userAnswer)
-                          }
-                        }}
-                      />
-                      {verifyError && <span style={{ color: '#ff6b6b', fontSize: '14px' }}>Incorrect, try again!</span>}
-                    </div>
-                  )}
-
-
-
-                  {mode === 'multiple_choice' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', width: '100%', alignItems: 'center' }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', width: '100%' }}>
-                        {mcOptions.map((opt, i) => {
-                          const isCorrectAns = opt.trim().toLowerCase() === activeItem.text.trim().toLowerCase()
-                          const hasFailed = wrongOptions.size > 0
-                          const isClickedWrong = wrongOptions.has(opt)
-
-                          let bg = '#2a2a4a'
-                          if (hasFailed) {
-                            if (isCorrectAns) bg = '#6bff9e'
-                            else if (isClickedWrong) bg = '#ff6b6b'
-                          }
-
-                          return (
-                            <button
-                              key={i}
-                              style={{
-                                ...styles.showBtn,
-                                background: bg,
-                                color: (hasFailed && isCorrectAns) ? '#112211' : '#ffffff',
-                                fontSize: '16px',
-                                opacity: (hasFailed && !isCorrectAns && !isClickedWrong) ? 0.4 : 1,
-                                cursor: hasFailed ? 'default' : 'pointer',
-                                transition: 'all 0.2s ease',
-                                fontWeight: hasFailed && isCorrectAns ? 'bold' : 'normal'
-                              }}
-                              onClick={() => !hasFailed && handleVerify(opt)}
-                              disabled={hasFailed}
-                            >
-                              {opt}
-                            </button>
-                          )
-                        })}
-                      </div>
-                      {wrongOptions.size > 0 && (
-                        <button
-                          ref={nextBtnRef}
-                          style={{ ...styles.startBtn, marginTop: '8px', padding: '10px 24px', fontSize: '16px', width: 'auto' }}
-                          onClick={() => {
-                            setSessionScore(prev => ({ ...prev, giveUps: prev.giveUps + 1 }))
-                            handleNext()
-                          }}
-                        >
-                          Next
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {mode !== 'multiple_choice' && !showHint && (
-                    <button
-                      style={{ ...styles.showBtn, padding: '8px 16px', fontSize: '14px', background: '#2a2a4a' }}
-                      onClick={() => setShowHint(true)}
-                    >
-                      Show Hint
-                    </button>
-                  )}
-
-                  {showHint && mode !== 'multiple_choice' && (
-                    <div style={{ color: '#8888aa', fontStyle: 'italic', fontSize: '18px', textAlign: 'center' }}>
-                      Hint: {mode === 'listening'
-                        ? `Starts with "${activeItem.text[0]}..."`
-                        : activeItem.translation}
-                    </div>
-                  )}
-                </div>
-              )}
+              {!compact && answerControls}
             </div>
           ) : (
             <div style={styles.contextSentence}>
@@ -503,19 +582,22 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
         )}
       </div>
 
+      <div style={compact ? { flex: 'none', minHeight: 64, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' } : { display: 'contents' }}>
+      {compact && answerControls && <div style={{ marginBottom: 6 }}>{answerControls}</div>}
       {!verificationPassed ? (
-        <div style={{ display: 'flex', gap: '12px', width: '100%' }}>
-          <button style={{ ...styles.showBtn, flex: 1, background: 'transparent', border: '1px solid #ffb36b', color: '#ffb36b' }} onClick={handleGiveUp}>
+        compact && mode === 'multiple_choice' && wrongOptions.size > 0 ? null :
+        <div style={{ display: 'flex', gap: '12px', width: '100%', ...(compact ? { alignItems: 'center' } : {}) }}>
+          <button style={compact ? { background: 'none', border: 'none', color: t.muted, fontSize: 14, padding: '12px 8px', cursor: 'pointer', textDecoration: 'underline', ...(mode === 'typing' || mode === 'listening' ? {} : { flex: 1 }) } : { ...styles.showBtn, flex: 1, background: 'transparent', border: `1px solid ${t.warn}`, color: t.warn }} onClick={handleGiveUp}>
             Give Up
           </button>
           {(mode === 'typing' || mode === 'listening') && (
-            <button style={{ ...styles.showBtn, flex: 1, background: '#4a5a9a' }} onClick={() => handleVerify(userAnswer)}>
+            <button style={{ ...styles.showBtn, flex: 1, background: t.primary, color: t.primaryText, ...(compact ? { fontWeight: 600 } : {}) }} onClick={() => handleVerify(userAnswer)}>
               Verify
             </button>
           )}
         </div>
       ) : !showAnswer && mode === 'passive' ? (
-        <button ref={nextBtnRef} style={styles.showBtn} onClick={() => {
+        <button ref={nextBtnRef} style={compact ? { ...styles.showBtn, background: t.primary, color: t.primaryText, fontWeight: 600 } : styles.showBtn} onClick={() => {
           setShowAnswer(true)
           if (activeItem.text) speakText(activeItem.text, activeItem.sourceLang)
         }}>
@@ -524,10 +606,10 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
       ) : (
         <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
           {([
-            { grade: Rating.Again as Grade, label: 'Again', bg: '#5a2a2a', color: '#ff8080' },
-            { grade: Rating.Hard as Grade, label: 'Hard', bg: '#5a4420', color: '#ffb36b' },
-            { grade: Rating.Good as Grade, label: 'Good', bg: '#22406b', color: '#6bcfff' },
-            { grade: Rating.Easy as Grade, label: 'Easy', bg: '#1f4a30', color: '#6bff9e' },
+            { grade: Rating.Again as Grade, label: 'Again', bg: t.grade.again[0], color: t.grade.again[1] },
+            { grade: Rating.Hard as Grade, label: 'Hard', bg: t.grade.hard[0], color: t.grade.hard[1] },
+            { grade: Rating.Good as Grade, label: 'Good', bg: t.grade.good[0], color: t.grade.good[1] },
+            { grade: Rating.Easy as Grade, label: 'Easy', bg: t.grade.easy[0], color: t.grade.easy[1] },
           ] as const).map(({ grade, label, bg, color }) => (
             <button
               key={label}
@@ -541,11 +623,13 @@ export default function StudyUI({ items, mode, settings, onClose }: StudyUIProps
           ))}
         </div>
       )}
+      </div>
     </div>
   )
 }
 
-const styles: Record<string, React.CSSProperties> = {
+function buildStyles(t: StudyTheme, compact: boolean): Record<string, React.CSSProperties> {
+  return {
   dashboard: {
     maxWidth: 600,
     margin: '0 auto',
@@ -558,8 +642,8 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 32
   },
   syncBtn: {
-    background: '#2a2a4a',
-    color: '#e0e0ff',
+    background: t.choiceBg,
+    color: t.choiceText,
     border: 'none',
     padding: '8px 16px',
     borderRadius: 6,
@@ -568,8 +652,8 @@ const styles: Record<string, React.CSSProperties> = {
   startBtn: {
     width: '100%',
     padding: 16,
-    background: '#4a5a9a',
-    color: 'white',
+    background: t.primary,
+    color: t.primaryText,
     fontSize: 18,
     fontWeight: 'bold',
     border: 'none',
@@ -579,22 +663,22 @@ const styles: Record<string, React.CSSProperties> = {
   allDone: {
     textAlign: 'center',
     padding: 32,
-    background: '#1a1a2e',
+    background: t.card,
     borderRadius: 12,
-    color: '#8888aa'
+    color: t.muted
   },
   reviewContainer: {
     maxWidth: 600,
     margin: '0 auto',
-    height: 'calc(100vh - 116px)',
+    ...(compact ? {} : { height: 'calc(100vh - 116px)' }),
     display: 'flex',
     flexDirection: 'column',
-    gap: 14,
-    padding: '8px 0'
+    gap: compact ? 10 : 14,
+    padding: compact ? '4px 0' : '8px 0'
   },
   cardInfo: {
     textAlign: 'center',
-    color: '#8888aa',
+    color: t.muted,
     fontSize: 14,
     fontWeight: 'bold'
   },
@@ -604,72 +688,74 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '50%'
   },
   card: {
-    background: '#1a1a2e',
-    borderWidth: 2,
+    background: t.card,
+    borderWidth: compact ? 1 : 2,
     borderStyle: 'solid',
-    borderRadius: 16,
+    borderRadius: compact ? 10 : 16,
     flex: 1,
     minHeight: 0,
     display: 'flex',
     flexDirection: 'column',
-    overflow: 'hidden'
+    overflow: compact ? 'auto' : 'hidden',
+    ...(compact ? { scrollbarWidth: 'thin' as const } : {})
   },
   cardFront: {
-    padding: '18px 24px',
-    flex: 1,
+    padding: compact ? '14px 14px' : '18px 24px',
+    flex: compact ? '1 0 auto' : 1,
     minHeight: 0,
-    overflow: 'auto',
+    overflow: compact ? 'visible' : 'auto',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center'
   },
   contextSentence: {
-    fontSize: 20,
-    lineHeight: 1.6,
-    color: '#e0e0e0',
+    fontSize: compact ? 21 : 20,
+    lineHeight: compact ? 1.45 : 1.6,
+    color: t.text,
     textAlign: 'center'
   },
   clozeWord: {
     fontWeight: 'bold',
-    color: '#6bcfff',
-    borderBottom: '2px dashed #6bcfff',
+    color: t.cloze,
+    borderBottom: `2px dashed ${t.cloze}`,
     margin: '0 6px'
   },
   hintPrompt: {
-    fontSize: 24,
-    color: '#ffffff',
+    fontSize: compact ? 20 : 24,
+    color: t.strong,
     textAlign: 'center'
   },
   cardBack: {
-    padding: '14px 24px',
-    borderTop: '1px solid #2a2a4a',
-    background: '#111122',
+    padding: compact ? '10px 14px' : '14px 24px',
+    borderTop: `1px solid ${t.borderSoft}`,
+    background: t.inset,
     textAlign: 'center'
   },
   targetWord: {
-    fontSize: 24,
+    fontSize: compact ? 20 : 24,
     fontWeight: 'bold',
-    color: '#ffffff',
-    marginBottom: 8,
+    color: t.strong,
+    marginBottom: compact ? 4 : 8,
+    flexWrap: 'wrap',
     display: 'flex',
-    alignItems: 'baseline',
+    alignItems: compact ? 'center' : 'baseline',
     justifyContent: 'center',
     gap: 8
   },
   phonetics: {
-    fontSize: 16,
+    fontSize: compact ? 14 : 16,
     fontWeight: 'normal',
-    color: '#8888aa'
+    color: t.muted
   },
   translation: {
-    fontSize: 18,
-    color: '#8888aa'
+    fontSize: compact ? 14 : 18,
+    color: t.muted
   },
   showBtn: {
-    padding: 16,
-    background: '#3a3a5a',
-    color: 'white',
-    fontSize: 16,
+    padding: compact ? 12 : 16,
+    background: t.btnBg,
+    color: t.btnText,
+    fontSize: compact ? 15 : 16,
     border: 'none',
     borderRadius: 8,
     cursor: 'pointer'
@@ -713,7 +799,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 'bold',
     fontSize: 20,
     pointerEvents: 'none',
-    textShadow: '0 1px 6px rgba(0,0,0,0.6)',
+    textShadow: t.rewardShadow,
     zIndex: 2,
   },
   rewardAnchor: {
@@ -725,6 +811,7 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 2,
     pointerEvents: 'none',
   }
+}
 }
 
 const sessionSummaryStyles = `
@@ -745,16 +832,20 @@ const sessionSummaryStyles = `
   }
 `
 
-function Pill({ value, label, color }: { value: string; label: string; color: string }) {
+function Pill({ value, label, color, t }: { value: string; label: string; color: string; t: StudyTheme }) {
   return (
-    <div style={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: 12, padding: '10px 16px', minWidth: 88 }}>
+    <div style={{ background: t.pillBg, border: `1px solid ${t.borderSoft}`, borderRadius: 12, padding: '10px 16px', minWidth: 88 }}>
       <div style={{ fontSize: 20, fontWeight: 'bold', color }}>{value}</div>
-      <div style={{ fontSize: 12, color: '#8888aa', marginTop: 2 }}>{label}</div>
+      <div style={{ fontSize: 12, color: t.muted, marginTop: 2 }}>{label}</div>
     </div>
   )
 }
 
-function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose, onRestart }: {
+function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose, onRestart, viewportOffset, theme: t, compact, closeLabel }: {
+  closeLabel: string
+  viewportOffset: number
+  theme: StudyTheme
+  compact: boolean
   correct: number
   total: number
   maxCombo: number
@@ -766,11 +857,11 @@ function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose,
   const isPassive = mode === 'passive'
   const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0
   const rank = isPassive
-    ? { emoji: '🎉', title: 'Session complete!', color: '#6bcfff' }
-    : accuracy >= 100 ? { emoji: '🏆', title: 'Perfect!', color: '#ffd93d' }
-      : accuracy >= 80 ? { emoji: '🎉', title: 'Great job!', color: '#4ade80' }
-        : accuracy >= 50 ? { emoji: '💪', title: 'Nice work!', color: '#6bcfff' }
-          : { emoji: '🌱', title: 'Keep practicing!', color: '#ffb36b' }
+    ? { emoji: '🎉', title: 'Session complete!', color: t.rank.done }
+    : accuracy >= 100 ? { emoji: '🏆', title: 'Perfect!', color: t.rank.perfect }
+      : accuracy >= 80 ? { emoji: '🎉', title: 'Great job!', color: t.rank.great }
+        : accuracy >= 50 ? { emoji: '💪', title: 'Nice work!', color: t.rank.nice }
+          : { emoji: '🌱', title: 'Keep practicing!', color: t.rank.keep }
 
   const [ringPct, setRingPct] = useState(0)
   useEffect(() => {
@@ -803,7 +894,7 @@ function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose,
   const dashoffset = CIRC - (ringPct / 100) * CIRC
 
   return (
-    <div style={{ position: 'relative', maxWidth: 600, margin: '0 auto', padding: '8px 0', overflow: 'hidden', minHeight: 'calc(100vh - 116px)', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+    <div style={{ position: 'relative', maxWidth: 600, margin: '0 auto', padding: '8px 0', overflow: 'hidden', minHeight: compact ? undefined : `calc(100vh - ${viewportOffset}px)`, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
       <style>{sessionSummaryStyles}</style>
 
       <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 3 }}>
@@ -829,11 +920,11 @@ function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose,
       </div>
 
       <div style={{
-        background: 'linear-gradient(135deg, #1e1e32 0%, #111122 100%)',
-        border: '1px solid #3a3a6a',
+        background: t.summaryBg,
+        border: `1px solid ${t.summaryBorder}`,
         borderRadius: 20,
-        padding: '24px 24px',
-        boxShadow: '0 12px 40px rgba(0,0,0,0.4)',
+        padding: compact ? '18px 14px' : '24px 24px',
+        boxShadow: t.summaryShadow,
         textAlign: 'center',
         position: 'relative',
         zIndex: 2,
@@ -842,14 +933,14 @@ function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose,
           {rank.emoji}
         </div>
         <div style={{ fontSize: 23, fontWeight: 'bold', color: rank.color, marginTop: 4 }}>{rank.title}</div>
-        <div style={{ color: '#8888aa', marginTop: 6, fontSize: 14 }}>
+        <div style={{ color: t.muted, marginTop: 6, fontSize: 14 }}>
           {isPassive ? `Reviewed ${total} cards` : `You completed ${total} cards`}
         </div>
 
         {!isPassive && (
           <div style={{ position: 'relative', width: 148, height: 148, margin: '14px auto 4px' }}>
             <svg width="148" height="148" style={{ transform: 'rotate(-90deg)' }}>
-              <circle cx="74" cy="74" r={R} stroke="#161b22" strokeWidth={SW} fill="none" />
+              <circle cx="74" cy="74" r={R} stroke={t.ringTrack} strokeWidth={SW} fill="none" />
               <circle
                 cx="74" cy="74" r={R} stroke={rank.color} strokeWidth={SW} fill="none"
                 strokeDasharray={CIRC} strokeDashoffset={dashoffset} strokeLinecap="round"
@@ -857,31 +948,31 @@ function SessionSummary({ correct, total, maxCombo, sparksEarned, mode, onClose,
               />
             </svg>
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ fontSize: 34, fontWeight: 'bold', color: '#fff' }}>{accuracy}%</div>
-              <div style={{ fontSize: 12, color: '#8888aa' }}>{correct}/{total}</div>
+              <div style={{ fontSize: 34, fontWeight: 'bold', color: t.strong }}>{accuracy}%</div>
+              <div style={{ fontSize: 12, color: t.muted }}>{correct}/{total}</div>
             </div>
           </div>
         )}
 
         <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap', marginTop: isPassive ? 20 : 6, marginBottom: 18 }}>
-          {!isPassive && <Pill value={`${correct}`} label="Correct" color="#6bff9e" />}
-          {!isPassive && <Pill value={`🔥×${maxCombo}`} label="Best streak" color="#ffb36b" />}
-          <Pill value={`+${sparksEarned} 🔥`} label="Sparks earned" color="#ffd93d" />
+          {!isPassive && <Pill value={`${correct}`} label="Correct" color={t.pill.correct} t={t} />}
+          {!isPassive && <Pill value={`🔥×${maxCombo}`} label="Best streak" color={t.pill.streak} t={t} />}
+          <Pill value={`+${sparksEarned} 🔥`} label="Sparks earned" color={t.pill.sparks} t={t} />
         </div>
 
         <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
           <button
             onClick={onRestart}
-            style={{ background: 'transparent', color: '#8888cc', border: '1px solid #3a3a5a', borderRadius: 10, padding: '12px 24px', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}
+            style={{ background: 'transparent', color: t.link, border: `1px solid ${t.border}`, borderRadius: 10, padding: compact ? '10px 16px' : '12px 24px', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}
           >
             Study again
           </button>
           <button
             ref={closeBtnRef}
             onClick={onClose}
-            style={{ background: '#4a5a9a', color: '#fff', border: 'none', borderRadius: 10, padding: '12px 24px', fontSize: 15, fontWeight: 'bold', cursor: 'pointer' }}
+            style={{ background: t.primary, color: t.primaryText, border: 'none', borderRadius: 10, padding: compact ? '10px 16px' : '12px 24px', fontSize: 15, fontWeight: 'bold', cursor: 'pointer' }}
           >
-            Back to Library
+            {closeLabel}
           </button>
         </div>
       </div>
